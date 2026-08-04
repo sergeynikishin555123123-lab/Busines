@@ -1,3 +1,4 @@
+// platforms/max.js
 const axios = require('axios');
 const FormData = require('form-data');
 const fs = require('fs');
@@ -7,10 +8,6 @@ const { RateLimiter } = require('../core/queue');
 
 class MaxAPI {
     constructor() {
-        console.log('[MAX] Initializing API client...');
-        console.log(`[MAX] Base URL: ${config.max.baseUrl}`);
-        console.log(`[MAX] Token: ${config.max.token ? '✅ Set' : '❌ Not set'}`);
-        
         this.client = axios.create({
             baseURL: config.max.baseUrl,
             timeout: 30000,
@@ -23,30 +20,14 @@ class MaxAPI {
         this.messageQueues = new Map();
         this.rateLimiter = new RateLimiter(config.rateLimit.messagesPerChatPerSecond, 1000);
 
-        // Добавляем логирование запросов
-        this.client.interceptors.request.use(
-            (config) => {
-                console.log(`[MAX] Request: ${config.method.toUpperCase()} ${config.baseURL}${config.url}`);
-                return config;
-            },
-            (error) => {
-                console.error('[MAX] Request error:', error);
-                return Promise.reject(error);
-            }
-        );
-
         this.client.interceptors.response.use(
-            (response) => {
-                console.log(`[MAX] Response: ${response.status} ${response.config.url}`);
-                return response;
-            },
+            (response) => response,
             (error) => {
-                if (error.response) {
-                    console.error(`[MAX] Response error: ${error.response.status} ${error.config.url}`);
-                    console.error('[MAX] Response data:', error.response.data);
-                } else {
-                    console.error('[MAX] Network error:', error.message);
-                }
+                logger.error({
+                    err: error,
+                    config: error.config,
+                    response: error.response?.data
+                }, 'MAX API request failed');
                 return Promise.reject(error);
             }
         );
@@ -85,13 +66,14 @@ class MaxAPI {
         }
     }
 
+    // --- ОСНОВНОЙ МЕТОД ОТПРАВКИ СООБЩЕНИЙ (ИСПРАВЛЕН) ---
     async sendMessage({ chatId, text, parseMode = 'markdown', attachments = [] }) {
         return this.enqueueMessage(chatId, async () => {
             try {
                 const response = await this.client.post('/messages', {
                     text: text,
                     format: parseMode,
-                    attachments: attachments,
+                    attachments: attachments, // <-- Здесь передаётся массив с ПРАВИЛЬНОЙ структурой
                 }, {
                     params: {
                         chat_id: chatId,
@@ -106,16 +88,46 @@ class MaxAPI {
         });
     }
 
+    // --- ОТПРАВКА КЛАВИАТУРЫ (ИСПРАВЛЕНА) ---
     async sendKeyboard({ chatId, text, buttons, parseMode = 'markdown' }) {
+        // ✅ ПРАВИЛЬНАЯ структура вложения
         const attachment = {
             type: 'inline_keyboard',
-            payload: {
-                buttons: buttons,
+            payload: {          // <-- ОБЯЗАТЕЛЬНЫЙ объект payload
+                buttons: buttons // <-- Массив кнопок
             }
         };
         return this.sendMessage({ chatId, text, parseMode, attachments: [attachment] });
     }
 
+    // --- ОТПРАВКА ИЗОБРАЖЕНИЯ ---
+    async sendImage({ chatId, imageToken, caption = '', parseMode = 'markdown' }) {
+        const attachment = {
+            type: 'image',
+            payload: { token: imageToken }
+        };
+        return this.sendMessage({ chatId, text: caption, parseMode, attachments: [attachment] });
+    }
+
+    // --- ОТПРАВКА ВИДЕО ---
+    async sendVideo({ chatId, videoToken, caption = '', parseMode = 'markdown' }) {
+        const attachment = {
+            type: 'video',
+            payload: { token: videoToken }
+        };
+        return this.sendMessage({ chatId, text: caption, parseMode, attachments: [attachment] });
+    }
+
+    // --- ОТПРАВКА ФАЙЛА ---
+    async sendFile({ chatId, fileToken, caption = '', parseMode = 'markdown' }) {
+        const attachment = {
+            type: 'file',
+            payload: { token: fileToken }
+        };
+        return this.sendMessage({ chatId, text: caption, parseMode, attachments: [attachment] });
+    }
+
+    // --- ЗАГРУЗКА ФАЙЛА ---
     async uploadFile(filePath, fileType = 'file') {
         try {
             const formData = new FormData();
@@ -138,132 +150,64 @@ class MaxAPI {
         }
     }
 
-    async sendFile({ chatId, fileToken, caption = '', parseMode = 'markdown' }) {
-        const attachment = {
-            type: 'file',
-            payload: {
-                token: fileToken,
-            }
-        };
-        return this.sendMessage({ chatId, text: caption, parseMode, attachments: [attachment] });
-    }
-
-    async sendImage({ chatId, imageToken, caption = '', parseMode = 'markdown' }) {
-        const attachment = {
-            type: 'image',
-            payload: {
-                token: imageToken,
-            }
-        };
-        return this.sendMessage({ chatId, text: caption, parseMode, attachments: [attachment] });
-    }
-
-    async sendVideo({ chatId, videoToken, caption = '', parseMode = 'markdown' }) {
-        const attachment = {
-            type: 'video',
-            payload: {
-                token: videoToken,
-            }
-        };
-        return this.sendMessage({ chatId, text: caption, parseMode, attachments: [attachment] });
-    }
-
-    async sendAudio({ chatId, audioToken, caption = '', parseMode = 'markdown' }) {
-        const attachment = {
-            type: 'audio',
-            payload: {
-                token: audioToken,
-            }
-        };
-        return this.sendMessage({ chatId, text: caption, parseMode, attachments: [attachment] });
-    }
-
+    // --- УПРАВЛЕНИЕ ВЕБХУКОМ ---
     async registerWebhook(webhookUrl, secret = '') {
         try {
-            console.log(`[MAX] Registering webhook at ${webhookUrl}`);
             const payload = {
                 url: webhookUrl,
                 update_types: ['message_created', 'bot_started', 'message_callback', 'bot_added', 'bot_removed'],
             };
-            
             if (secret) {
                 payload.secret = secret;
             }
-            
             const response = await this.client.post('/subscriptions', payload);
-            console.log('[MAX] Webhook registered successfully');
+            logger.info({ webhookUrl }, 'Webhook registered successfully');
             return response.data;
         } catch (error) {
-            console.error('[MAX] Failed to register webhook:', error.message);
-            if (error.response) {
-                console.error('[MAX] Status:', error.response.status);
-                console.error('[MAX] Data:', error.response.data);
-            }
+            logger.error({ err: error, webhookUrl }, 'Failed to register webhook');
             throw error;
         }
     }
 
     async getWebhookInfo() {
         try {
-            console.log('[MAX] Getting webhook info...');
             const response = await this.client.get('/subscriptions');
-            console.log('[MAX] Webhook info retrieved');
             return response.data;
         } catch (error) {
-            console.error('[MAX] Failed to get webhook info:', error.message);
-            if (error.response) {
-                console.error('[MAX] Status:', error.response.status);
-                console.error('[MAX] Data:', error.response.data);
-            }
+            logger.error({ err: error }, 'Failed to get webhook info');
             throw error;
         }
     }
 
     async deleteWebhook() {
         try {
-            console.log('[MAX] Deleting webhook...');
             const response = await this.client.delete('/subscriptions');
-            console.log('[MAX] Webhook deleted successfully');
+            logger.info('Webhook deleted successfully');
             return response.data;
         } catch (error) {
-            console.error('[MAX] Failed to delete webhook:', error.message);
-            if (error.response) {
-                console.error('[MAX] Status:', error.response.status);
-                console.error('[MAX] Data:', error.response.data);
-            }
+            logger.error({ err: error }, 'Failed to delete webhook');
             throw error;
         }
     }
 
+    // --- РЕГИСТРАЦИЯ КОМАНД ---
     async registerCommands(commands) {
         try {
-            console.log('[MAX] Registering commands...');
-            const response = await this.client.patch('/me/commands', {
-                commands: commands,
-            });
-            console.log('[MAX] Commands registered');
+            const response = await this.client.patch('/me/commands', { commands });
+            logger.info({ commands }, 'Commands registered successfully');
             return response.data;
         } catch (error) {
-            console.error('[MAX] Failed to register commands:', error.message);
-            if (error.response) {
-                console.error('[MAX] Status:', error.response.status);
-                console.error('[MAX] Data:', error.response.data);
-            }
+            logger.error({ err: error, commands }, 'Failed to register commands');
             throw error;
         }
     }
 
     async getMe() {
         try {
-            console.log('[MAX] Getting bot info...');
             const response = await this.client.get('/me');
             return response.data;
         } catch (error) {
-            console.error('[MAX] Failed to get bot info:', error.message);
-            if (error.response) {
-                console.error('[MAX] Status:', error.response.status);
-                console.error('[MAX] Data:', error.response.data);
-            }
+            logger.error({ err: error }, 'Failed to get bot info');
             throw error;
         }
     }
