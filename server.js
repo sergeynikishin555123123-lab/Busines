@@ -12,8 +12,12 @@ const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
 const adminRouter = require('./admin/admin');
 
 async function startServer() {
-  const app = express();
-
+  try {
+    const database = require('./database');
+    database.initDatabase();
+    await migrate();
+    
+    const app = express();
   // Безопасность
   app.use(helmet({
     contentSecurityPolicy: {
