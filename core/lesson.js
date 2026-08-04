@@ -3,196 +3,265 @@ const logger = require('../logger');
 
 class LessonService {
   async getLessonById(lessonId) {
-    const result = await database.query(
-      'SELECT l.*, c.title as course_title FROM lessons l JOIN courses c ON l.course_id = c.id WHERE l.id = $1',
-      [lessonId]
-    );
-    return result.rows[0] || null;
+    const lessons = database.readTable('lessons');
+    const courses = database.readTable('courses');
+    const lesson = lessons.find(l => l.id === lessonId);
+    if (!lesson) return null;
+    
+    const course = courses.find(c => c.id === lesson.course_id);
+    return {
+      ...lesson,
+      course_title: course ? course.title : '',
+    };
   }
 
   async getLessonWithFiles(lessonId) {
     const lesson = await this.getLessonById(lessonId);
     if (!lesson) return null;
 
-    const files = await database.query(
-      'SELECT * FROM lesson_files WHERE lesson_id = $1 ORDER BY created_at ASC',
-      [lessonId]
-    );
-
+    const files = database.readTable('lesson_files').filter(f => f.lesson_id === lessonId);
     const test = await this.getLessonTest(lessonId);
 
     return {
       ...lesson,
-      files: files.rows,
-      test: test,
+      files,
+      test,
     };
   }
 
   async getLessonTest(lessonId) {
-    const testResult = await database.query(
-      'SELECT * FROM tests WHERE lesson_id = $1',
-      [lessonId]
-    );
-
-    if (testResult.rows.length === 0) return null;
-
-    const test = testResult.rows[0];
-    const answers = await database.query(
-      'SELECT * FROM test_answers WHERE test_id = $1 ORDER BY id ASC',
-      [test.id]
-    );
+    const tests = database.readTable('tests');
+    const answers = database.readTable('test_answers');
+    
+    const test = tests.find(t => t.lesson_id === lessonId);
+    if (!test) return null;
 
     return {
       ...test,
-      answers: answers.rows.map(a => ({
-        id: a.id,
-        answer: a.answer,
-      })),
+      answers: answers
+        .filter(a => a.test_id === test.id)
+        .map(a => ({
+          id: a.id,
+          answer: a.answer,
+          is_correct: a.is_correct,
+        })),
     };
   }
 
   async checkTestAnswer(lessonId, answerId, userId) {
-    const answer = await database.query(
-      `SELECT ta.* FROM test_answers ta 
-       JOIN tests t ON ta.test_id = t.id 
-       WHERE t.lesson_id = $1 AND ta.id = $2`,
-      [lessonId, answerId]
-    );
+    const answers = database.readTable('test_answers');
+    const answer = answers.find(a => a.id === answerId);
 
-    if (answer.rows.length === 0) {
+    if (!answer) {
       throw new Error('Ответ не найден');
     }
 
-    const isCorrect = answer.rows[0].is_correct;
+    if (answer.is_correct) {
+      const progress = database.readTable('progress');
+      const existing = progress.find(p => p.user_id === userId && p.lesson_id === lessonId);
 
-    if (isCorrect) {
-      await database.query(
-        `INSERT INTO progress (user_id, lesson_id, status, test_passed, completed_at)
-         VALUES ($1, $2, 'completed', true, NOW())
-         ON CONFLICT (user_id, lesson_id) 
-         DO UPDATE SET status = 'completed', test_passed = true, completed_at = NOW()`,
-        [userId, lessonId]
-      );
+      if (existing) {
+        existing.status = 'completed';
+        existing.test_passed = true;
+        existing.completed_at = database.now();
+      } else {
+        progress.push({
+          id: database.generateId(),
+          user_id: userId,
+          lesson_id: lessonId,
+          status: 'completed',
+          test_passed: true,
+          last_position: 0,
+          completed_at: database.now(),
+        });
+      }
+
+      database.writeTable('progress', progress);
     }
 
     return {
-      correct: isCorrect,
-      answerId: answer.rows[0].id,
+      correct: answer.is_correct,
+      answerId: answer.id,
     };
   }
 
   async recordLessonView(userId, lessonId) {
-    const existing = await database.query(
-      'SELECT * FROM lesson_views WHERE user_id = $1 AND lesson_id = $2',
-      [userId, lessonId]
-    );
+    const views = database.readTable('lesson_views');
+    const existing = views.find(v => v.user_id === userId && v.lesson_id === lessonId);
 
-    if (existing.rows.length > 0) {
-      await database.query(
-        `UPDATE lesson_views 
-         SET view_count = view_count + 1, last_viewed_at = NOW() 
-         WHERE user_id = $1 AND lesson_id = $2`,
-        [userId, lessonId]
-      );
+    if (existing) {
+      existing.view_count += 1;
+      existing.last_viewed_at = database.now();
     } else {
-      await database.query(
-        'INSERT INTO lesson_views (user_id, lesson_id) VALUES ($1, $2)',
-        [userId, lessonId]
-      );
+      views.push({
+        id: database.generateId(),
+        user_id: userId,
+        lesson_id: lessonId,
+        view_count: 1,
+        first_viewed_at: database.now(),
+        last_viewed_at: database.now(),
+      });
     }
 
-    await database.query(
-      `INSERT INTO progress (user_id, lesson_id, status)
-       VALUES ($1, $2, 'started')
-       ON CONFLICT (user_id, lesson_id) DO NOTHING`,
-      [userId, lessonId]
-    );
-  }
+    database.writeTable('lesson_views', views);
 
-  async updateProgressPosition(userId, lessonId, position) {
-    await database.query(
-      `UPDATE progress SET last_position = $1 WHERE user_id = $2 AND lesson_id = $3`,
-      [position, userId, lessonId]
-    );
+    const progress = database.readTable('progress');
+    const progExists = progress.find(p => p.user_id === userId && p.lesson_id === lessonId);
+    
+    if (!progExists) {
+      progress.push({
+        id: database.generateId(),
+        user_id: userId,
+        lesson_id: lessonId,
+        status: 'started',
+        test_passed: false,
+        last_position: 0,
+        completed_at: null,
+      });
+      database.writeTable('progress', progress);
+    }
   }
 
   async createLesson(data) {
-    const result = await database.query(
-      `INSERT INTO lessons (course_id, title, description, video_url, order_number, is_free) 
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [data.courseId, data.title, data.description || '', data.videoUrl || '', data.orderNumber || 0, data.isFree || false]
-    );
-    return result.rows[0];
+    const lessons = database.readTable('lessons');
+    
+    const lesson = {
+      id: database.generateId(),
+      course_id: data.courseId,
+      title: data.title,
+      description: data.description || '',
+      video_url: data.videoUrl || '',
+      order_number: data.orderNumber || 0,
+      is_free: data.isFree || false,
+      created_at: database.now(),
+      updated_at: database.now(),
+    };
+
+    lessons.push(lesson);
+    database.writeTable('lessons', lessons);
+
+    return lesson;
   }
 
   async updateLesson(lessonId, data) {
-    const result = await database.query(
-      `UPDATE lessons 
-       SET title = COALESCE($1, title),
-           description = COALESCE($2, description),
-           video_url = COALESCE($3, video_url),
-           order_number = COALESCE($4, order_number),
-           is_free = COALESCE($5, is_free),
-           updated_at = NOW()
-       WHERE id = $6
-       RETURNING *`,
-      [data.title, data.description, data.videoUrl, data.orderNumber, data.isFree, lessonId]
-    );
-    return result.rows[0];
+    const lessons = database.readTable('lessons');
+    const index = lessons.findIndex(l => l.id === lessonId);
+    
+    if (index === -1) return null;
+
+    if (data.title !== undefined) lessons[index].title = data.title;
+    if (data.description !== undefined) lessons[index].description = data.description;
+    if (data.videoUrl !== undefined) lessons[index].video_url = data.videoUrl;
+    if (data.orderNumber !== undefined) lessons[index].order_number = parseInt(data.orderNumber);
+    if (data.isFree !== undefined) lessons[index].is_free = data.isFree;
+    lessons[index].updated_at = database.now();
+
+    database.writeTable('lessons', lessons);
+    return lessons[index];
   }
 
   async deleteLesson(lessonId) {
-    const files = await database.query('SELECT * FROM lesson_files WHERE lesson_id = $1', [lessonId]);
-    
-    for (const file of files.rows) {
+    let lessons = database.readTable('lessons');
+    let files = database.readTable('lesson_files');
+    let tests = database.readTable('tests');
+    let answers = database.readTable('test_answers');
+
+    const lessonFiles = files.filter(f => f.lesson_id === lessonId);
+    for (const file of lessonFiles) {
       const storageService = require('../services/storage');
       await storageService.deleteFile(file.url);
     }
 
-    await database.query('DELETE FROM lessons WHERE id = $1', [lessonId]);
+    const test = tests.find(t => t.lesson_id === lessonId);
+    if (test) {
+      answers = answers.filter(a => a.test_id !== test.id);
+      tests = tests.filter(t => t.id !== test.id);
+    }
+
+    files = files.filter(f => f.lesson_id !== lessonId);
+    lessons = lessons.filter(l => l.id !== lessonId);
+
+    database.writeTable('lessons', lessons);
+    database.writeTable('lesson_files', files);
+    database.writeTable('tests', tests);
+    database.writeTable('test_answers', answers);
+
     return true;
   }
 
   async addLessonFile(lessonId, fileData) {
-    const result = await database.query(
-      'INSERT INTO lesson_files (lesson_id, filename, url, type) VALUES ($1, $2, $3, $4) RETURNING *',
-      [lessonId, fileData.filename, fileData.url, fileData.type]
-    );
-    return result.rows[0];
+    const files = database.readTable('lesson_files');
+    
+    const file = {
+      id: database.generateId(),
+      lesson_id: lessonId,
+      filename: fileData.filename,
+      url: fileData.url,
+      type: fileData.type,
+      created_at: database.now(),
+    };
+
+    files.push(file);
+    database.writeTable('lesson_files', files);
+
+    return file;
   }
 
   async deleteLessonFile(fileId) {
-    const file = await database.query('SELECT * FROM lesson_files WHERE id = $1', [fileId]);
-    if (file.rows.length > 0) {
+    let files = database.readTable('lesson_files');
+    const file = files.find(f => f.id === fileId);
+    
+    if (file) {
       const storageService = require('../services/storage');
-      await storageService.deleteFile(file.rows[0].url);
-      await database.query('DELETE FROM lesson_files WHERE id = $1', [fileId]);
+      await storageService.deleteFile(file.url);
+      files = files.filter(f => f.id !== fileId);
+      database.writeTable('lesson_files', files);
     }
+
     return true;
   }
 
   async createTest(lessonId, testData) {
-    const existingTest = await database.query('SELECT * FROM tests WHERE lesson_id = $1', [lessonId]);
-    if (existingTest.rows.length > 0) {
-      await database.query('DELETE FROM test_answers WHERE test_id = $1', [existingTest.rows[0].id]);
-      await database.query('DELETE FROM tests WHERE lesson_id = $1', [lessonId]);
+    let tests = database.readTable('tests');
+    let answers = database.readTable('test_answers');
+
+    const existingTest = tests.find(t => t.lesson_id === lessonId);
+    if (existingTest) {
+      answers = answers.filter(a => a.test_id !== existingTest.id);
+      tests = tests.filter(t => t.id !== existingTest.id);
     }
 
-    const testResult = await database.query(
-      'INSERT INTO tests (lesson_id, question) VALUES ($1, $2) RETURNING *',
-      [lessonId, testData.question]
-    );
+    const test = {
+      id: database.generateId(),
+      lesson_id: lessonId,
+      question: testData.question,
+    };
 
-    const testId = testResult.rows[0].id;
+    tests.push(test);
 
     for (const answer of testData.answers) {
-      await database.query(
-        'INSERT INTO test_answers (test_id, answer, is_correct) VALUES ($1, $2, $3)',
-        [testId, answer.text, answer.isCorrect || false]
-      );
+      answers.push({
+        id: database.generateId(),
+        test_id: test.id,
+        answer: answer.text,
+        is_correct: answer.isCorrect || false,
+      });
     }
 
-    return testResult.rows[0];
+    database.writeTable('tests', tests);
+    database.writeTable('test_answers', answers);
+
+    return test;
+  }
+
+  async updateProgressPosition(userId, lessonId, position) {
+    const progress = database.readTable('progress');
+    const item = progress.find(p => p.user_id === userId && p.lesson_id === lessonId);
+    
+    if (item) {
+      item.last_position = position;
+      database.writeTable('progress', progress);
+    }
   }
 }
 
