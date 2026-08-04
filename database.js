@@ -2,17 +2,15 @@ const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 
-// Используем /tmp для данных
 const DATA_DIR = process.env.DATA_DIR || '/tmp/data';
 
+// Создаём директорию при загрузке
 try {
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
-    console.log(`[DB] Created: ${DATA_DIR}`);
   }
 } catch (error) {
   console.error(`[DB] Cannot create ${DATA_DIR}:`, error.message);
-  process.exit(1);
 }
 
 function getTablePath(tableName) {
