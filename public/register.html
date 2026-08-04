@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Регистрация вебхука</title>
+    <meta http-equiv="refresh" content="3;url=/dashboard">
+</head>
+<body>
+    <h1>🔄 Регистрация вебхука...</h1>
+    <pre id="result">Загрузка...</pre>
+    
+    <script>
+        fetch('/admin/register-webhook', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('result').textContent = JSON.stringify(data, null, 2);
+            })
+            .catch(e => {
+                document.getElementById('result').textContent = 'Ошибка: ' + e.message;
+            });
+    </script>
+</body>
+</html>
