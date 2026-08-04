@@ -45,8 +45,15 @@ async function login(req, res) {
       role: admin.role,
     };
 
-    logger.info(`Admin logged in: ${admin.login}`);
-    res.json({ success: true, redirect: '/admin' });
+    req.session.save((err) => {
+      if (err) {
+        logger.error('Session save error:', err);
+        return res.status(500).json({ error: 'Ошибка сервера' });
+      }
+      
+      logger.info(`Admin logged in: ${admin.login}`);
+      res.json({ success: true, redirect: '/admin' });
+    });
   } catch (error) {
     logger.error('Admin login error:', error);
     res.status(500).json({ error: 'Ошибка сервера' });
