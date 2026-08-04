@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Управление вебхуком MAX</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 10px;
+        }
+        .status {
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 5px;
+            background: #e9ecef;
+        }
+        .status.success {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .status.error {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .status.info {
+            background: #d1ecf1;
+            border: 1px solid #bee5eb;
+            color: #0c5460;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button.danger {
+            background: #dc3545;
+        }
+        button.danger:hover {
+            background: #c82333;
+        }
+        button.success {
+            background: #28a745;
+        }
+        button.success:hover {
+            background: #218838;
+        }
+        .log {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 20px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 14px;
+            border: 1px solid #dee2e6;
+        }
+        .log-entry {
+            padding: 5px 0;
+            border-bottom: 1px solid #eee;
+        }
+        .log-entry .time {
+            color: #6c757d;
+            margin-right: 10px;
+        }
+        .log-entry .success {
+            color: #28a745;
+        }
+        .log-entry .error {
+            color: #dc3545;
+        }
+        .log-entry .info {
+            color: #007bff;
+        }
+        .webhook-info {
+            background: #e7f3ff;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+            border-left: 4px solid #007bff;
+        }
+        .webhook-info strong {
+            color: #0056b3;
+        }
+        .btn-group {
+            margin: 20px 0;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        .url-display {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: monospace;
+            word-break: break-all;
+            margin: 10px 0;
+            border: 1px solid #dee2e6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 Управление вебхуком MAX</h1>
+        
+        <div class="webhook-info">
+            <strong>🌐 Ваш вебхук URL:</strong><br>
+            <div class="url-display" id="webhookUrl">https://sergeynikishin555123123-lab-busines-4cdb.twc1.net/webhook/max</div>
+        </div>
+
+        <div class="status info" id="statusMessage">
+            ⏳ Нажмите "Проверить статус" для получения информации
+        </div>
+
+        <div class="btn-group">
+            <button onclick="checkStatus()" class="success">📊 Проверить статус</button>
+            <button onclick="registerWebhook()">🔗 Зарегистрировать вебхук</button>
+            <button onclick="deleteWebhook()" class="danger">🗑️ Удалить вебхук</button>
+            <button onclick="testBot()">🧪 Тест бота</button>
+        </div>
+
+        <div>
+            <h3>📝 Логи операций</h3>
+            <div class="log" id="logContainer">
+                <div class="log-entry">
+                    <span class="time">[SYSTEM]</span>
+                    <span class="info">Готов к работе. Нажмите кнопку для выполнения операции.</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'https://sergeynikishin555123123-lab-busines-4cdb.twc1.net';
+        const WEBHOOK_URL = `${API_BASE}/webhook/max`;
+
+        function addLog(message, type = 'info') {
+            const logContainer = document.getElementById('logContainer');
+            const time = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.innerHTML = `
+                <span class="time">[${time}]</span>
+                <span class="${type}">${message}</span>
+            `;
+            logContainer.insertBefore(entry, logContainer.firstChild);
+        }
+
+        function showStatus(message, type = 'info') {
+            const statusDiv = document.getElementById('statusMessage');
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+        }
+
+        async function fetchWithTimeout(url, options = {}, timeout = 30000) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), timeout);
+            try {
+                const response = await fetch(url, {
+                    ...options,
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
+                return response;
+            } catch (error) {
+                clearTimeout(timeoutId);
+                throw error;
+            }
+        }
+
+        async function checkStatus() {
+            showStatus('⏳ Проверка статуса...', 'info');
+            addLog('Проверка статуса вебхука...', 'info');
+
+            try {
+                const response = await fetchWithTimeout(`${API_BASE}/admin/webhook-info`);
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    addLog(`✅ Статус получен: ${JSON.stringify(data)}`, 'success');
+                    showStatus('✅ Вебхук активен', 'success');
+                } else if (response.status === 404) {
+                    addLog('ℹ️ Вебхук не зарегистрирован', 'info');
+                    showStatus('ℹ️ Вебхук не зарегистрирован. Нажмите "Зарегистрировать вебхук"', 'info');
+                } else {
+                    const text = await response.text();
+                    addLog(`⚠️ Ошибка: ${response.status} - ${text}`, 'error');
+                    showStatus(`⚠️ Ошибка: ${response.status}`, 'error');
+                }
+            } catch (error) {
+                addLog(`❌ Ошибка: ${error.message}`, 'error');
+                showStatus(`❌ Ошибка: ${error.message}`, 'error');
+            }
+        }
+
+        async function registerWebhook() {
+            showStatus('⏳ Регистрация вебхука...', 'info');
+            addLog('🔄 Регистрация вебхука в MAX...', 'info');
+
+            try {
+                const response = await fetchWithTimeout(`${API_BASE}/admin/register-webhook`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    addLog(`✅ Вебхук зарегистрирован! ${JSON.stringify(data)}`, 'success');
+                    showStatus('✅ Вебхук успешно зарегистрирован!', 'success');
+                } else {
+                    const text = await response.text();
+                    addLog(`❌ Ошибка регистрации: ${text}`, 'error');
+                    showStatus(`❌ Ошибка: ${response.status}`, 'error');
+                }
+            } catch (error) {
+                addLog(`❌ Ошибка: ${error.message}`, 'error');
+                showStatus(`❌ Ошибка: ${error.message}`, 'error');
+            }
+        }
+
+        async function deleteWebhook() {
+            if (!confirm('Вы уверены, что хотите удалить вебхук?')) return;
+
+            showStatus('⏳ Удаление вебхука...', 'info');
+            addLog('🗑️ Удаление вебхука...', 'info');
+
+            try {
+                const response = await fetchWithTimeout(`${API_BASE}/admin/webhook`, {
+                    method: 'DELETE',
+                });
+
+                if (response.ok) {
+                    addLog('✅ Вебхук удален', 'success');
+                    showStatus('✅ Вебхук успешно удален', 'success');
+                } else {
+                    const text = await response.text();
+                    addLog(`❌ Ошибка удаления: ${text}`, 'error');
+                    showStatus(`❌ Ошибка: ${response.status}`, 'error');
+                }
+            } catch (error) {
+                addLog(`❌ Ошибка: ${error.message}`, 'error');
+                showStatus(`❌ Ошибка: ${error.message}`, 'error');
+            }
+        }
+
+        async function testBot() {
+            showStatus('⏳ Тестирование бота...', 'info');
+            addLog('🧪 Тестирование бота...', 'info');
+
+            try {
+                // Тестовый запрос к боту
+                const response = await fetchWithTimeout(`${API_BASE}/health`, {
+                    method: 'GET',
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    addLog(`✅ Бот работает: ${JSON.stringify(data)}`, 'success');
+                    showStatus('✅ Бот работает нормально!', 'success');
+                } else {
+                    addLog(`⚠️ Бот отвечает с ошибкой: ${response.status}`, 'error');
+                    showStatus(`⚠️ Ошибка бота: ${response.status}`, 'error');
+                }
+            } catch (error) {
+                addLog(`❌ Ошибка: ${error.message}`, 'error');
+                showStatus(`❌ Ошибка: ${error.message}`, 'error');
+            }
+        }
+
+        // Автоматическая проверка при загрузке страницы
+        document.addEventListener('DOMContentLoaded', () => {
+            addLog('🚀 Страница загружена', 'info');
+            setTimeout(() => checkStatus(), 1000);
+        });
+    </script>
+</body>
+</html>
