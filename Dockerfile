@@ -1,24 +1,32 @@
 FROM node:22-alpine
 
-# Создаём пользователя node с правильными правами
-RUN addgroup -S node && adduser -S node -G node
-
+# Устанавливаем рабочую директорию
 WORKDIR /app
 
-# Копируем package.json и устанавливаем зависимости
+# Создаём директории с правильными правами ДО копирования
+RUN mkdir -p /app/data /app/logs /app/uploads && \
+    chmod -R 777 /app/data /app/logs /app/uploads
+
+# Копируем package.json сначала (для кэширования)
 COPY package*.json ./
+
+# Устанавливаем зависимости
 RUN npm ci --only=production && npm cache clean --force
 
-# Копируем исходный код
-COPY --chown=node:node . .
+# Копируем остальной код
+COPY . .
 
-# Создаём необходимые директории с правильными правами
-RUN mkdir -p data logs uploads && \
-    chown -R node:node data logs uploads && \
-    chmod -R 777 data logs uploads
+# Даём права на всё приложение (временное решение для демонстрации)
+RUN chmod -R 777 /app
 
-# Переключаемся на пользователя node
-USER node
+# Создаём непривилегированного пользователя
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+# Меняем владельца на appuser
+RUN chown -R appuser:appgroup /app
+
+# Переключаемся на пользователя appuser
+USER appuser
 
 # Экспортируем порт
 EXPOSE 8080
