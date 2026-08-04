@@ -1,0 +1,340 @@
+<% if (data.success) { %>
+    <div style="background: #d4edda; color: #155724; padding: 12px; border-radius: 4px; margin-bottom: 15px;"><%= data.success.replace(/\+/g, ' ') %></div>
+<% } %>
+<% if (data.error) { %>
+    <div style="background: #f8d7da; color: #721c24; padding: 12px; border-radius: 4px; margin-bottom: 15px;"><%= data.error.replace(/\+/g, ' ') %></div>
+<% } %>
+
+<div style="display: flex; gap: 10px; margin-bottom: 25px; flex-wrap: wrap;">
+    <a href="/admin/panel?section=users" style="padding: 8px 16px; background: <%= data.section === 'users' ? '#3498db' : '#ecf0f1' %>; color: <%= data.section === 'users' ? 'white' : '#333' %>; text-decoration: none; border-radius: 4px; font-size: 14px;">Пользователи</a>
+    <a href="/admin/panel?section=courses" style="padding: 8px 16px; background: <%= data.section === 'courses' ? '#3498db' : '#ecf0f1' %>; color: <%= data.section === 'courses' ? 'white' : '#333' %>; text-decoration: none; border-radius: 4px; font-size: 14px;">Курсы</a>
+    <a href="/admin/panel?section=lessons" style="padding: 8px 16px; background: <%= data.section === 'lessons' ? '#3498db' : '#ecf0f1' %>; color: <%= data.section === 'lessons' ? 'white' : '#333' %>; text-decoration: none; border-radius: 4px; font-size: 14px;">Уроки</a>
+    <a href="/admin/panel?section=payments" style="padding: 8px 16px; background: <%= data.section === 'payments' ? '#3498db' : '#ecf0f1' %>; color: <%= data.section === 'payments' ? 'white' : '#333' %>; text-decoration: none; border-radius: 4px; font-size: 14px;">Платежи</a>
+    <a href="/admin/panel?section=settings" style="padding: 8px 16px; background: <%= data.section === 'settings' ? '#3498db' : '#ecf0f1' %>; color: <%= data.section === 'settings' ? 'white' : '#333' %>; text-decoration: none; border-radius: 4px; font-size: 14px;">Настройки</a>
+</div>
+
+<div style="background: white; padding: 25px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+
+<% if (data.section === 'users') { %>
+    <h3 style="margin-bottom: 20px;">Пользователи</h3>
+    <table style="width: 100%; border-collapse: collapse;">
+        <thead>
+            <tr>
+                <th style="background: #f8f9fa; padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6;">Платформа</th>
+                <th style="background: #f8f9fa; padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6;">Имя</th>
+                <th style="background: #f8f9fa; padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6;">Username</th>
+                <th style="background: #f8f9fa; padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6;">Дата регистрации</th>
+                <th style="background: #f8f9fa; padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6;">Действия</th>
+            </tr>
+        </thead>
+        <tbody>
+            <% data.users.forEach(function(user) { %>
+            <tr>
+                <td style="padding: 10px; border-bottom: 1px solid #e9ecef;">
+                    <span style="background: #d1ecf1; color: #0c5460; padding: 4px 8px; border-radius: 3px; font-size: 12px;"><%= user.platform.toUpperCase() %></span>
+                </td>
+                <td style="padding: 10px; border-bottom: 1px solid #e9ecef;"><%= user.first_name %> <%= user.last_name %></td>
+                <td style="padding: 10px; border-bottom: 1px solid #e9ecef;"><%= user.username || '-' %></td>
+                <td style="padding: 10px; border-bottom: 1px solid #e9ecef;"><%= new Date(user.created_at).toLocaleDateString('ru-RU') %></td>
+                <td style="padding: 10px; border-bottom: 1px solid #e9ecef;">
+                    <button onclick="showStats('<%= user.id %>')" style="padding: 5px 10px; background: #3498db; color: white; border: none; border-radius: 3px; cursor: pointer;">Статистика</button>
+                </td>
+            </tr>
+            <% }); %>
+        </tbody>
+    </table>
+    
+    <% if (data.pages > 1) { %>
+    <div style="text-align: center; margin-top: 20px;">
+        <% for (let i = 1; i <= data.pages; i++) { %>
+            <a href="/admin/panel?section=users&page=<%= i %>" style="padding: 5px 10px; border: 1px solid #ddd; text-decoration: none; color: #333; <%= i === data.page ? 'background: #3498db; color: white;' : '' %>"><%= i %></a>
+        <% } %>
+    </div>
+    <% } %>
+
+<% } else if (data.section === 'courses') { %>
+    <h3 style="margin-bottom: 20px;">Курсы</h3>
+    
+    <form method="POST" action="/admin/courses/create" style="margin-bottom: 30px; padding: 15px; background: #f8f9fa; border-radius: 4px;">
+        <h4 style="margin-bottom: 15px;">Создать курс</h4>
+        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+            <input type="text" name="title" placeholder="Название курса" required style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; flex: 1; min-width: 200px;">
+            <input type="text" name="description" placeholder="Описание" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; flex: 1; min-width: 200px;">
+            <input type="number" name="price" placeholder="Цена" step="0.01" min="0" value="0" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; width: 120px;">
+            <button type="submit" style="padding: 8px 20px; background: #27ae60; color: white; border: none; border-radius: 4px; cursor: pointer;">Создать</button>
+        </div>
+    </form>
+
+    <table style="width: 100%; border-collapse: collapse;">
+        <thead>
+            <tr>
+                <th style="background: #f8f9fa; padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6;">Название</th>
+                <th style="background: #f8f9fa; padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6;">Цена</th>
+                <th style="background: #f8f9fa; padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6;">Статус</th>
+                <th style="background: #f8f9fa; padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6;">Действия</th>
+            </tr>
+        </thead>
+        <tbody>
+            <% data.courses.forEach(function(course) { %>
+            <tr>
+                <form method="POST" action="/admin/courses/update" style="display: contents;">
+                    <input type="hidden" name="id" value="<%= course.id %>">
+                    <td style="padding: 10px; border-bottom: 1px solid #e9ecef;">
+                        <input type="text" name="title" value="<%= course.title %>" style="width: 100%; padding: 5px; border: 1px solid #ddd; border-radius: 3px;">
+                    </td>
+                    <td style="padding: 10px; border-bottom: 1px solid #e9ecef;">
+                        <input type="number" name="price" value="<%= course.price %>" step="0.01" style="width: 100px; padding: 5px; border: 1px solid #ddd; border-radius: 3px;">
+                    </td>
+                    <td style="padding: 10px; border-bottom: 1px solid #e9ecef;">
+                        <label><input type="checkbox" name="isActive" <%= course.is_active ? 'checked' : '' %>> Активен</label>
+                    </td>
+                    <td style="padding: 10px; border-bottom: 1px solid #e9ecef; display: flex; gap: 5px;">
+                        <button type="submit" style="padding: 5px 10px; background: #f39c12; color: white; border: none; border-radius: 3px; cursor: pointer;">Сохранить</button>
+                </form>
+                        <a href="/admin/courses/delete/<%= course.id %>" onclick="return confirm('Удалить курс?')" style="padding: 5px 10px; background: #e74c3c; color: white; text-decoration: none; border-radius: 3px;">Удалить</a>
+                    </td>
+            </tr>
+            <% }); %>
+        </tbody>
+    </table>
+
+<% } else if (data.section === 'lessons') { %>
+    <h3 style="margin-bottom: 20px;">Уроки</h3>
+    
+    <% if (data.courses && data.courses.length > 0) { %>
+    <div style="margin-bottom: 20px;">
+        <label>Курс: </label>
+        <select onchange="location.href='/admin/panel?section=lessons&courseId=' + this.value" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+            <% data.courses.forEach(function(c) { %>
+                <option value="<%= c.id %>" <%= data.currentCourse && data.currentCourse.id === c.id ? 'selected' : '' %>><%= c.title %></option>
+            <% }); %>
+        </select>
+    </div>
+    <% } %>
+
+    <% if (data.currentCourse) { %>
+    <form method="POST" action="/admin/lessons/create" style="margin-bottom: 30px; padding: 15px; background: #f8f9fa; border-radius: 4px;">
+        <h4 style="margin-bottom: 15px;">Добавить урок</h4>
+        <input type="hidden" name="courseId" value="<%= data.currentCourse.id %>">
+        <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;">
+            <input type="text" name="title" placeholder="Название урока" required style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; flex: 1; min-width: 200px;">
+            <input type="text" name="videoUrl" placeholder="Ссылка на видео" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; flex: 1; min-width: 200px;">
+            <input type="number" name="orderNumber" placeholder="Порядок" min="0" value="0" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; width: 80px;">
+            <label style="display: flex; align-items: center; gap: 5px;"><input type="checkbox" name="isFree"> Бесплатный</label>
+            <button type="submit" style="padding: 8px 20px; background: #27ae60; color: white; border: none; border-radius: 4px; cursor: pointer;">Добавить</button>
+        </div>
+        <textarea name="description" placeholder="Описание урока" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; min-height: 60px;"></textarea>
+    </form>
+
+    <table style="width: 100%; border-collapse: collapse;">
+        <thead>
+            <tr>
+                <th style="background: #f8f9fa; padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6;">#</th>
+                <th style="background: #f8f9fa; padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6;">Название</th>
+                <th style="background: #f8f9fa; padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6;">Тип</th>
+                <th style="background: #f8f9fa; padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6;">Действия</th>
+            </tr>
+        </thead>
+        <tbody>
+            <% data.lessons.forEach(function(lesson) { %>
+            <tr>
+                <td style="padding: 10px; border-bottom: 1px solid #e9ecef;">
+                    <form method="POST" action="/admin/lessons/update" style="display: inline;">
+                        <input type="hidden" name="id" value="<%= lesson.id %>">
+                        <input type="hidden" name="courseId" value="<%= data.currentCourse.id %>">
+                        <input type="number" name="orderNumber" value="<%= lesson.order_number %>" style="width: 50px; padding: 5px; border: 1px solid #ddd; border-radius: 3px;">
+                </td>
+                <td style="padding: 10px; border-bottom: 1px solid #e9ecef;">
+                        <input type="text" name="title" value="<%= lesson.title %>" style="width: 100%; padding: 5px; border: 1px solid #ddd; border-radius: 3px;">
+                </td>
+                <td style="padding: 10px; border-bottom: 1px solid #e9ecef;">
+                        <label style="display: flex; align-items: center; gap: 5px; font-size: 13px;">
+                            <input type="checkbox" name="isFree" <%= lesson.is_free ? 'checked' : '' %>> Бесплатный
+                        </label>
+                </td>
+                <td style="padding: 10px; border-bottom: 1px solid #e9ecef; display: flex; gap: 5px; flex-wrap: wrap; align-items: center;">
+                        <button type="submit" style="padding: 5px 10px; background: #f39c12; color: white; border: none; border-radius: 3px; cursor: pointer;">Сохр.</button>
+                    </form>
+                    <a href="/admin/lessons/delete/<%= lesson.id %>?courseId=<%= data.currentCourse.id %>" onclick="return confirm('Удалить урок?')" style="padding: 5px 10px; background: #e74c3c; color: white; text-decoration: none; border-radius: 3px;">Удалить</a>
+                    <button onclick="toggleSection('files-<%= lesson.id %>')" style="padding: 5px 10px; background: #3498db; color: white; border: none; border-radius: 3px; cursor: pointer;">Файлы</button>
+                    <button onclick="toggleSection('test-<%= lesson.id %>')" style="padding: 5px 10px; background: #9b59b6; color: white; border: none; border-radius: 3px; cursor: pointer;">Тест</button>
+                </td>
+            </tr>
+            <tr id="files-<%= lesson.id %>" style="display: none;">
+                <td colspan="4" style="padding: 15px; background: #f8f9fa;">
+                    <h4 style="margin-bottom: 10px;">Файлы урока</h4>
+                    <form method="POST" action="/admin/lessons/upload-file" enctype="multipart/form-data" style="margin-bottom: 15px;">
+                        <input type="hidden" name="lessonId" value="<%= lesson.id %>">
+                        <input type="hidden" name="courseId" value="<%= data.currentCourse.id %>">
+                        <input type="file" name="file" required style="margin-right: 10px;">
+                        <button type="submit" style="padding: 5px 15px; background: #27ae60; color: white; border: none; border-radius: 3px; cursor: pointer;">Загрузить</button>
+                    </form>
+                    <% if (lesson.files && lesson.files.length > 0) { %>
+                        <ul>
+                        <% lesson.files.forEach(function(file) { %>
+                            <li style="margin-bottom: 5px;">
+                                📎 <%= file.filename %>
+                                <a href="<%= file.url %>" target="_blank" style="margin-left: 10px; color: #3498db;">Скачать</a>
+                                <a href="/admin/lessons/delete-file/<%= file.id %>?courseId=<%= data.currentCourse.id %>" onclick="return confirm('Удалить файл?')" style="margin-left: 10px; color: #e74c3c;">Удалить</a>
+                            </li>
+                        <% }); %>
+                        </ul>
+                    <% } else { %>
+                        <p style="color: #666;">Нет файлов</p>
+                    <% } %>
+                </td>
+            </tr>
+            <tr id="test-<%= lesson.id %>" style="display: none;">
+                <td colspan="4" style="padding: 15px; background: #f8f9fa;">
+                    <h4 style="margin-bottom: 10px;">Тест урока</h4>
+                    <form method="POST" action="/admin/lessons/create-test">
+                        <input type="hidden" name="lessonId" value="<%= lesson.id %>">
+                        <input type="hidden" name="courseId" value="<%= data.currentCourse.id %>">
+                        <div style="margin-bottom: 10px;">
+                            <input type="text" name="question" placeholder="Вопрос" value="<%= lesson.test ? lesson.test.question : '' %>" required style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                        </div>
+                        <% for (let i = 0; i < 4; i++) { %>
+                        <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 5px;">
+                            <input type="radio" name="correct_answer" value="<%= i %>" <%= lesson.test && lesson.test.answers && lesson.test.answers[i] && lesson.test.answers[i].is_correct ? 'checked' : '' %>>
+                            <input type="text" name="answer_<%= i %>" placeholder="Ответ <%= i + 1 %>" value="<%= lesson.test && lesson.test.answers && lesson.test.answers[i] ? lesson.test.answers[i].answer : '' %>" style="flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                        </div>
+                        <% } %>
+                        <button type="submit" style="padding: 8px 20px; background: #9b59b6; color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 10px;">Сохранить тест</button>
+                    </form>
+                </td>
+            </tr>
+            <% }); %>
+        </tbody>
+    </table>
+    <% } else { %>
+        <p>Сначала создайте курс в разделе "Курсы".</p>
+    <% } %>
+
+<% } else if (data.section === 'payments') { %>
+    <h3 style="margin-bottom: 20px;">Платежи</h3>
+    <table style="width: 100%; border-collapse: collapse;">
+        <thead>
+            <tr>
+                <th style="background: #f8f9fa; padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6;">Пользователь</th>
+                <th style="background: #f8f9fa; padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6;">Сумма</th>
+                <th style="background: #f8f9fa; padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6;">Шлюз</th>
+                <th style="background: #f8f9fa; padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6;">Статус</th>
+                <th style="background: #f8f9fa; padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6;">Дата</th>
+            </tr>
+        </thead>
+        <tbody>
+            <% data.payments.forEach(function(payment) { %>
+            <tr>
+                <td style="padding: 10px; border-bottom: 1px solid #e9ecef;"><%= payment.first_name || 'Удален' %> <%= payment.last_name || '' %></td>
+                <td style="padding: 10px; border-bottom: 1px solid #e9ecef;"><%= parseFloat(payment.amount).toFixed(2) %> <%= payment.currency %></td>
+                <td style="padding: 10px; border-bottom: 1px solid #e9ecef;"><%= payment.payment_gateway || '-' %></td>
+                <td style="padding: 10px; border-bottom: 1px solid #e9ecef;">
+                    <% if (payment.status === 'success') { %>
+                        <span style="background: #d4edda; color: #155724; padding: 4px 8px; border-radius: 3px; font-size: 12px;">Успешно</span>
+                    <% } else if (payment.status === 'pending') { %>
+                        <span style="background: #fff3cd; color: #856404; padding: 4px 8px; border-radius: 3px; font-size: 12px;">Ожидает</span>
+                    <% } else { %>
+                        <span style="background: #f8d7da; color: #721c24; padding: 4px 8px; border-radius: 3px; font-size: 12px;"><%= payment.status %></span>
+                    <% } %>
+                </td>
+                <td style="padding: 10px; border-bottom: 1px solid #e9ecef;"><%= new Date(payment.created_at).toLocaleDateString('ru-RU') %></td>
+            </tr>
+            <% }); %>
+        </tbody>
+    </table>
+    
+    <% if (data.pages > 1) { %>
+    <div style="text-align: center; margin-top: 20px;">
+        <% for (let i = 1; i <= data.pages; i++) { %>
+            <a href="/admin/panel?section=payments&page=<%= i %>" style="padding: 5px 10px; border: 1px solid #ddd; text-decoration: none; color: #333; <%= i === data.page ? 'background: #3498db; color: white;' : '' %>"><%= i %></a>
+        <% } %>
+    </div>
+    <% } %>
+
+<% } else if (data.section === 'settings') { %>
+    <h3 style="margin-bottom: 20px;">Настройки бота</h3>
+    <form method="POST" action="/admin/settings/update">
+        <div style="margin-bottom: 15px;">
+            <label style="display: block; margin-bottom: 5px; font-weight: 500;">Название бота</label>
+            <input type="text" name="bot_name" value="<%= data.settings.bot_name || 'Обучающий бот' %>" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+        </div>
+        <div style="margin-bottom: 15px;">
+            <label style="display: block; margin-bottom: 5px; font-weight: 500;">Контакт поддержки</label>
+            <input type="text" name="support_contact" value="<%= data.settings.support_contact || '@support' %>" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+        </div>
+        <div style="margin-bottom: 15px;">
+            <label style="display: block; margin-bottom: 5px; font-weight: 500;">Текст главного меню</label>
+            <textarea name="main_menu_text" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; min-height: 60px;"><%= data.settings.main_menu_text || 'Добро пожаловать! Выберите раздел:' %></textarea>
+        </div>
+        <div style="margin-bottom: 15px;">
+            <label style="display: block; margin-bottom: 5px; font-weight: 500;">Предложение купить курс</label>
+            <textarea name="complete_course_offer" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; min-height: 60px;"><%= data.settings.complete_course_offer || 'Поздравляем! Вы прошли все бесплатные уроки. Хотите открыть полный курс?' %></textarea>
+        </div>
+        <div style="margin-bottom: 15px;">
+            <label style="display: block; margin-bottom: 5px; font-weight: 500;">Текст ошибки теста</label>
+            <input type="text" name="wrong_answer_text" value="<%= data.settings.wrong_answer_text || '❌ Неправильный ответ. Попробуйте еще раз.' %>" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+        </div>
+        <div style="margin-bottom: 15px;">
+            <label style="display: block; margin-bottom: 5px; font-weight: 500;">Текст правильного ответа</label>
+            <input type="text" name="correct_answer_text" value="<%= data.settings.correct_answer_text || '✅ Правильно! Урок завершен.' %>" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+        </div>
+        <button type="submit" style="padding: 10px 25px; background: #3498db; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px;">Сохранить настройки</button>
+    </form>
+<% } %>
+
+</div>
+
+<div id="statsModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
+    <div style="background: white; border-radius: 8px; padding: 30px; max-width: 500px; width: 90%;">
+        <h3 style="margin-bottom: 15px;">Статистика пользователя</h3>
+        <div id="statsContent">Загрузка...</div>
+        <button onclick="document.getElementById('statsModal').style.display='none'" style="padding: 8px 20px; background: #666; color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 15px;">Закрыть</button>
+    </div>
+</div>
+
+<script>
+    function toggleSection(id) {
+        const el = document.getElementById(id);
+        el.style.display = el.style.display === 'none' ? 'table-row' : 'none';
+    }
+
+    async function showStats(userId) {
+        document.getElementById('statsModal').style.display = 'flex';
+        document.getElementById('statsContent').innerHTML = 'Загрузка...';
+        
+        try {
+            const response = await fetch('/admin/api/users/' + userId + '/stats');
+            const stats = await response.json();
+            
+            let html = '<div style="margin-bottom: 10px;">';
+            
+            html += '<h4>Доступ к курсам:</h4>';
+            if (stats.courseAccess.length === 0) {
+                html += '<p style="color: #666;">Нет доступа к платным курсам</p>';
+            } else {
+                html += '<ul>';
+                stats.courseAccess.forEach(function(access) {
+                    html += '<li>' + access.course_title + ' (' + new Date(access.granted_at).toLocaleDateString('ru-RU') + ')</li>';
+                });
+                html += '</ul>';
+            }
+            
+            html += '<h4>Пройденные уроки:</h4>';
+            if (stats.progress.length === 0) {
+                html += '<p style="color: #666;">Нет пройденных уроков</p>';
+            } else {
+                html += '<ul>';
+                stats.progress.filter(function(p) { return p.status === 'completed'; }).forEach(function(p) {
+                    html += '<li>✅ ' + p.lesson_title + '</li>';
+                });
+                html += '</ul>';
+            }
+            
+            html += '</div>';
+            
+            document.getElementById('statsContent').innerHTML = html;
+        } catch (error) {
+            document.getElementById('statsContent').innerHTML = '<p style="color: #e74c3c;">Ошибка загрузки</p>';
+        }
+    }
+</script>
