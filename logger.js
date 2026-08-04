@@ -1,27 +1,42 @@
-const fs = require('fs');
+const pino = require('pino');
 const path = require('path');
+const fs = require('fs');
 
-function getTimestamp() {
-  return new Date().toISOString();
+const logDir = path.join(__dirname, 'logs');
+if (!fs.existsSync(logDir)) {
+  fs.mkdirSync(logDir, { recursive: true });
 }
 
-function log(level, message, data) {
-  const logMsg = `[${getTimestamp()}] ${level}: ${message} ${data ? JSON.stringify(data) : ''}`;
-  
-  if (level === 'ERROR') {
-    console.error(logMsg);
-  } else if (level === 'WARN') {
-    console.warn(logMsg);
-  } else {
-    console.log(logMsg);
-  }
-}
+const transport = pino.transport({
+  targets: [
+    {
+      target: 'pino-pretty',
+      level: 'info',
+      options: { destination: 1, colorize: true },
+    },
+    {
+      target: 'pino/file',
+      level: 'error',
+      options: { destination: path.join(logDir, 'error.log') },
+    },
+    {
+      target: 'pino/file',
+      level: 'info',
+      options: { destination: path.join(logDir, 'combined.log') },
+    },
+  ],
+});
 
-const logger = {
-  info: (message, data) => log('INFO', message, data),
-  error: (message, data) => log('ERROR', message, data),
-  warn: (message, data) => log('WARN', message, data),
-  debug: (message, data) => log('DEBUG', message, data),
-};
+const logger = pino(
+  {
+    level: process.env.LOG_LEVEL || 'info',
+    formatters: {
+      bindings: (bindings) => ({ pid: bindings.pid, host: bindings.hostname }),
+      level: (label) => ({ level: label.toUpperCase() }),
+    },
+    timestamp: pino.stdTimeFunctions.isoTime,
+  },
+  transport
+);
 
 module.exports = logger;
