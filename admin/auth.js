@@ -26,13 +26,13 @@ async function login(req, res) {
       return res.status(400).json({ error: 'Логин и пароль обязательны' });
     }
 
-    const result = await database.query('SELECT * FROM admins WHERE login = $1', [login]);
+    const admins = database.readTable('admins');
+    const admin = admins.find(a => a.login === login);
 
-    if (result.rows.length === 0) {
+    if (!admin) {
       return res.status(401).json({ error: 'Неверный логин или пароль' });
     }
 
-    const admin = result.rows[0];
     const validPassword = await bcrypt.compare(password, admin.password_hash);
 
     if (!validPassword) {
