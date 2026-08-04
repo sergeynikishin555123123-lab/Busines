@@ -1,47 +1,93 @@
-const { Pool } = require('pg');
-const config = require('./config');
-const logger = require('./logger');
+const fs = require('fs');
+const path = require('path');
+const { v4: uuidv4 } = require('uuid');
 
-const pool = new Pool({
-  connectionString: config.database.url,
-  max: 20,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
-});
+const DATA_DIR = path.join(__dirname, 'data');
 
-pool.on('error', (err) => {
-  logger.error('Unexpected database pool error', err);
-});
+const TABLES = {
+  users: [],
+  admins: [],
+  bot_settings: [
+    { key: 'bot_name', value: 'Обучающий бот' },
+    { key: 'support_contact', value: '@support' },
+    { key: 'main_menu_text', value: 'Добро пожаловать! Выберите раздел:' },
+    { key: 'free_lessons_button', value: '📚 Бесплатные уроки' },
+    { key: 'full_course_button', value: '🎓 Полный курс' },
+    { key: 'progress_button', value: '📊 Мой прогресс' },
+    { key: 'support_button', value: '💬 Поддержка' },
+    { key: 'watched_button', value: '✅ Я просмотрел' },
+    { key: 'complete_course_offer', value: 'Поздравляем! Вы прошли все бесплатные уроки. Хотите открыть полный курс?' },
+    { key: 'wrong_answer_text', value: '❌ Неправильный ответ. Попробуйте еще раз.' },
+    { key: 'correct_answer_text', value: '✅ Правильно! Урок завершен.' },
+  ],
+  courses: [],
+  lessons: [],
+  lesson_files: [],
+  tests: [],
+  test_answers: [],
+  progress: [],
+  lesson_views: [],
+  user_course_access: [],
+  payments: [],
+  notifications: [],
+};
 
-async function query(text, params) {
-  const start = Date.now();
-  const result = await pool.query(text, params);
-  const duration = Date.now() - start;
-  
-  if (config.server.nodeEnv === 'development') {
-    logger.debug('DB Query', {
-      text: text.substring(0, 100),
-      duration,
-      rows: result.rowCount,
-    });
+function initDatabase() {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
   }
-  
-  return result;
+
+  for (const tableName of Object.keys(TABLES)) {
+    const filePath = path.join(DATA_DIR, `${tableName}.json`);
+    if (!fs.existsSync(filePath)) {
+      fs.writeFileSync(filePath, JSON.stringify(TABLES[tableName], null, 2));
+    }
+  }
+}
+
+function readTable(tableName) {
+  const filePath = path.join(DATA_DIR, `${tableName}.json`);
+  if (!fs.existsSync(filePath)) {
+    return [];
+  }
+  const data = fs.readFileSync(filePath, 'utf-8');
+  return JSON.parse(data);
+}
+
+function writeTable(tableName, data) {
+  const filePath = path.join(DATA_DIR, `${tableName}.json`);
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+}
+
+function generateId() {
+  return uuidv4();
+}
+
+function now() {
+  return new Date().toISOString();
+}
+
+async function query(sql, params = []) {
+  return { rows: [], rowCount: 0 };
 }
 
 async function getClient() {
-  const client = await pool.connect();
-  return client;
+  return {
+    query: async (sql, params) => ({ rows: [], rowCount: 0 }),
+    release: () => {},
+  };
 }
 
-async function closePool() {
-  await pool.end();
-  logger.info('Database pool closed');
-}
+async function closePool() {}
 
 module.exports = {
   query,
   getClient,
-  pool,
   closePool,
+  pool: null,
+  readTable,
+  writeTable,
+  generateId,
+  now,
+  initDatabase,
 };
