@@ -1,323 +1,316 @@
-const database = require('../database');
+const path = require('path');
+const multer = require('multer');
+const config = require('../config');
 const userService = require('../core/user');
 const courseService = require('../core/course');
 const lessonService = require('../core/lesson');
 const paymentService = require('../core/payment');
+const progressService = require('../core/progress');
 const storageService = require('../services/storage');
+const database = require('../database');
 const logger = require('../logger');
 
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: config.storage.maxFileSizeMb * 1024 * 1024,
+  },
+});
+
+// Дашборд
 async function dashboard(req, res) {
   try {
-    const stats = await Promise.all([
-      database.query('SELECT COUNT(*) as count FROM users'),
-      database.query('SELECT COUNT(*) as count FROM courses'),
-      database.query('SELECT COUNT(*) as count FROM lessons'),
-      database.query('SELECT COUNT(*) as count FROM payments WHERE status = $1', ['success']),
-      database.query('SELECT COUNT(*) as count FROM progress WHERE status = $1', ['completed']),
-      database.query('SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE status = $1', ['success']),
-    ]);
-
-    res.render('dashboard', {
+    const users = await userService.getAllUsers(1, 100);
+    const courses = await courseService.getAllCourses();
+    const lessons = database.readTable('lessons');
+    const payments = database.readTable('payments');
+    
+    const stats = {
+      users: users.total || 0,
+      courses: courses.length || 0,
+      lessons: lessons.length || 0,
+      payments: payments.filter(p => p.status === 'success').length || 0,
+      revenue: payments.filter(p => p.status === 'success').reduce((sum, p) => sum + parseFloat(p.amount), 0) || 0,
+    };
+    
+    res.render('dashboard', { 
       title: 'Панель управления',
-      stats: {
-        users: parseInt(stats[0].rows[0].count),
-        courses: parseInt(stats[1].rows[0].count),
-        lessons: parseInt(stats[2].rows[0].count),
-        payments: parseInt(stats[3].rows[0].count),
-        completedLessons: parseInt(stats[4].rows[0].count),
-        revenue: parseFloat(stats[5].rows[0].total),
-      },
+      stats,
+      layout: false 
     });
   } catch (error) {
     logger.error('Dashboard error:', error);
-    res.status(500).send('Ошибка загрузки панели управления');
+    res.render('dashboard', { 
+      title: 'Панель управления',
+      stats: { users: 0, courses: 0, lessons: 0, payments: 0, revenue: 0 },
+      layout: false 
+    });
   }
 }
 
+// Панель управления
 async function panel(req, res) {
   try {
     const section = req.query.section || 'users';
     const page = parseInt(req.query.page) || 1;
-    const limit = 50;
-    const offset = (page - 1) * limit;
-    
-    let data = {};
-    let total = 0;
+    const limit = 20;
+    const data = { section, page, title: 'Панель управления' };
 
+    // Получаем настройки бота
+    const settingsResult = database.readTable('bot_settings');
+    const settings = {};
+    settingsResult.forEach(row => {
+      settings[row.key] = row.value;
+    });
+    data.settings = settings;
+
+    // Получаем данные в зависимости от раздела
     switch (section) {
-      case 'users':
-        const usersResult = await database.query(
-          'SELECT * FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2',
-          [limit, offset]
-        );
-        const usersCount = await database.query('SELECT COUNT(*) as total FROM users');
-        data.users = usersResult.rows;
-        total = parseInt(usersCount.rows[0].total);
+      case 'users': {
+        const result = await userService.getAllUsers(page, limit);
+        data.users = result.users || [];
+        data.pages = Math.ceil((result.total || 0) / limit);
         break;
-
-      case 'courses':
-        data.courses = await courseService.getAllCourses();
+      }
+      case 'courses': {
+        const courses = await courseService.getAllCourses();
+        data.courses = courses || [];
         break;
-
-      case 'lessons':
-        const courseId = req.query.courseId;
+      }
+      case 'lessons': {
+        const courses = await courseService.getAllCourses();
+        data.courses = courses || [];
+        
+        const courseId = req.query.courseId || (courses.length > 0 ? courses[0].id : null);
         if (courseId) {
           data.currentCourse = await courseService.getCourseById(courseId);
-          data.lessons = await courseService.getCourseLessons(courseId);
-        } else {
-          data.courses = await courseService.getAllCourses();
-          if (data.courses.length > 0) {
-            data.lessons = await courseService.getCourseLessons(data.courses[0].id);
-            data.currentCourse = data.courses[0];
-          } else {
-            data.lessons = [];
+          const lessons = await courseService.getCourseLessons(courseId);
+          // Добавляем файлы к каждому уроку
+          for (const lesson of lessons) {
+            const files = database.readTable('lesson_files').filter(f => f.lesson_id === lesson.id);
+            lesson.files = files || [];
+            const test = await lessonService.getLessonTest(lesson.id);
+            lesson.test = test;
           }
+          data.lessons = lessons || [];
+        } else {
+          data.lessons = [];
         }
         break;
-
-      case 'payments':
-        const paymentsResult = await database.query(
-          `SELECT p.*, u.first_name, u.last_name 
-           FROM payments p 
-           LEFT JOIN users u ON p.user_id = u.id 
-           ORDER BY p.created_at DESC 
-           LIMIT $1 OFFSET $2`,
-          [limit, offset]
-        );
-        const paymentsCount = await database.query('SELECT COUNT(*) as total FROM payments');
-        data.payments = paymentsResult.rows;
-        total = parseInt(paymentsCount.rows[0].total);
+      }
+      case 'payments': {
+        const result = await paymentService.getAllPayments(page, limit);
+        data.payments = result.payments || [];
+        data.pages = Math.ceil((result.total || 0) / limit);
         break;
-
-      case 'settings':
-        const settingsResult = await database.query('SELECT * FROM bot_settings ORDER BY key ASC');
-        data.settings = {};
-        settingsResult.rows.forEach(row => {
-          data.settings[row.key] = row.value;
-        });
+      }
+      case 'settings': {
+        // Настройки уже загружены
         break;
-
-      default:
-        data.users = (await database.query('SELECT * FROM users ORDER BY created_at DESC LIMIT $1', [limit])).rows;
+      }
+      default: {
+        data.users = [];
+        data.pages = 0;
+      }
     }
 
-    data.section = section;
-    data.page = page;
-    data.limit = limit;
-    data.total = total;
-    data.pages = Math.ceil(total / limit);
-
-    res.render('panel', {
-      title: 'Управление',
-      data,
-      error: req.query.error || null,
-      success: req.query.success || null,
-    });
+    res.render('panel', data);
   } catch (error) {
     logger.error('Panel error:', error);
-    res.status(500).send('Ошибка загрузки панели управления');
+    res.render('panel', { 
+      section: req.query.section || 'users',
+      page: 1,
+      title: 'Панель управления',
+      users: [],
+      courses: [],
+      lessons: [],
+      payments: [],
+      settings: {},
+      error: 'Ошибка загрузки данных'
+    });
   }
 }
 
+// Создание курса
 async function createCourse(req, res) {
   try {
     const { title, description, price } = req.body;
-    if (!title) {
-      return res.redirect('/admin/panel?section=courses&error=Название+курса+обязательно');
-    }
-    
-    await courseService.createCourse({ title, description, price: parseFloat(price) || 0 });
-    logger.info(`Course created by admin ${req.session.admin.login}`);
-    res.redirect('/admin/panel?section=courses&success=Курс+создан');
+    await courseService.createCourse({ title, description, price });
+    res.redirect('/admin/panel?section=courses&success=Курс создан');
   } catch (error) {
     logger.error('Create course error:', error);
-    res.redirect('/admin/panel?section=courses&error=Ошибка+создания+курса');
+    res.redirect('/admin/panel?section=courses&error=Ошибка создания');
   }
 }
 
+// Обновление курса
 async function updateCourse(req, res) {
   try {
-    const { id, title, description, price, isActive } = req.body;
+    const { id, title, price, isActive } = req.body;
     await courseService.updateCourse(id, {
       title,
-      description,
-      price: parseFloat(price),
+      price,
       isActive: isActive === 'on',
     });
-    logger.info(`Course updated: ${id}`);
-    res.redirect('/admin/panel?section=courses&success=Курс+обновлен');
+    res.redirect('/admin/panel?section=courses&success=Курс обновлен');
   } catch (error) {
     logger.error('Update course error:', error);
-    res.redirect('/admin/panel?section=courses&error=Ошибка+обновления+курса');
+    res.redirect('/admin/panel?section=courses&error=Ошибка обновления');
   }
 }
 
+// Удаление курса
 async function deleteCourse(req, res) {
   try {
     const { id } = req.params;
     await courseService.deleteCourse(id);
-    logger.info(`Course deleted: ${id}`);
-    res.redirect('/admin/panel?section=courses&success=Курс+удален');
+    res.redirect('/admin/panel?section=courses&success=Курс удален');
   } catch (error) {
     logger.error('Delete course error:', error);
-    res.redirect('/admin/panel?section=courses&error=Ошибка+удаления+курса');
+    res.redirect('/admin/panel?section=courses&error=Ошибка удаления');
   }
 }
 
+// Создание урока
 async function createLesson(req, res) {
   try {
     const { courseId, title, description, videoUrl, orderNumber, isFree } = req.body;
-    if (!title || !courseId) {
-      return res.redirect(`/admin/panel?section=lessons&courseId=${courseId}&error=Название+урока+обязательно`);
-    }
-    
     await lessonService.createLesson({
       courseId,
       title,
       description,
       videoUrl,
-      orderNumber: parseInt(orderNumber) || 0,
+      orderNumber,
       isFree: isFree === 'on',
     });
-    
-    res.redirect(`/admin/panel?section=lessons&courseId=${courseId}&success=Урок+создан`);
+    res.redirect(`/admin/panel?section=lessons&courseId=${courseId}&success=Урок создан`);
   } catch (error) {
     logger.error('Create lesson error:', error);
-    res.redirect(`/admin/panel?section=lessons&error=Ошибка+создания+урока`);
+    res.redirect(`/admin/panel?section=lessons&courseId=${req.body.courseId}&error=Ошибка создания`);
   }
 }
 
+// Обновление урока
 async function updateLesson(req, res) {
   try {
-    const { id, courseId, title, description, videoUrl, orderNumber, isFree } = req.body;
+    const { id, courseId, title, orderNumber, isFree } = req.body;
     await lessonService.updateLesson(id, {
       title,
-      description,
-      videoUrl,
-      orderNumber: parseInt(orderNumber),
+      orderNumber,
       isFree: isFree === 'on',
     });
-    
-    res.redirect(`/admin/panel?section=lessons&courseId=${courseId}&success=Урок+обновлен`);
+    res.redirect(`/admin/panel?section=lessons&courseId=${courseId}&success=Урок обновлен`);
   } catch (error) {
     logger.error('Update lesson error:', error);
-    res.redirect(`/admin/panel?section=lessons&error=Ошибка+обновления+урока`);
+    res.redirect(`/admin/panel?section=lessons&courseId=${req.body.courseId}&error=Ошибка обновления`);
   }
 }
 
+// Удаление урока
 async function deleteLesson(req, res) {
   try {
     const { id } = req.params;
-    const courseId = req.query.courseId || '';
+    const courseId = req.query.courseId;
     await lessonService.deleteLesson(id);
-    res.redirect(`/admin/panel?section=lessons&courseId=${courseId}&success=Урок+удален`);
+    res.redirect(`/admin/panel?section=lessons&courseId=${courseId}&success=Урок удален`);
   } catch (error) {
     logger.error('Delete lesson error:', error);
-    res.redirect('/admin/panel?section=lessons&error=Ошибка+удаления+урока');
+    res.redirect(`/admin/panel?section=lessons&courseId=${req.query.courseId}&error=Ошибка удаления`);
   }
 }
 
+// Загрузка файла урока
 async function uploadLessonFile(req, res) {
   try {
     const { lessonId, courseId } = req.body;
-    
     if (!req.file) {
-      return res.redirect(`/admin/panel?section=lessons&courseId=${courseId}&error=Файл+не+выбран`);
+      return res.redirect(`/admin/panel?section=lessons&courseId=${courseId}&error=Файл не загружен`);
     }
 
-    const fileData = await storageService.uploadFile(req.file, 'lessons');
+    const filename = req.file.originalname;
+    const url = await storageService.saveFile(req.file.buffer, filename, 'lessons');
+    
     await lessonService.addLessonFile(lessonId, {
-      filename: fileData.originalname,
-      url: fileData.url,
+      filename,
+      url,
       type: req.file.mimetype,
     });
 
-    res.redirect(`/admin/panel?section=lessons&courseId=${courseId}&success=Файл+загружен`);
+    res.redirect(`/admin/panel?section=lessons&courseId=${courseId}&success=Файл загружен`);
   } catch (error) {
     logger.error('Upload file error:', error);
-    res.redirect(`/admin/panel?section=lessons&courseId=${req.body.courseId}&error=${encodeURIComponent(error.message)}`);
+    res.redirect(`/admin/panel?section=lessons&courseId=${req.body.courseId}&error=Ошибка загрузки`);
   }
 }
 
+// Удаление файла урока
 async function deleteLessonFile(req, res) {
   try {
     const { fileId } = req.params;
-    const courseId = req.query.courseId || '';
+    const courseId = req.query.courseId;
     await lessonService.deleteLessonFile(fileId);
-    res.redirect(`/admin/panel?section=lessons&courseId=${courseId}&success=Файл+удален`);
+    res.redirect(`/admin/panel?section=lessons&courseId=${courseId}&success=Файл удален`);
   } catch (error) {
     logger.error('Delete file error:', error);
-    res.redirect(`/admin/panel?section=lessons&error=Ошибка+удаления+файла`);
+    res.redirect(`/admin/panel?section=lessons&courseId=${req.query.courseId}&error=Ошибка удаления`);
   }
 }
 
+// Создание теста
 async function createTest(req, res) {
   try {
     const { lessonId, courseId, question } = req.body;
     const answers = [];
-
     for (let i = 0; i < 4; i++) {
       const answerText = req.body[`answer_${i}`];
-      if (answerText) {
+      if (answerText && answerText.trim()) {
         answers.push({
-          text: answerText,
+          text: answerText.trim(),
           isCorrect: req.body.correct_answer === String(i),
         });
       }
     }
 
-    if (!question || answers.length < 2) {
-      return res.redirect(`/admin/panel?section=lessons&courseId=${courseId}&error=Вопрос+и+минимум+2+ответа+обязательны`);
-    }
-
     await lessonService.createTest(lessonId, { question, answers });
-    res.redirect(`/admin/panel?section=lessons&courseId=${courseId}&success=Тест+сохранен`);
+    res.redirect(`/admin/panel?section=lessons&courseId=${courseId}&success=Тест сохранен`);
   } catch (error) {
     logger.error('Create test error:', error);
-    res.redirect(`/admin/panel?section=lessons&error=Ошибка+сохранения+теста`);
+    res.redirect(`/admin/panel?section=lessons&courseId=${req.body.courseId}&error=Ошибка сохранения теста`);
   }
 }
 
+// Статистика пользователя
 async function getUserStats(req, res) {
   try {
     const { userId } = req.params;
     const stats = await userService.getUserStats(userId);
     res.json(stats);
   } catch (error) {
-    logger.error('User stats error:', error);
+    logger.error('Get user stats error:', error);
     res.status(500).json({ error: 'Ошибка загрузки статистики' });
   }
 }
 
+// Обновление настроек
 async function updateSettings(req, res) {
   try {
-    const client = await database.getClient();
+    const settings = req.body;
+    const currentSettings = database.readTable('bot_settings');
     
-    try {
-      await client.query('BEGIN');
-      
-      for (const [key, value] of Object.entries(req.body)) {
-        if (key !== 'section') {
-          await client.query(
-            `INSERT INTO bot_settings (key, value) VALUES ($1, $2) 
-             ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
-            [key, value]
-          );
-        }
+    for (const [key, value] of Object.entries(settings)) {
+      const existing = currentSettings.find(s => s.key === key);
+      if (existing) {
+        existing.value = value;
+      } else {
+        currentSettings.push({ key, value });
       }
-      
-      await client.query('COMMIT');
-      logger.info(`Settings updated by admin ${req.session.admin.login}`);
-      res.redirect('/admin/panel?section=settings&success=Настройки+сохранены');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
     }
+    
+    database.writeTable('bot_settings', currentSettings);
+    res.redirect('/admin/panel?section=settings&success=Настройки сохранены');
   } catch (error) {
     logger.error('Update settings error:', error);
-    res.redirect('/admin/panel?section=settings&error=Ошибка+сохранения+настроек');
+    res.redirect('/admin/panel?section=settings&error=Ошибка сохранения');
   }
 }
 
