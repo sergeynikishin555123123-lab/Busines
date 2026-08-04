@@ -38,21 +38,25 @@ function initDatabase() {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
   } catch (error) {
-    console.warn('Cannot create data directory:', error.message);
+    console.warn('Cannot create data directory, using /tmp/data:', error.message);
     DATA_DIR = '/tmp/data';
     try {
       if (!fs.existsSync(DATA_DIR)) {
         fs.mkdirSync(DATA_DIR, { recursive: true });
       }
     } catch (err) {
-      console.error('Cannot create /tmp/data directory:', err.message);
+      console.error('Cannot create /tmp/data:', err.message);
     }
   }
 
   for (const tableName of Object.keys(TABLES)) {
-    const filePath = path.join(DATA_DIR, `${tableName}.json`);
-    if (!fs.existsSync(filePath)) {
-      fs.writeFileSync(filePath, JSON.stringify(TABLES[tableName], null, 2));
+    try {
+      const filePath = path.join(DATA_DIR, `${tableName}.json`);
+      if (!fs.existsSync(filePath)) {
+        fs.writeFileSync(filePath, JSON.stringify(TABLES[tableName], null, 2));
+      }
+    } catch (error) {
+      console.error(`Cannot write ${tableName}.json:`, error.message);
     }
   }
 }
