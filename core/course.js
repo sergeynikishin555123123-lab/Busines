@@ -3,134 +3,188 @@ const logger = require('../logger');
 
 class CourseService {
   async getAllCourses(activeOnly = false) {
-    let query = 'SELECT * FROM courses';
-    const params = [];
-    
+    const courses = database.readTable('courses');
     if (activeOnly) {
-      query += ' WHERE is_active = true';
+      return courses.filter(c => c.is_active);
     }
-    
-    query += ' ORDER BY created_at DESC';
-    
-    const result = await database.query(query, params);
-    return result.rows;
+    return courses.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   }
 
   async getCourseById(courseId) {
-    const result = await database.query('SELECT * FROM courses WHERE id = $1', [courseId]);
-    return result.rows[0] || null;
+    const courses = database.readTable('courses');
+    return courses.find(c => c.id === courseId) || null;
   }
 
   async getCourseLessons(courseId) {
-    const result = await database.query(
-      'SELECT * FROM lessons WHERE course_id = $1 ORDER BY order_number ASC',
-      [courseId]
-    );
-    return result.rows;
+    const lessons = database.readTable('lessons');
+    return lessons
+      .filter(l => l.course_id === courseId)
+      .sort((a, b) => a.order_number - b.order_number);
   }
 
   async getFreeLessons() {
-    const result = await database.query(
-      'SELECT l.*, c.title as course_title FROM lessons l JOIN courses c ON l.course_id = c.id WHERE l.is_free = true AND c.is_active = true ORDER BY l.order_number ASC'
-    );
-    return result.rows;
+    const lessons = database.readTable('lessons');
+    const courses = database.readTable('courses');
+    
+    return lessons
+      .filter(l => l.is_free)
+      .map(l => {
+        const course = courses.find(c => c.id === l.course_id);
+        return {
+          ...l,
+          course_title: course ? course.title : '',
+        };
+      })
+      .filter(l => {
+        const course = courses.find(c => c.id === l.course_id);
+        return course && course.is_active;
+      })
+      .sort((a, b) => a.order_number - b.order_number);
   }
 
   async getUserFreeLessonsProgress(userId) {
-    const result = await database.query(
-      `SELECT l.id, l.title, l.order_number, p.status, p.test_passed, p.completed_at
-       FROM lessons l
-       JOIN courses c ON l.course_id = c.id
-       LEFT JOIN progress p ON l.id = p.lesson_id AND p.user_id = $1
-       WHERE l.is_free = true AND c.is_active = true
-       ORDER BY l.order_number ASC`,
-      [userId]
-    );
-    return result.rows;
+    const freeLessons = await this.getFreeLessons();
+    const progress = database.readTable('progress');
+
+    return freeLessons.map(lesson => {
+      const userProgress = progress.find(p => p.user_id === userId && p.lesson_id === lesson.id);
+      return {
+        id: lesson.id,
+        title: lesson.title,
+        order_number: lesson.order_number,
+        status: userProgress ? userProgress.status : 'started',
+        test_passed: userProgress ? userProgress.test_passed : false,
+        completed_at: userProgress ? userProgress.completed_at : null,
+      };
+    });
   }
 
   async hasUserCompletedAllFreeLessons(userId) {
-    const totalFree = await database.query(
-      'SELECT COUNT(*) as count FROM lessons WHERE is_free = true'
-    );
+    const freeLessons = database.readTable('lessons').filter(l => l.is_free);
+    const progress = database.readTable('progress');
     
-    const completedFree = await database.query(
-      `SELECT COUNT(*) as count 
-       FROM progress p 
-       JOIN lessons l ON p.lesson_id = l.id 
-       WHERE p.user_id = $1 AND l.is_free = true AND p.status = 'completed'`,
-      [userId]
-    );
-
-    const total = parseInt(totalFree.rows[0].count);
-    const completed = parseInt(completedFree.rows[0].count);
+    const total = freeLessons.length;
+    const completed = freeLessons.filter(lesson => {
+      const p = progress.find(pr => pr.user_id === userId && pr.lesson_id === lesson.id);
+      return p && p.status === 'completed';
+    }).length;
     
     return total > 0 && total === completed;
   }
 
   async getUserFullCourseAccess(userId) {
-    const result = await database.query(
-      `SELECT uca.*, c.title, c.description 
-       FROM user_course_access uca 
-       JOIN courses c ON uca.course_id = c.id 
-       WHERE uca.user_id = $1 AND c.is_active = true`,
-      [userId]
-    );
-    return result.rows;
+    const access = database.readTable('user_course_access');
+    const courses = database.readTable('courses');
+    
+    return access
+      .filter(a => a.user_id === userId)
+      .map(a => {
+        const course = courses.find(c => c.id === a.course_id);
+        if (!course || !course.is_active) return null;
+        return {
+          ...a,
+          title: course.title,
+          description: course.description,
+        };
+      })
+      .filter(Boolean);
   }
 
   async grantCourseAccess(userId, courseId) {
-    const existing = await database.query(
-      'SELECT * FROM user_course_access WHERE user_id = $1 AND course_id = $2',
-      [userId, courseId]
-    );
+    const access = database.readTable('user_course_access');
+    
+    const existing = access.find(a => a.user_id === userId && a.course_id === courseId);
+    if (existing) return existing;
 
-    if (existing.rows.length > 0) {
-      return existing.rows[0];
-    }
+    const newAccess = {
+      id: database.generateId(),
+      user_id: userId,
+      course_id: courseId,
+      granted_at: database.now(),
+    };
 
-    const result = await database.query(
-      'INSERT INTO user_course_access (user_id, course_id) VALUES ($1, $2) RETURNING *',
-      [userId, courseId]
-    );
+    access.push(newAccess);
+    database.writeTable('user_course_access', access);
 
     logger.info(`Course access granted: user=${userId}, course=${courseId}`);
-    return result.rows[0];
+    return newAccess;
   }
 
   async createCourse(data) {
-    const result = await database.query(
-      'INSERT INTO courses (title, description, price) VALUES ($1, $2, $3) RETURNING *',
-      [data.title, data.description || '', data.price || 0]
-    );
-    return result.rows[0];
+    const courses = database.readTable('courses');
+    
+    const course = {
+      id: database.generateId(),
+      title: data.title,
+      description: data.description || '',
+      price: parseFloat(data.price) || 0,
+      is_active: true,
+      created_at: database.now(),
+      updated_at: database.now(),
+    };
+
+    courses.push(course);
+    database.writeTable('courses', courses);
+
+    return course;
   }
 
   async updateCourse(courseId, data) {
-    const result = await database.query(
-      `UPDATE courses 
-       SET title = COALESCE($1, title), 
-           description = COALESCE($2, description), 
-           price = COALESCE($3, price),
-           is_active = COALESCE($4, is_active),
-           updated_at = NOW() 
-       WHERE id = $5 
-       RETURNING *`,
-      [data.title, data.description, data.price, data.isActive, courseId]
-    );
-    return result.rows[0];
+    const courses = database.readTable('courses');
+    const index = courses.findIndex(c => c.id === courseId);
+    
+    if (index === -1) return null;
+
+    if (data.title !== undefined) courses[index].title = data.title;
+    if (data.description !== undefined) courses[index].description = data.description;
+    if (data.price !== undefined) courses[index].price = parseFloat(data.price);
+    if (data.isActive !== undefined) courses[index].is_active = data.isActive;
+    courses[index].updated_at = database.now();
+
+    database.writeTable('courses', courses);
+    return courses[index];
   }
 
   async deleteCourse(courseId) {
-    await database.query('DELETE FROM courses WHERE id = $1', [courseId]);
+    let courses = database.readTable('courses');
+    let lessons = database.readTable('lessons');
+    let lessonFiles = database.readTable('lesson_files');
+    let tests = database.readTable('tests');
+    let testAnswers = database.readTable('test_answers');
+
+    const courseLessons = lessons.filter(l => l.course_id === courseId);
+    
+    for (const lesson of courseLessons) {
+      const files = lessonFiles.filter(f => f.lesson_id === lesson.id);
+      for (const file of files) {
+        const storageService = require('../services/storage');
+        await storageService.deleteFile(file.url);
+      }
+      
+      lessonFiles = lessonFiles.filter(f => f.lesson_id !== lesson.id);
+      
+      const test = tests.find(t => t.lesson_id === lesson.id);
+      if (test) {
+        testAnswers = testAnswers.filter(a => a.test_id !== test.id);
+        tests = tests.filter(t => t.id !== test.id);
+      }
+    }
+
+    lessons = lessons.filter(l => l.course_id !== courseId);
+    courses = courses.filter(c => c.id !== courseId);
+
+    database.writeTable('courses', courses);
+    database.writeTable('lessons', lessons);
+    database.writeTable('lesson_files', lessonFiles);
+    database.writeTable('tests', tests);
+    database.writeTable('test_answers', testAnswers);
+
     return true;
   }
 
   async getPaidCourses() {
-    const result = await database.query(
-      'SELECT * FROM courses WHERE price > 0 AND is_active = true ORDER BY created_at ASC'
-    );
-    return result.rows;
+    const courses = database.readTable('courses');
+    return courses.filter(c => c.price > 0 && c.is_active).sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
   }
 }
 
