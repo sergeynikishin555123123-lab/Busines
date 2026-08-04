@@ -1,17 +1,7 @@
 const express = require('express');
-const multer = require('multer');
-const path = require('path');
 const router = express.Router();
-const config = require('../config');
 const { checkAuth, login, logout } = require('./auth');
-const controller = require('./controller');
-
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: config.storage.maxFileSizeMb * 1024 * 1024,
-  },
-});
+const adminController = require('./controller');
 
 // Страница входа
 router.get('/login', (req, res) => {
@@ -31,32 +21,32 @@ router.get('/logout', logout);
 router.use(checkAuth);
 
 // Дашборд
-router.get('/', controller.dashboard);
+router.get('/', adminController.dashboard);
 
 // Панель управления (все разделы)
-router.get('/panel', controller.panel);
+router.get('/panel', adminController.panel);
 
 // Курсы
-router.post('/courses/create', controller.createCourse);
-router.post('/courses/update', controller.updateCourse);
-router.get('/courses/delete/:id', controller.deleteCourse);
+router.post('/courses/create', adminController.createCourse);
+router.post('/courses/update', adminController.updateCourse);
+router.get('/courses/delete/:id', adminController.deleteCourse);
 
 // Уроки
-router.post('/lessons/create', controller.createLesson);
-router.post('/lessons/update', controller.updateLesson);
-router.get('/lessons/delete/:id', controller.deleteLesson);
+router.post('/lessons/create', adminController.createLesson);
+router.post('/lessons/update', adminController.updateLesson);
+router.get('/lessons/delete/:id', adminController.deleteLesson);
 
 // Файлы уроков
-router.post('/lessons/upload-file', upload.single('file'), controller.uploadLessonFile);
-router.get('/lessons/delete-file/:fileId', controller.deleteLessonFile);
+router.post('/lessons/upload-file', adminController.uploadLessonFile);
+router.get('/lessons/delete-file/:fileId', adminController.deleteLessonFile);
 
 // Тесты
-router.post('/lessons/create-test', controller.createTest);
+router.post('/lessons/create-test', adminController.createTest);
 
 // Статистика пользователя (API)
-router.get('/api/users/:userId/stats', controller.getUserStats);
+router.get('/api/users/:userId/stats', adminController.getUserStats);
 
 // Настройки
-router.post('/settings/update', controller.updateSettings);
+router.post('/settings/update', adminController.updateSettings);
 
 module.exports = router;
