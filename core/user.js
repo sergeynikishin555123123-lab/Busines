@@ -3,97 +3,103 @@ const logger = require('../logger');
 
 class UserService {
   async getOrCreateUser(platform, platformUserId, userData = {}) {
-    const existingUser = await database.query(
-      'SELECT * FROM users WHERE platform = $1 AND platform_user_id = $2',
-      [platform, platformUserId]
-    );
-
-    if (existingUser.rows.length > 0) {
-      await database.query(
-        'UPDATE users SET first_name = $1, last_name = $2, username = $3, updated_at = NOW() WHERE id = $4',
-        [
-          userData.firstName || existingUser.rows[0].first_name,
-          userData.lastName || existingUser.rows[0].last_name,
-          userData.username || existingUser.rows[0].username,
-          existingUser.rows[0].id,
-        ]
-      );
-      return existingUser.rows[0];
+    const users = database.readTable('users');
+    
+    let user = users.find(u => u.platform === platform && u.platform_user_id === platformUserId);
+    
+    if (user) {
+      user.first_name = userData.firstName || user.first_name;
+      user.last_name = userData.lastName || user.last_name;
+      user.username = userData.username || user.username;
+      user.updated_at = database.now();
+      database.writeTable('users', users);
+      return user;
     }
 
-    const newUser = await database.query(
-      'INSERT INTO users (platform, platform_user_id, first_name, last_name, username) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-      [
-        platform,
-        platformUserId,
-        userData.firstName || '',
-        userData.lastName || '',
-        userData.username || '',
-      ]
-    );
+    user = {
+      id: database.generateId(),
+      platform,
+      platform_user_id: platformUserId,
+      first_name: userData.firstName || '',
+      last_name: userData.lastName || '',
+      username: userData.username || '',
+      language_code: 'ru',
+      created_at: database.now(),
+      updated_at: database.now(),
+    };
 
+    users.push(user);
+    database.writeTable('users', users);
+    
     logger.info(`New user created: ${platform}:${platformUserId}`);
-    return newUser.rows[0];
+    return user;
   }
 
   async getUserById(userId) {
-    const result = await database.query('SELECT * FROM users WHERE id = $1', [userId]);
-    return result.rows[0] || null;
+    const users = database.readTable('users');
+    return users.find(u => u.id === userId) || null;
   }
 
   async getUserByPlatform(platform, platformUserId) {
-    const result = await database.query(
-      'SELECT * FROM users WHERE platform = $1 AND platform_user_id = $2',
-      [platform, platformUserId]
-    );
-    return result.rows[0] || null;
+    const users = database.readTable('users');
+    return users.find(u => u.platform === platform && u.platform_user_id === platformUserId) || null;
   }
 
   async getAllUsers(page = 1, limit = 50) {
+    const users = database.readTable('users');
+    const sorted = users.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
     const offset = (page - 1) * limit;
-    const result = await database.query(
-      'SELECT * FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2',
-      [limit, offset]
-    );
-    const countResult = await database.query('SELECT COUNT(*) as total FROM users');
     
     return {
-      users: result.rows,
-      total: parseInt(countResult.rows[0].total),
+      users: sorted.slice(offset, offset + limit),
+      total: users.length,
       page,
       limit,
     };
   }
 
   async getUserStats(userId) {
-    const progress = await database.query(
-      `SELECT p.*, l.title as lesson_title, l.course_id 
-       FROM progress p 
-       JOIN lessons l ON p.lesson_id = l.id 
-       WHERE p.user_id = $1`,
-      [userId]
-    );
+    const progress = database.readTable('progress');
+    const lessons = database.readTable('lessons');
+    const access = database.readTable('user_course_access');
+    const courses = database.readTable('courses');
+    const views = database.readTable('lesson_views');
 
-    const access = await database.query(
-      `SELECT uca.*, c.title as course_title 
-       FROM user_course_access uca 
-       JOIN courses c ON uca.course_id = c.id 
-       WHERE uca.user_id = $1`,
-      [userId]
-    );
+    const userProgress = progress
+      .filter(p => p.user_id === userId)
+      .map(p => {
+        const lesson = lessons.find(l => l.id === p.lesson_id);
+        return {
+          ...p,
+          lesson_title: lesson ? lesson.title : '',
+          course_id: lesson ? lesson.course_id : '',
+        };
+      });
 
-    const views = await database.query(
-      `SELECT lv.*, l.title as lesson_title 
-       FROM lesson_views lv 
-       JOIN lessons l ON lv.lesson_id = l.id 
-       WHERE lv.user_id = $1`,
-      [userId]
-    );
+    const userAccess = access
+      .filter(a => a.user_id === userId)
+      .map(a => {
+        const course = courses.find(c => c.id === a.course_id);
+        return {
+          ...a,
+          course_title: course ? course.title : '',
+        };
+      });
+
+    const userViews = views
+      .filter(v => v.user_id === userId)
+      .map(v => {
+        const lesson = lessons.find(l => l.id === v.lesson_id);
+        return {
+          ...v,
+          lesson_title: lesson ? lesson.title : '',
+        };
+      });
 
     return {
-      progress: progress.rows,
-      courseAccess: access.rows,
-      lessonViews: views.rows,
+      progress: userProgress,
+      courseAccess: userAccess,
+      lessonViews: userViews,
     };
   }
 }
