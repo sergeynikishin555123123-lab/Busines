@@ -4,7 +4,7 @@ module.exports = {
     server: {
         port: process.env.PORT || 8080,
         nodeEnv: process.env.NODE_ENV || 'development',
-        publicUrl: process.env.PUBLIC_URL || 'https://your-domain.com',
+        publicUrl: process.env.PUBLIC_URL || 'https://sergeynikishin555123123-lab-busines-4cdb.twc1.net', // <-- ИСПРАВЛЕНО
     },
     session: {
         secret: process.env.SESSION_SECRET || 'super-secret-key-change-this',
