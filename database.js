@@ -33,9 +33,17 @@ const TABLES = {
 };
 
 function initDatabase() {
+try {
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
   }
+} catch (error) {
+  console.warn('Cannot create data directory:', error.message);
+  DATA_DIR = '/tmp/data';
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+}
 
   for (const tableName of Object.keys(TABLES)) {
     const filePath = path.join(DATA_DIR, `${tableName}.json`);
