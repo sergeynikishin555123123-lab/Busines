@@ -2,16 +2,21 @@ const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 
-function getDataDir() {
-  const dir = path.join(__dirname, 'data');
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+// Используем /tmp для данных
+const DATA_DIR = process.env.DATA_DIR || '/tmp/data';
+
+try {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    console.log(`[DB] Created: ${DATA_DIR}`);
   }
-  return dir;
+} catch (error) {
+  console.error(`[DB] Cannot create ${DATA_DIR}:`, error.message);
+  process.exit(1);
 }
 
 function getTablePath(tableName) {
-  return path.join(getDataDir(), `${tableName}.json`);
+  return path.join(DATA_DIR, `${tableName}.json`);
 }
 
 function initDatabase() {
@@ -66,7 +71,6 @@ function now() {
   return new Date().toISOString();
 }
 
-// Заглушки
 async function query(sql, params = []) {
   return { rows: [], rowCount: 0 };
 }
