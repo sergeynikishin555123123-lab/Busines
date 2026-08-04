@@ -14,15 +14,24 @@ class StorageService {
     this.ensureBasePath();
   }
 
-  ensureBasePath() {
-try {
-  if (!fs.existsSync(this.basePath)) {
-    fs.mkdirSync(this.basePath, { recursive: true });
+ ensureBasePath() {
+  try {
+    if (!fs.existsSync(this.basePath)) {
+      fs.mkdirSync(this.basePath, { recursive: true });
+    }
+  } catch (error) {
+    console.warn('Cannot create uploads directory:', error.message);
+    this.basePath = '/tmp/uploads';
+    try {
+      if (!fs.existsSync(this.basePath)) {
+        fs.mkdirSync(this.basePath, { recursive: true });
+      }
+    } catch (err) {
+      console.error('Cannot create /tmp/uploads:', err.message);
+    }
   }
-} catch (error) {
-  console.warn('Cannot create uploads directory:', error.message);
-}
-    
+  
+  try {
     const htaccessPath = path.join(this.basePath, '.htaccess');
     if (!fs.existsSync(htaccessPath)) {
       const htaccessContent = `
@@ -36,8 +45,10 @@ Options -Indexes
       `.trim();
       fs.writeFileSync(htaccessPath, htaccessContent);
     }
+  } catch (error) {
+    console.warn('Cannot create .htaccess:', error.message);
   }
-
+}
   validateFile(file) {
     if (!file) {
       throw new Error('Файл не предоставлен');
