@@ -37,12 +37,7 @@ class MessageSender {
   }
 
   async sendVideo(videoUrl) {
-    if (this.platform === 'vk') {
-      return this.sendVkMessage(`📹 Видео: ${videoUrl}`);
-    } else if (this.platform === 'max') {
-      return this.sendMaxMessage(`📹 Видео: ${videoUrl}`);
-    }
-    throw new AppError(`Unknown platform: ${this.platform}`, 400, 'UNKNOWN_PLATFORM');
+    return this.sendText(`📹 Видео: ${videoUrl}`);
   }
 
   async sendVkMessage(text) {
@@ -118,7 +113,7 @@ class MessageSender {
   }
 
   async sendVkFile(fileUrl, filename) {
-    const fullUrl = fileUrl.startsWith('http') ? fileUrl : `https://${config.server.adminDomain}${fileUrl}`;
+    const fullUrl = fileUrl.startsWith('http') ? fileUrl : `http://${config.server.adminDomain}${fileUrl}`;
     return this.sendVkMessage(`📎 Файл: ${filename}\n${fullUrl}`);
   }
 
@@ -177,7 +172,7 @@ class MessageSender {
   }
 
   async sendMaxFile(fileUrl, filename) {
-    const fullUrl = fileUrl.startsWith('http') ? fileUrl : `https://${config.server.adminDomain}${fileUrl}`;
+    const fullUrl = fileUrl.startsWith('http') ? fileUrl : `http://${config.server.adminDomain}${fileUrl}`;
     
     try {
       const response = await axios.post(
