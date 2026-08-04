@@ -9,7 +9,6 @@ const database = require('./database');
 const logger = require('./logger');
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
 const { initializeMaxBot } = require('./platforms/max');
-const { errorHandler: domainErrorHandler } = require('./middleware/errorHandler');
 
 // Инициализация базы данных
 database.initDatabase();
@@ -54,7 +53,7 @@ app.use('/uploads', express.static(config.storage.localPath || './uploads'));
 const adminRouter = require('./admin/admin');
 app.use('/admin', adminRouter);
 
-// VK Webhook (оставлен без изменений для совместимости)
+// VK Webhook
 app.post('/webhook/vk', async (req, res) => {
   try {
     const { type, object } = req.body;
@@ -67,7 +66,6 @@ app.post('/webhook/vk', async (req, res) => {
       const message = object.message;
       const dispatcher = require('./core/dispatcher');
       
-      // Асинхронная обработка
       setImmediate(() => {
         dispatcher.handleMessage({
           platform: 'vk',
@@ -92,7 +90,6 @@ app.post('/webhook/vk', async (req, res) => {
 app.post('/webhook/max', async (req, res) => {
   const webhookSecret = config.max.webhookSecret;
   
-  // 1. Проверка секрета
   if (webhookSecret) {
     const receivedSecret = req.headers['x-max-bot-api-secret'];
     if (!receivedSecret || receivedSecret !== webhookSecret) {
@@ -101,13 +98,11 @@ app.post('/webhook/max', async (req, res) => {
     }
   }
 
-  // 2. Немедленный ответ 200 OK
   res.status(200).send('ok');
 
-  // 3. Асинхронная обработка события
   setImmediate(async () => {
     try {
-      const { event } = req.body; // Событие внутри поля "event"
+      const { event } = req.body;
       if (!event) {
         logger.warn({ body: req.body }, 'MAX webhook: event is missing');
         return;
@@ -139,7 +134,6 @@ app.post('/webhook/max', async (req, res) => {
           const callback = payload.callback;
           const { button, user, message } = callback;
           if (button && button.payload) {
-            // payload может быть строкой JSON или объектом
             let parsedPayload;
             try {
               parsedPayload = typeof button.payload === 'string' 
@@ -152,7 +146,7 @@ app.post('/webhook/max', async (req, res) => {
             await dispatcher.handleMessage({
               platform: 'max',
               userId: user.id,
-              message: '', // Callback не содержит текста
+              message: '',
               payload: parsedPayload,
               firstName: user.first_name || '',
               lastName: user.last_name || '',
@@ -164,7 +158,6 @@ app.post('/webhook/max', async (req, res) => {
 
         case 'bot_started': {
           logger.info({ payload }, 'Bot started event');
-          // Инициализация для пользователя, если нужно
           const userService = require('./core/user');
           await userService.registerUser({
             platform: 'max',
@@ -179,7 +172,6 @@ app.post('/webhook/max', async (req, res) => {
         case 'bot_removed':
         case 'bot_stopped': {
           logger.info({ eventType: type, payload }, 'Bot removal event');
-          // Обработка удаления бота
           break;
         }
 
@@ -200,7 +192,7 @@ app.get('/health', (req, res) => {
 
 // Error handlers
 app.use(notFoundHandler);
-app.use(domainErrorHandler);
+app.use(errorHandler);
 
 // Инициализация бота при старте
 async function initializeBot() {
@@ -209,15 +201,15 @@ async function initializeBot() {
     logger.info('MAX bot initialized successfully');
   } catch (error) {
     logger.error({ err: error }, 'Failed to initialize MAX bot');
-    // Продолжаем запуск, но логируем ошибку
   }
 }
 
 // Start server
-const PORT = config.server.port;
-app.listen(PORT, async () => {
+const PORT = process.env.PORT || config.server.port || 8080; // <-- ПРИОРИТЕТ PORT
+app.listen(PORT, '0.0.0.0', async () => {  // <-- СЛУШАЕМ ВСЕ ИНТЕРФЕЙСЫ
   logger.info(`Server running on port ${PORT}`);
   logger.info(`Environment: ${config.server.nodeEnv}`);
+  logger.info(`Health check: http://0.0.0.0:${PORT}/health`);
   
   await initializeBot();
 });
