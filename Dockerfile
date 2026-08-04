@@ -1,35 +1,27 @@
 FROM node:22-alpine
 
-# Устанавливаем рабочую директорию
 WORKDIR /app
 
-# Создаём директории с правильными правами ДО копирования
-RUN mkdir -p /app/data /app/logs /app/uploads && \
-    chmod -R 777 /app/data /app/logs /app/uploads
+# Создаём пользователя с UID 2000 (как в логах)
+RUN addgroup -g 2000 appgroup && adduser -u 2000 -G appgroup -s /bin/sh -D appuser
 
-# Копируем package.json сначала (для кэширования)
+# Копируем package.json
 COPY package*.json ./
-
-# Устанавливаем зависимости
 RUN npm ci --only=production && npm cache clean --force
 
-# Копируем остальной код
+# Копируем код
 COPY . .
 
-# Даём права на всё приложение (временное решение для демонстрации)
-RUN chmod -R 777 /app
+# Создаём директории и даём права
+RUN mkdir -p /tmp/data /tmp/logs /tmp/uploads && \
+    chown -R appuser:appgroup /tmp/data /tmp/logs /tmp/uploads && \
+    chmod -R 777 /tmp/data /tmp/logs /tmp/uploads
 
-# Создаём непривилегированного пользователя
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
-
-# Меняем владельца на appuser
+# Меняем владельца всего приложения
 RUN chown -R appuser:appgroup /app
 
-# Переключаемся на пользователя appuser
+# Переключаемся на пользователя
 USER appuser
 
-# Экспортируем порт
 EXPOSE 8080
-
-# Запуск
 CMD ["npm", "start"]
