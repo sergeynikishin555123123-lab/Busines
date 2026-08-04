@@ -2,71 +2,67 @@ const fs = require('fs');
 const path = require('path');
 const config = require('../config');
 const logger = require('../logger');
+const MaxAPI = require('../platforms/max');
+
+// Временное хранилище для привязки загруженных файлов к чату/пользователю
+const uploadSessions = new Map();
 
 class StorageService {
-  constructor() {
-    this.storagePath = config.storage.localPath || './uploads';
-    this.ensureDirectoryExists();
-  }
-
-  ensureDirectoryExists() {
-    const dirs = [this.storagePath];
-    for (const dir of dirs) {
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-    }
-  }
-
-  async saveFile(buffer, originalFilename, subdir = '') {
-    const ext = path.extname(originalFilename);
-    const name = path.basename(originalFilename, ext);
-    const timestamp = Date.now();
-    const safeName = name.replace(/[^a-zA-Z0-9]/g, '_');
-    const filename = `${safeName}_${timestamp}${ext}`;
-    
-    let filePath = this.storagePath;
-    if (subdir) {
-      filePath = path.join(filePath, subdir);
-      if (!fs.existsSync(filePath)) {
-        fs.mkdirSync(filePath, { recursive: true });
-      }
+  static async uploadFile(fileBuffer, filename, chatId, fileType = 'document') {
+    // 1. Сохраняем файл локально
+    const uploadDir = config.storage.localPath;
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
     }
     
-    const fullPath = path.join(filePath, filename);
-    fs.writeFileSync(fullPath, buffer);
+    const uniqueFilename = `${Date.now()}-${filename}`;
+    const filePath = path.join(uploadDir, uniqueFilename);
+    fs.writeFileSync(filePath, fileBuffer);
     
-    const url = `/uploads/${subdir ? subdir + '/' : ''}${filename}`;
-    logger.info(`File saved: ${fullPath} -> ${url}`);
-    
-    return url;
-  }
-
-  async deleteFile(url) {
+    // 2. Загружаем в MAX через API
+    const maxApi = new MaxAPI();
     try {
-      // Извлекаем путь из URL
-      const relativePath = url.replace(/^\/uploads\//, '');
-      const fullPath = path.join(this.storagePath, relativePath);
+      const token = await maxApi.uploadFile(filePath, fileType);
       
-      if (fs.existsSync(fullPath)) {
-        fs.unlinkSync(fullPath);
-        logger.info(`File deleted: ${fullPath}`);
+      // Сохраняем связь токена с локальным файлом
+      if (!uploadSessions.has(chatId)) {
+        uploadSessions.set(chatId, new Map());
       }
+      uploadSessions.get(chatId).set(token, filePath);
+      
+      logger.info({ token, filename, chatId }, 'File uploaded and linked to chat');
+      return token;
     } catch (error) {
-      logger.warn(`Failed to delete file: ${url}`, error.message);
+      // Удаляем локальный файл в случае ошибки
+      fs.unlinkSync(filePath);
+      throw error;
     }
   }
 
-  async getFileStream(url) {
-    const relativePath = url.replace(/^\/uploads\//, '');
-    const fullPath = path.join(this.storagePath, relativePath);
-    
-    if (!fs.existsSync(fullPath)) {
-      return null;
+  static async getLocalFileByToken(chatId, token) {
+    if (uploadSessions.has(chatId)) {
+      const filePath = uploadSessions.get(chatId).get(token);
+      if (filePath && fs.existsSync(filePath)) {
+        return filePath;
+      }
     }
-    
-    return fs.createReadStream(fullPath);
+    return null;
+  }
+
+  static cleanupSession(chatId) {
+    if (uploadSessions.has(chatId)) {
+      for (const [token, filePath] of uploadSessions.get(chatId)) {
+        try {
+          if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+          }
+        } catch (error) {
+          logger.error({ err: error, filePath }, 'Error cleaning up uploaded file');
+        }
+      }
+      uploadSessions.delete(chatId);
+    }
   }
 }
 
-module.exports = new StorageService();
+module.exports = StorageService;
