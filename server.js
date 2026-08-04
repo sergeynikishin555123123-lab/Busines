@@ -61,16 +61,16 @@ async function startServer() {
     });
     app.use('/api/', limiter);
 
-    app.use(session({
-      secret: config.session.secret,
-      resave: false,
-      saveUninitialized: false,
-      cookie: {
-        secure: config.server.nodeEnv === 'production',
-        httpOnly: true,
-        maxAge: config.session.maxAge,
-      },
-    }));
+app.use(session({
+  secret: config.session.secret,
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: false,
+    httpOnly: true,
+    maxAge: config.session.maxAge,
+  },
+}));
 
     app.get('/health', (req, res) => {
       res.json({ 
