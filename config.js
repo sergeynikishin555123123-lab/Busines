@@ -16,7 +16,8 @@ module.exports = {
     },
     max: {
         token: process.env.MAX_BOT_TOKEN || '',
-        baseUrl: process.env.MAX_API_URL || 'https://platform-api2.max.ru',
+        // ВАЖНО: Используем правильный URL для MAX API
+        baseUrl: 'https://platform-api2.max.ru', // <-- ИСПРАВЛЕНО
         webhookPath: '/webhook/max',
         webhookSecret: process.env.MAX_WEBHOOK_SECRET || '',
     },
