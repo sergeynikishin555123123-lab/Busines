@@ -1,16 +1,14 @@
 const fs = require('fs');
 const path = require('path');
 
-// Используем /tmp для логов
 const LOG_DIR = process.env.LOG_DIR || '/tmp/logs';
 
 try {
   if (!fs.existsSync(LOG_DIR)) {
     fs.mkdirSync(LOG_DIR, { recursive: true });
-    console.log(`[LOGGER] Created: ${LOG_DIR}`);
   }
 } catch (error) {
-  console.warn(`[LOGGER] Cannot create ${LOG_DIR}, using console only`);
+  console.warn(`[LOGGER] Cannot create ${LOG_DIR}`);
 }
 
 function getTimestamp() {
@@ -24,25 +22,20 @@ function writeToFile(level, message, data) {
     const logLine = `[${getTimestamp()}] ${level.toUpperCase()}: ${message} ${data ? JSON.stringify(data) : ''}\n`;
     fs.appendFileSync(logFile, logLine);
   } catch (error) {
-    // Игнорируем
+    // игнорируем
   }
 }
 
 function log(level, message, data) {
-  const logMsg = `[${getTimestamp()}] ${level.toUpperCase()}: ${message}`;
+  const timestamp = getTimestamp();
+  const logMsg = `[${timestamp}] ${level.toUpperCase()}: ${message}`;
   const logData = data ? ' ' + JSON.stringify(data) : '';
   
-  if (level === 'ERROR') {
-    console.error(logMsg + logData);
-  } else if (level === 'WARN') {
-    console.warn(logMsg + logData);
-  } else {
-    console.log(logMsg + logData);
-  }
+  if (level === 'ERROR') console.error(logMsg + logData);
+  else if (level === 'WARN') console.warn(logMsg + logData);
+  else console.log(logMsg + logData);
   
-  if (level !== 'DEBUG') {
-    writeToFile(level, message, data);
-  }
+  if (level !== 'DEBUG') writeToFile(level, message, data);
 }
 
 const logger = {
