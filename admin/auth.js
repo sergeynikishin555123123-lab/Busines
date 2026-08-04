@@ -1,56 +1,63 @@
-const bcrypt = require('bcryptjs');
-const database = require('../database');
+// admin/auth.js
+const express = require('express');
+const router = express.Router();
+const AdminController = require('./controller');
 const logger = require('../logger');
+const rateLimit = require('express-rate-limit');
 
-function checkAuth(req, res, next) {
-  if (req.session && req.session.admin) {
-    return next();
+// Лимит для предотвращения брутфорса
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 минут
+  max: 5, // 5 попыток
+  message: 'Too many login attempts, please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+router.get('/login', (req, res) => {
+  if (req.session.adminId) {
+    return res.redirect('/admin/dashboard');
   }
-  res.redirect('/admin/login');
-}
+  res.render('login', { error: null, csrfToken: req.csrfToken?.() || '' });
+});
 
-async function login(req, res) {
+router.post('/login', loginLimiter, async (req, res) => {
   try {
     const { login, password } = req.body;
     
     if (!login || !password) {
-      return res.status(400).json({ success: false, error: 'Введите логин и пароль' });
+      return res.status(400).render('login', { error: 'Login and password are required' });
     }
 
-    const admins = database.readTable('admins');
-    const admin = admins.find(a => a.login === login);
-
+    const admin = await AdminController.authenticate(login, password);
+    
     if (!admin) {
-      return res.status(401).json({ success: false, error: 'Неверный логин или пароль' });
+      logger.warn({ login }, 'Failed login attempt');
+      return res.status(401).render('login', { error: 'Invalid login or password' });
     }
 
-    const isValid = await bcrypt.compare(password, admin.password_hash);
-    if (!isValid) {
-      return res.status(401).json({ success: false, error: 'Неверный логин или пароль' });
-    }
+    // Обновляем сессию
+    req.session.adminId = admin.id;
+    req.session.adminLogin = admin.login;
+    req.session.adminRole = admin.role;
+    // Обновление времени сессии для безопасности
+    req.session.cookie.maxAge = 24 * 60 * 60 * 1000; // 24 часа
 
-    req.session.admin = {
-      id: admin.id,
-      login: admin.login,
-      role: admin.role,
-    };
-
-    logger.info(`Admin logged in: ${login}`);
-    res.json({ success: true });
+    logger.info({ login, role: admin.role }, 'Admin logged in successfully');
+    res.redirect('/admin/dashboard');
   } catch (error) {
-    logger.error('Login error:', error);
-    res.status(500).json({ success: false, error: 'Ошибка сервера' });
+    logger.error({ err: error }, 'Login error');
+    res.status(500).render('login', { error: 'Internal server error' });
   }
-}
+});
 
-function logout(req, res) {
-  req.session.destroy(() => {
+router.get('/logout', (req, res) => {
+  req.session.destroy((err) => {
+    if (err) {
+      logger.error({ err }, 'Logout error');
+    }
     res.redirect('/admin/login');
   });
-}
+});
 
-module.exports = {
-  checkAuth,
-  login,
-  logout,
-};
+module.exports = router;
