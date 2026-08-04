@@ -1,32 +1,33 @@
 {
-  "name": "learning-bot-platform",
-  "version": "1.0.0",
-  "description": "SaaS платформа обучающего бота для VK и MAX мессенджеров",
-  "main": "server.js",
-  "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js",
-    "migrate": "node migration.js"
-  },
-  "engines": {
-    "node": ">=22.0.0"
-  },
-  "dependencies": {
-    "express": "^4.21.0",
-    "express-session": "^1.18.0",
-    "ejs": "^3.1.10",
-    "dotenv": "^16.4.5",
-    "bcryptjs": "^2.4.3",
-    "multer": "^1.4.5-lts.1",
-    "axios": "^1.7.7",
-    "uuid": "^10.0.0",
-    "helmet": "^8.0.0",
-    "cors": "^2.8.5",
-    "express-rate-limit": "^7.4.0",
-    "joi": "^17.12.0",
-    "pino": "^8.15.0",
-    "pino-pretty": "^10.3.1",
-    "form-data": "^4.0.0"
-  },
-  "devDependencies": {}
+    "name": "learning-bot-platform",
+    "version": "1.0.0",
+    "description": "SaaS платформа обучающего бота для VK и MAX мессенджеров",
+    "main": "server.js",
+    "scripts": {
+        "start": "node server.js",
+        "dev": "node --watch server.js",
+        "migrate": "node migration.js",
+        "register-webhook": "node register-webhook.js"
+    },
+    "engines": {
+        "node": ">=22.0.0"
+    },
+    "dependencies": {
+        "express": "^4.21.0",
+        "express-session": "^1.18.0",
+        "ejs": "^3.1.10",
+        "dotenv": "^16.4.5",
+        "bcryptjs": "^2.4.3",
+        "multer": "^1.4.5-lts.1",
+        "axios": "^1.7.7",
+        "uuid": "^10.0.0",
+        "helmet": "^8.0.0",
+        "cors": "^2.8.5",
+        "express-rate-limit": "^7.4.0",
+        "joi": "^17.12.0",
+        "pino": "^8.15.0",
+        "pino-pretty": "^10.3.1",
+        "form-data": "^4.0.0"
+    },
+    "devDependencies": {}
 }
