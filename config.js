@@ -7,7 +7,8 @@ const config = {
   },
   
   database: {
-    url: process.env.DATABASE_URL || 'postgresql://user:password@localhost:5432/learning_bot',
+    url: process.env.DATABASE_URL || '',
+    type: process.env.DB_TYPE || 'json',
   },
   
   session: {
@@ -17,7 +18,7 @@ const config = {
   
   admin: {
     defaultLogin: process.env.DEFAULT_ADMIN_LOGIN || 'admin',
-    defaultPassword: process.env.DEFAULT_ADMIN_PASSWORD || 'change_this_password',
+    defaultPassword: process.env.DEFAULT_ADMIN_PASSWORD || 'admin123',
   },
   
   vk: {
@@ -28,7 +29,7 @@ const config = {
   },
   
   max: {
-    botToken: process.env.MAX_BOT_TOKEN || 'f9LHodD0cOKnAh9tpU7Sm0qhVPIwJ_hDGExKRx6xXzUXiVRclY2HwISyr78eyx-e-2sR4YEtscn7Df488bBM',
+    botToken: process.env.MAX_BOT_TOKEN || '',
     apiUrl: process.env.MAX_API_URL || 'https://api.max.ru',
   },
   
@@ -56,13 +57,6 @@ const config = {
       'audio/mpeg', 'audio/wav', 'audio/ogg',
       'text/plain', 'text/csv', 'application/json', 'application/xml', 'application/zip', 'application/x-rar-compressed',
     ],
-    s3: {
-      endpoint: process.env.S3_ENDPOINT || '',
-      accessKey: process.env.S3_ACCESS_KEY || '',
-      secretKey: process.env.S3_SECRET_KEY || '',
-      bucket: process.env.S3_BUCKET || '',
-      region: process.env.S3_REGION || 'ru-1',
-    },
   },
   
   payment: {
