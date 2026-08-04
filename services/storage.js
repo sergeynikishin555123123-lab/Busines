@@ -15,9 +15,13 @@ class StorageService {
   }
 
   ensureBasePath() {
-    if (!fs.existsSync(this.basePath)) {
-      fs.mkdirSync(this.basePath, { recursive: true });
-    }
+try {
+  if (!fs.existsSync(this.basePath)) {
+    fs.mkdirSync(this.basePath, { recursive: true });
+  }
+} catch (error) {
+  console.warn('Cannot create uploads directory:', error.message);
+}
     
     const htaccessPath = path.join(this.basePath, '.htaccess');
     if (!fs.existsSync(htaccessPath)) {
