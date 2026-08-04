@@ -2,76 +2,100 @@ const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 
-let DATA_DIR = path.join(__dirname, 'data');
+let DATA_DIR = null;
 
-const TABLES = {
-  users: [],
-  admins: [],
-  bot_settings: [
-    { key: 'bot_name', value: 'Обучающий бот' },
-    { key: 'support_contact', value: '@support' },
-    { key: 'main_menu_text', value: 'Добро пожаловать! Выберите раздел:' },
-    { key: 'free_lessons_button', value: '📚 Бесплатные уроки' },
-    { key: 'full_course_button', value: '🎓 Полный курс' },
-    { key: 'progress_button', value: '📊 Мой прогресс' },
-    { key: 'support_button', value: '💬 Поддержка' },
-    { key: 'watched_button', value: '✅ Я просмотрел' },
-    { key: 'complete_course_offer', value: 'Поздравляем! Вы прошли все бесплатные уроки. Хотите открыть полный курс?' },
-    { key: 'wrong_answer_text', value: '❌ Неправильный ответ. Попробуйте еще раз.' },
-    { key: 'correct_answer_text', value: '✅ Правильно! Урок завершен.' },
-  ],
-  courses: [],
-  lessons: [],
-  lesson_files: [],
-  tests: [],
-  test_answers: [],
-  progress: [],
-  lesson_views: [],
-  user_course_access: [],
-  payments: [],
-  notifications: [],
-};
-
-function initDatabase() {
-  try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-  } catch (error) {
-    console.warn('Cannot create data directory, using /tmp/data:', error.message);
-    DATA_DIR = '/tmp/data';
+function getDataDir() {
+  if (DATA_DIR) return DATA_DIR;
+  
+  const possibleDirs = [
+    path.join(__dirname, 'data'),
+    '/app/data',
+    '/tmp/data',
+  ];
+  
+  for (const dir of possibleDirs) {
     try {
-      if (!fs.existsSync(DATA_DIR)) {
-        fs.mkdirSync(DATA_DIR, { recursive: true });
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
       }
-    } catch (err) {
-      console.error('Cannot create /tmp/data:', err.message);
+      // Проверяем возможность записи
+      const testFile = path.join(dir, '.test');
+      fs.writeFileSync(testFile, 'test');
+      fs.unlinkSync(testFile);
+      DATA_DIR = dir;
+      return DATA_DIR;
+    } catch (error) {
+      // Пробуем следующую директорию
     }
   }
+  
+  // Fallback
+  DATA_DIR = '/tmp/data';
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+  return DATA_DIR;
+}
 
-  for (const tableName of Object.keys(TABLES)) {
-    try {
-      const filePath = path.join(DATA_DIR, `${tableName}.json`);
-      if (!fs.existsSync(filePath)) {
-        fs.writeFileSync(filePath, JSON.stringify(TABLES[tableName], null, 2));
-      }
-    } catch (error) {
-      console.error(`Cannot write ${tableName}.json:`, error.message);
+function getTablePath(tableName) {
+  return path.join(getDataDir(), `${tableName}.json`);
+}
+
+function initDatabase() {
+  getDataDir();
+  
+  const tables = {
+    users: [],
+    admins: [],
+    bot_settings: [
+      { key: 'bot_name', value: 'Обучающий бот' },
+      { key: 'support_contact', value: '@support' },
+      { key: 'main_menu_text', value: 'Добро пожаловать! Выберите раздел:' },
+      { key: 'free_lessons_button', value: '📚 Бесплатные уроки' },
+      { key: 'full_course_button', value: '🎓 Полный курс' },
+      { key: 'progress_button', value: '📊 Мой прогресс' },
+      { key: 'support_button', value: '💬 Поддержка' },
+      { key: 'watched_button', value: '✅ Я просмотрел' },
+      { key: 'complete_course_offer', value: 'Поздравляем! Вы прошли все бесплатные уроки. Хотите открыть полный курс?' },
+      { key: 'wrong_answer_text', value: '❌ Неправильный ответ. Попробуйте еще раз.' },
+      { key: 'correct_answer_text', value: '✅ Правильно! Урок завершен.' },
+    ],
+    courses: [],
+    lessons: [],
+    lesson_files: [],
+    tests: [],
+    test_answers: [],
+    progress: [],
+    lesson_views: [],
+    user_course_access: [],
+    payments: [],
+    notifications: [],
+  };
+
+  for (const [tableName, defaultValue] of Object.entries(tables)) {
+    const filePath = getTablePath(tableName);
+    if (!fs.existsSync(filePath)) {
+      fs.writeFileSync(filePath, JSON.stringify(defaultValue, null, 2));
     }
   }
 }
 
 function readTable(tableName) {
-  const filePath = path.join(DATA_DIR, `${tableName}.json`);
+  const filePath = getTablePath(tableName);
   if (!fs.existsSync(filePath)) {
     return [];
   }
-  const data = fs.readFileSync(filePath, 'utf-8');
-  return JSON.parse(data);
+  try {
+    const data = fs.readFileSync(filePath, 'utf-8');
+    return JSON.parse(data);
+  } catch (error) {
+    console.error(`Error reading table ${tableName}:`, error.message);
+    return [];
+  }
 }
 
 function writeTable(tableName, data) {
-  const filePath = path.join(DATA_DIR, `${tableName}.json`);
+  const filePath = getTablePath(tableName);
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
 }
 
