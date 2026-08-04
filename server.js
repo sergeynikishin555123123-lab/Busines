@@ -7,7 +7,6 @@ const path = require('path');
 const config = require('./config');
 const database = require('./database');
 const logger = require('./logger');
-const storageService = require('./services/storage');
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
 const adminRouter = require('./admin/admin');
 const migrate = require('./migration');
@@ -33,7 +32,7 @@ async function startServer() {
     
     app.use(cors());
     
-    app.use('/uploads', express.static(config.storage.localPath, {
+    app.use('/uploads', express.static('/tmp/uploads', {
       setHeaders: (res, filePath) => {
         if (filePath.match(/\.(php|phtml|php3|php4|php5|php7|phps|cgi|pl|py|jsp|asp|aspx|shtml|shtm|exe|dll|bat|cmd|sh)$/i)) {
           res.setHeader('Content-Type', 'text/plain');
@@ -67,6 +66,7 @@ async function startServer() {
       },
     }));
 
+    // Health check
     app.get('/health', (req, res) => {
       res.json({ 
         status: 'ok', 
@@ -75,13 +75,22 @@ async function startServer() {
       });
     });
 
-    app.post('/webhook/vk', require('./platforms/vk').webhookHandler);
-    app.post('/webhook/max', require('./platforms/max').webhookHandler);
+    // Webhook VK
+    app.post('/webhook/vk', (req, res) => {
+      require('./platforms/vk').webhookHandler(req, res);
+    });
 
+    // Webhook MAX
+    app.post('/webhook/max', (req, res) => {
+      require('./platforms/max').webhookHandler(req, res);
+    });
+
+    // Админка
     app.use('/admin', adminRouter);
     app.set('view engine', 'ejs');
     app.set('views', path.join(__dirname, 'admin', 'views'));
 
+    // Обработка ошибок
     app.use(notFoundHandler);
     app.use(errorHandler);
 
@@ -89,17 +98,16 @@ async function startServer() {
       logger.info(`Server started on port ${config.server.port}`);
       logger.info(`Environment: ${config.server.nodeEnv}`);
       logger.info(`Admin panel: http://localhost:${config.server.port}/admin`);
+      logger.info(`VK Webhook: http://localhost:${config.server.port}/webhook/vk`);
+      logger.info(`MAX Webhook: http://localhost:${config.server.port}/webhook/max`);
     });
 
     const shutdown = async (signal) => {
       logger.info(`Received ${signal}. Starting graceful shutdown...`);
-      
-      server.close(async () => {
-        logger.info('HTTP server closed');
+      server.close(() => {
         logger.info('Shutdown complete');
         process.exit(0);
       });
-
       setTimeout(() => {
         logger.error('Forced shutdown after timeout');
         process.exit(1);
@@ -108,15 +116,6 @@ async function startServer() {
 
     process.on('SIGTERM', () => shutdown('SIGTERM'));
     process.on('SIGINT', () => shutdown('SIGINT'));
-
-    process.on('unhandledRejection', (reason, promise) => {
-      logger.error('Unhandled Rejection:', reason);
-    });
-
-    process.on('uncaughtException', (error) => {
-      logger.error('Uncaught Exception:', error);
-      shutdown('UNCAUGHT_EXCEPTION');
-    });
 
   } catch (error) {
     logger.error('Failed to start server:', error);
