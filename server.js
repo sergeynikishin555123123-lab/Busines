@@ -339,7 +339,7 @@ async function handleBotStarted(update) {
     
     try {
         const chatId = update.chat_id;
-        const userId = update.user?.user_id;
+        const userId = update.user?.user_id || update.user?.id;
         const payload = update.payload || '';
 
         console.log(`[HANDLER] Bot started: chatId=${chatId}, userId=${userId}, payload=${payload}`);
@@ -361,7 +361,7 @@ async function handleBotStarted(update) {
                 ],
                 parseMode: 'markdown',
             });
-            console.log('[HANDLER] Keyboard sent successfully:', JSON.stringify(result, null, 2));
+            console.log('[HANDLER] Keyboard sent successfully');
             logger.info(`Welcome message sent to ${chatId}`);
         } catch (error) {
             console.error('[HANDLER] Error sending keyboard:', error);
@@ -387,16 +387,19 @@ async function handleMessageCreated(update) {
     
     try {
         const chatId = update.chat_id;
+        // ПРАВИЛЬНОЕ извлечение текста из message.body
         const message = update.message;
-        const text = message?.text || '';
-        const userId = update.user?.user_id;
+        const text = message?.body?.text || message?.text || '';  // <-- ИСПРАВЛЕНО
+        const userId = update.message?.sender?.user_id || update.user?.user_id;
+
+        console.log(`[HANDLER] Extracted text: "${text}"`);
+        console.log(`[HANDLER] chatId: ${chatId}, userId: ${userId}`);
 
         if (!text) {
             console.log('[HANDLER] Empty message, ignoring');
             return;
         }
 
-        console.log(`[HANDLER] Message received: chatId=${chatId}, userId=${userId}, text=${text.substring(0, 50)}`);
         logger.info({ chatId, userId, text: text.substring(0, 50) }, 'Message received');
 
         const maxApi = new MaxAPI();
@@ -422,7 +425,6 @@ async function handleMessageCreated(update) {
         logger.error({ err: error, update }, 'Error handling message_created');
     }
 }
-
 async function handleMessageCallback(update) {
     console.log('[HANDLER] handleMessageCallback called');
     console.log('[HANDLER] Update:', JSON.stringify(update, null, 2));
