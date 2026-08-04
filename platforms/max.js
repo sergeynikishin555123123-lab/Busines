@@ -7,6 +7,10 @@ const { RateLimiter } = require('../core/queue');
 
 class MaxAPI {
     constructor() {
+        console.log('[MAX] Initializing API client...');
+        console.log(`[MAX] Base URL: ${config.max.baseUrl}`);
+        console.log(`[MAX] Token: ${config.max.token ? '✅ Set' : '❌ Not set'}`);
+        
         this.client = axios.create({
             baseURL: config.max.baseUrl,
             timeout: 30000,
@@ -19,14 +23,30 @@ class MaxAPI {
         this.messageQueues = new Map();
         this.rateLimiter = new RateLimiter(config.rateLimit.messagesPerChatPerSecond, 1000);
 
-        this.client.interceptors.response.use(
-            (response) => response,
+        // Добавляем логирование запросов
+        this.client.interceptors.request.use(
+            (config) => {
+                console.log(`[MAX] Request: ${config.method.toUpperCase()} ${config.baseURL}${config.url}`);
+                return config;
+            },
             (error) => {
-                logger.error({ 
-                    err: error, 
-                    config: error.config, 
-                    response: error.response?.data 
-                }, 'MAX API request failed');
+                console.error('[MAX] Request error:', error);
+                return Promise.reject(error);
+            }
+        );
+
+        this.client.interceptors.response.use(
+            (response) => {
+                console.log(`[MAX] Response: ${response.status} ${response.config.url}`);
+                return response;
+            },
+            (error) => {
+                if (error.response) {
+                    console.error(`[MAX] Response error: ${error.response.status} ${error.config.url}`);
+                    console.error('[MAX] Response data:', error.response.data);
+                } else {
+                    console.error('[MAX] Network error:', error.message);
+                }
                 return Promise.reject(error);
             }
         );
@@ -160,60 +180,90 @@ class MaxAPI {
 
     async registerWebhook(webhookUrl, secret = '') {
         try {
-            const response = await this.client.post('/subscriptions', {
+            console.log(`[MAX] Registering webhook at ${webhookUrl}`);
+            const payload = {
                 url: webhookUrl,
-                secret: secret || config.max.webhookSecret,
                 update_types: ['message_created', 'bot_started', 'message_callback', 'bot_added', 'bot_removed'],
-            });
-            logger.info({ webhookUrl }, 'Webhook registered successfully');
+            };
+            
+            if (secret) {
+                payload.secret = secret;
+            }
+            
+            const response = await this.client.post('/subscriptions', payload);
+            console.log('[MAX] Webhook registered successfully');
             return response.data;
         } catch (error) {
-            logger.error({ err: error, webhookUrl }, 'Failed to register webhook');
+            console.error('[MAX] Failed to register webhook:', error.message);
+            if (error.response) {
+                console.error('[MAX] Status:', error.response.status);
+                console.error('[MAX] Data:', error.response.data);
+            }
             throw error;
         }
     }
 
     async getWebhookInfo() {
         try {
+            console.log('[MAX] Getting webhook info...');
             const response = await this.client.get('/subscriptions');
-            logger.info({ subscriptions: response.data }, 'Webhook info retrieved');
+            console.log('[MAX] Webhook info retrieved');
             return response.data;
         } catch (error) {
-            logger.error({ err: error }, 'Failed to get webhook info');
+            console.error('[MAX] Failed to get webhook info:', error.message);
+            if (error.response) {
+                console.error('[MAX] Status:', error.response.status);
+                console.error('[MAX] Data:', error.response.data);
+            }
             throw error;
         }
     }
 
     async deleteWebhook() {
         try {
+            console.log('[MAX] Deleting webhook...');
             const response = await this.client.delete('/subscriptions');
-            logger.info('Webhook deleted successfully');
+            console.log('[MAX] Webhook deleted successfully');
             return response.data;
         } catch (error) {
-            logger.error({ err: error }, 'Failed to delete webhook');
+            console.error('[MAX] Failed to delete webhook:', error.message);
+            if (error.response) {
+                console.error('[MAX] Status:', error.response.status);
+                console.error('[MAX] Data:', error.response.data);
+            }
             throw error;
         }
     }
 
     async registerCommands(commands) {
         try {
+            console.log('[MAX] Registering commands...');
             const response = await this.client.patch('/me/commands', {
                 commands: commands,
             });
-            logger.info({ commands }, 'Commands registered successfully');
+            console.log('[MAX] Commands registered');
             return response.data;
         } catch (error) {
-            logger.error({ err: error, commands }, 'Failed to register commands');
+            console.error('[MAX] Failed to register commands:', error.message);
+            if (error.response) {
+                console.error('[MAX] Status:', error.response.status);
+                console.error('[MAX] Data:', error.response.data);
+            }
             throw error;
         }
     }
 
     async getMe() {
         try {
+            console.log('[MAX] Getting bot info...');
             const response = await this.client.get('/me');
             return response.data;
         } catch (error) {
-            logger.error({ err: error }, 'Failed to get bot info');
+            console.error('[MAX] Failed to get bot info:', error.message);
+            if (error.response) {
+                console.error('[MAX] Status:', error.response.status);
+                console.error('[MAX] Data:', error.response.data);
+            }
             throw error;
         }
     }
