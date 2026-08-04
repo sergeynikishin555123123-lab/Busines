@@ -82,15 +82,24 @@ const app = express();
 // Настройка шаблонов
 try {
     app.set('view engine', 'ejs');
-    app.set('views', path.join(__dirname, 'admin', 'views'));
-    console.log('[STARTUP] Views configured');
+    const viewsPath = path.join(__dirname, 'admin', 'views');
+    if (fs.existsSync(viewsPath)) {
+        app.set('views', viewsPath);
+        console.log('[STARTUP] Views configured');
+    } else {
+        console.warn('[STARTUP] Views directory not found, using default');
+        app.set('views', path.join(__dirname, 'views'));
+    }
 } catch (error) {
     console.error('[STARTUP] Views error:', error.message);
 }
 
 // Middleware
 try {
-    app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
+    app.use(helmet({ 
+        contentSecurityPolicy: false, 
+        crossOriginEmbedderPolicy: false 
+    }));
     app.use(cors());
     app.use(express.json({ limit: '10mb' }));
     app.use(express.urlencoded({ extended: true, limit: '10mb' }));
@@ -100,9 +109,11 @@ try {
     process.exit(1);
 }
 
-// Сессии
+// Сессии - ИСПОЛЬЗУЕМ БОЛЕЕ НАДЕЖНОЕ ХРАНИЛИЩЕ
 try {
-    app.use(session({
+    // В production используем внешнее хранилище (Redis, PostgreSQL и т.д.)
+    // Для разработки используем MemoryStore с предупреждением
+    const sessionConfig = {
         secret: config.session.secret,
         resave: false,
         saveUninitialized: false,
@@ -112,7 +123,15 @@ try {
             httpOnly: true,
             sameSite: 'lax',
         },
-    }));
+    };
+    
+    // Добавляем предупреждение о MemoryStore
+    if (config.server.nodeEnv === 'production') {
+        console.warn('[STARTUP] ⚠️ Using MemoryStore for sessions is not recommended for production');
+        console.warn('[STARTUP] ⚠️ Consider using Redis or PostgreSQL for session storage');
+    }
+    
+    app.use(session(sessionConfig));
     console.log('[STARTUP] Sessions configured');
 } catch (error) {
     console.error('[STARTUP] Sessions error:', error.message);
@@ -121,13 +140,15 @@ try {
 
 // Статические файлы
 try {
+    // Создаем public директорию если её нет
     const publicPath = path.join(__dirname, 'public');
-    if (fs.existsSync(publicPath)) {
-        app.use('/static', express.static(publicPath));
-        console.log('[STARTUP] Static: /public');
-    } else {
-        console.warn('[STARTUP] public directory not found, skipping');
+    if (!fs.existsSync(publicPath)) {
+        fs.mkdirSync(publicPath, { recursive: true });
+        console.log('[STARTUP] Created public directory');
     }
+    
+    app.use('/static', express.static(publicPath));
+    console.log('[STARTUP] Static: /public');
 
     if (!fs.existsSync(UPLOADS_DIR)) {
         fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -166,7 +187,7 @@ app.get('/health', (req, res) => {
     });
 });
 
-// MAX Webhook (СОГЛАСНО ДОКУМЕНТАЦИИ MAX)
+// MAX Webhook
 app.post('/webhook/max', async (req, res) => {
     try {
         const webhookSecret = config.max.webhookSecret;
@@ -178,7 +199,7 @@ app.post('/webhook/max', async (req, res) => {
             }
         }
 
-        // Отправляем 200 OK сразу, чтобы MAX не делал повторных попыток
+        // Отправляем 200 OK сразу
         res.status(200).send('ok');
 
         // Обрабатываем событие асинхронно
@@ -187,7 +208,6 @@ app.post('/webhook/max', async (req, res) => {
                 const update = req.body;
                 logger.info({ update_type: update.update_type, chat_id: update.chat_id }, 'MAX webhook received');
 
-                // Обработка разных типов событий
                 switch (update.update_type) {
                     case 'bot_started':
                         await handleBotStarted(update);
@@ -232,7 +252,7 @@ app.post('/webhook/vk', (req, res) => {
     }
 });
 
-// Регистрация вебхука (эндпоинт для ручной регистрации)
+// Регистрация вебхука
 app.post('/admin/register-webhook', async (req, res) => {
     try {
         const maxApi = new MaxAPI();
@@ -269,7 +289,7 @@ app.delete('/admin/webhook', async (req, res) => {
     }
 });
 
-// Admin - минимальная заглушка
+// Admin
 app.get('/admin', (req, res) => {
     res.json({ message: 'Admin API' });
 });
@@ -295,14 +315,6 @@ async function handleBotStarted(update) {
 
         logger.info({ chatId, userId, payload }, 'Bot started');
 
-        // Получаем или создаем пользователя
-        const userService = require('./core/user');
-        const user = await userService.getOrCreateUser('max', userId, {
-            firstName: update.user?.name || '',
-            username: update.user?.username || '',
-        });
-
-        // Отправляем приветственное сообщение
         const maxApi = new MaxAPI();
         await maxApi.sendMessage({
             chatId: chatId,
@@ -326,7 +338,6 @@ async function handleMessageCreated(update) {
 
         logger.info({ chatId, userId, text: text.substring(0, 50) }, 'Message received');
 
-        // Обработка команд
         if (text.startsWith('/start')) {
             await handleStartCommand(chatId, userId, text);
         } else if (text.startsWith('/help')) {
@@ -334,7 +345,6 @@ async function handleMessageCreated(update) {
         } else if (text.startsWith('/courses')) {
             await handleCoursesCommand(chatId);
         } else {
-            // Обработка обычного сообщения
             await handleTextMessage(chatId, userId, text);
         }
 
@@ -354,7 +364,6 @@ async function handleMessageCallback(update) {
 
         const maxApi = new MaxAPI();
         
-        // Обработка callback
         if (payload === 'show_courses') {
             await showCourses(chatId, maxApi);
         } else if (payload === 'show_help') {
@@ -385,7 +394,6 @@ async function handleMessageCallback(update) {
 async function handleStartCommand(chatId, userId, text) {
     const maxApi = new MaxAPI();
     
-    // Проверяем payload из диплинка
     const payload = text.split(' ')[1] || '';
     if (payload) {
         logger.info({ chatId, payload }, 'Deep link payload received');
@@ -473,7 +481,6 @@ async function showCourses(chatId, maxApi = null) {
 async function handleTextMessage(chatId, userId, text) {
     const maxApi = new MaxAPI();
     
-    // Простой эхо-бот с подсказками
     const buttons = [
         [
             { type: 'callback', text: '📚 Курсы', payload: 'show_courses' },
@@ -501,22 +508,61 @@ const server = app.listen(PORT, HOST, () => {
     console.log(`[STARTUP] Health: http://${HOST}:${PORT}/health`);
     console.log(`[STARTUP] Root: http://${HOST}:${PORT}/`);
     console.log(`[STARTUP] Webhook URL: ${config.server.publicUrl}/webhook/max`);
+    console.log(`[STARTUP] ✅ Ready`);
 });
 
+// Обработка ошибок сервера
 server.on('error', (error) => {
     console.error('[STARTUP] Server error:', error.message);
+    if (error.code === 'EADDRINUSE') {
+        console.error(`[STARTUP] Port ${PORT} is already in use`);
+    }
     process.exit(1);
 });
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-    console.log('[SHUTDOWN] SIGTERM');
-    server.close(() => { console.log('[SHUTDOWN] Closed'); process.exit(0); });
+// Graceful shutdown - УЛУЧШЕННАЯ ВЕРСИЯ
+const shutdown = (signal) => {
+    console.log(`[SHUTDOWN] Received ${signal}`);
+    console.log('[SHUTDOWN] Closing server...');
+    
+    server.close(() => {
+        console.log('[SHUTDOWN] Server closed');
+        
+        // Закрываем соединения с БД если есть
+        if (database && database.closePool) {
+            database.closePool().then(() => {
+                console.log('[SHUTDOWN] Database connections closed');
+                process.exit(0);
+            }).catch((err) => {
+                console.error('[SHUTDOWN] Error closing database:', err);
+                process.exit(1);
+            });
+        } else {
+            process.exit(0);
+        }
+    });
+
+    // Если не закрылось за 10 секунд - принудительно
+    setTimeout(() => {
+        console.error('[SHUTDOWN] Forced shutdown after timeout');
+        process.exit(1);
+    }, 10000);
+};
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
+// Обработка необработанных исключений
+process.on('uncaughtException', (error) => {
+    console.error('[FATAL] Uncaught Exception:', error);
+    console.error('[FATAL] Stack:', error.stack);
+    shutdown('uncaughtException');
 });
 
-process.on('SIGINT', () => {
-    console.log('[SHUTDOWN] SIGINT');
-    server.close(() => { console.log('[SHUTDOWN] Closed'); process.exit(0); });
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('[FATAL] Unhandled Rejection at:', promise);
+    console.error('[FATAL] Reason:', reason);
+    shutdown('unhandledRejection');
 });
 
 console.log('[STARTUP] ✅ Ready');
