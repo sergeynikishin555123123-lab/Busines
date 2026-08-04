@@ -4,6 +4,7 @@ const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const session = require('express-session');
 const path = require('path');
+const fs = require('fs');
 const config = require('./config');
 const database = require('./database');
 const logger = require('./logger');
@@ -13,6 +14,11 @@ const migrate = require('./migration');
 
 async function startServer() {
   try {
+    // Создаём папки
+    ['/tmp/data', '/tmp/uploads', '/tmp/logs'].forEach(dir => {
+      try { fs.mkdirSync(dir, { recursive: true }); } catch (e) {}
+    });
+
     database.initDatabase();
     await migrate();
     
@@ -66,7 +72,6 @@ async function startServer() {
       },
     }));
 
-    // Health check
     app.get('/health', (req, res) => {
       res.json({ 
         status: 'ok', 
@@ -75,22 +80,18 @@ async function startServer() {
       });
     });
 
-    // Webhook VK
     app.post('/webhook/vk', (req, res) => {
       require('./platforms/vk').webhookHandler(req, res);
     });
 
-    // Webhook MAX
     app.post('/webhook/max', (req, res) => {
       require('./platforms/max').webhookHandler(req, res);
     });
 
-    // Админка
     app.use('/admin', adminRouter);
     app.set('view engine', 'ejs');
     app.set('views', path.join(__dirname, 'admin', 'views'));
 
-    // Обработка ошибок
     app.use(notFoundHandler);
     app.use(errorHandler);
 
