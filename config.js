@@ -20,7 +20,8 @@ module.exports = {
 
     max: {
         token: process.env.MAX_BOT_TOKEN || '',
-        baseUrl: process.env.MAX_API_URL || 'https://platform-api2.max.ru',
+        // ПРАВИЛЬНЫЙ URL
+        baseUrl: 'https://platform-api2.max.ru',
         webhookPath: '/webhook/max',
         webhookSecret: process.env.MAX_WEBHOOK_SECRET || '',
     },
