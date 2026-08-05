@@ -83,6 +83,8 @@ const upload = multer({
 // СОЗДАНИЕ УРОКА
 // ============================================================
 
+// admin/admin.js - исправленный обработчик создания урока
+
 router.post('/lessons/create', upload.fields([
     { name: 'videoFile', maxCount: 1 },
     { name: 'lessonFile', maxCount: 1 }
@@ -109,40 +111,90 @@ router.post('/lessons/create', upload.fields([
 
         console.log(`[ADMIN] Lesson created: ${lesson.id}`);
 
-        // 2. Сохраняем видео
+        // Инициализируем MAX API для загрузки
+        const MaxAPI = require('../platforms/max');
+        const maxApi = new MaxAPI();
+
+        // 2. Сохраняем видео - загружаем в MAX
         if (req.files && req.files.videoFile && req.files.videoFile[0]) {
             const file = req.files.videoFile[0];
-            console.log(`[ADMIN] Saving video: ${file.originalname} (${file.size} bytes)`);
+            console.log(`[ADMIN] Uploading video to MAX: ${file.originalname} (${file.size} bytes)`);
             
-            const fileData = {
-                filename: file.filename,
-                originalname: file.originalname,
-                size: file.size,
-                mimetype: file.mimetype,
-                path: file.path,
-                url: `/uploads/videos/${file.filename}`,
-            };
-            
-            const saved = await lessonService.addLessonFile(lesson.id, fileData);
-            console.log(`[ADMIN] Video saved: ${saved.id}`);
+            try {
+                const token = await maxApi.uploadFile(file.path, 'video');
+                
+                const fileData = {
+                    filename: file.filename,
+                    originalname: file.originalname,
+                    size: file.size,
+                    mimetype: file.mimetype,
+                    path: token,
+                    url: null,
+                    token: token,
+                    is_max_uploaded: true,
+                    type: 'video',
+                };
+
+                await lessonService.addLessonFile(lesson.id, fileData);
+                console.log(`[ADMIN] ✅ Video uploaded to MAX: ${token.substring(0, 20)}...`);
+                
+            } catch (error) {
+                console.error('[ADMIN] Failed to upload video to MAX:', error.message);
+                // Если не удалось загрузить в MAX - сохраняем локально
+                const fileData = {
+                    filename: file.filename,
+                    originalname: file.originalname,
+                    size: file.size,
+                    mimetype: file.mimetype,
+                    path: file.path,
+                    url: `/uploads/videos/${file.filename}`,
+                    token: null,
+                    is_max_uploaded: false,
+                    type: 'video',
+                };
+                await lessonService.addLessonFile(lesson.id, fileData);
+            }
         }
 
-        // 3. Сохраняем файл
+        // 3. Сохраняем файл - загружаем в MAX
         if (req.files && req.files.lessonFile && req.files.lessonFile[0]) {
             const file = req.files.lessonFile[0];
-            console.log(`[ADMIN] Saving file: ${file.originalname} (${file.size} bytes)`);
+            console.log(`[ADMIN] Uploading file to MAX: ${file.originalname} (${file.size} bytes)`);
             
-            const fileData = {
-                filename: file.filename,
-                originalname: file.originalname,
-                size: file.size,
-                mimetype: file.mimetype,
-                path: file.path,
-                url: `/uploads/files/${file.filename}`,
-            };
-            
-            const saved = await lessonService.addLessonFile(lesson.id, fileData);
-            console.log(`[ADMIN] File saved: ${saved.id}`);
+            try {
+                const token = await maxApi.uploadFile(file.path, 'file');
+                
+                const fileData = {
+                    filename: file.filename,
+                    originalname: file.originalname,
+                    size: file.size,
+                    mimetype: file.mimetype,
+                    path: token,
+                    url: null,
+                    token: token,
+                    is_max_uploaded: true,
+                    type: 'file',
+                };
+
+                await lessonService.addLessonFile(lesson.id, fileData);
+                console.log(`[ADMIN] ✅ File uploaded to MAX: ${token.substring(0, 20)}...`);
+                
+            } catch (error) {
+                console.error('[ADMIN] Failed to upload file to MAX:', error.message);
+                // Если не удалось загрузить в MAX - сохраняем локально
+                const fileData = {
+                    filename: file.filename,
+                    originalname: file.originalname,
+                    size: file.size,
+                    mimetype: file.mimetype,
+                    path: file.path,
+                    url: `/uploads/files/${file.filename}`,
+                    token: null,
+                    is_max_uploaded: false,
+                    type: 'file',
+                };
+                await lessonService.addLessonFile(lesson.id, fileData);
+            }
         }
 
         console.log(`[ADMIN] Lesson created successfully: ${lesson.id}`);
@@ -150,6 +202,7 @@ router.post('/lessons/create', upload.fields([
 
     } catch (error) {
         console.error('[ADMIN] Create lesson error:', error);
+        logger.error({ err: error }, 'Create lesson error');
         res.redirect('/admin/lessons?error=' + encodeURIComponent(error.message));
     }
 });
