@@ -20,42 +20,173 @@ const paymentService = require('../core/payment');
 // МУЛЬТЕР ДЛЯ ЗАГРУЗКИ ФАЙЛОВ
 // ============================================================
 
+// admin/admin.js - ИСПРАВЛЕННАЯ ОБРАБОТКА ЗАГРУЗКИ ФАЙЛОВ
+
 const UPLOADS_DIR = process.env.UPLOADS_DIR || '/tmp/uploads';
 
+// Настройка multer для загрузки файлов
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        const dir = path.join(UPLOADS_DIR, 'admin');
+        // Определяем папку в зависимости от типа файла
+        let subDir = 'files';
+        if (file.mimetype && file.mimetype.startsWith('video/')) {
+            subDir = 'videos';
+        } else if (file.mimetype && file.mimetype.startsWith('image/')) {
+            subDir = 'images';
+        }
+        
+        const dir = path.join(UPLOADS_DIR, subDir);
         if (!fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
         }
         cb(null, dir);
     },
     filename: (req, file, cb) => {
-        const unique = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        // Генерируем уникальное имя файла
+        const timestamp = Date.now();
+        const random = Math.round(Math.random() * 1E9);
         const ext = path.extname(file.originalname);
-        cb(null, unique + ext);
+        const name = path.basename(file.originalname, ext);
+        cb(null, `${name}-${timestamp}-${random}${ext}`);
     }
 });
 
 const upload = multer({
     storage: storage,
     limits: {
-        fileSize: 50 * 1024 * 1024, // 50MB
+        fileSize: 250 * 1024 * 1024, // 250MB для видео
     },
     fileFilter: (req, file, cb) => {
-        const allowed = [
-            'image/jpeg', 'image/png', 'image/gif', 'image/webp',
-            'video/mp4', 'video/webm', 'video/quicktime',
+        // Разрешенные типы файлов
+        const allowedTypes = [
+            // Видео
+            'video/mp4', 'video/webm', 'video/quicktime', 'video/x-msvideo',
+            // Документы
             'application/pdf', 'application/msword',
             'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.ms-excel',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             'application/zip', 'application/x-zip-compressed',
-            'text/plain', 'text/markdown'
+            'application/x-rar-compressed',
+            // Изображения
+            'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+            // Текст
+            'text/plain', 'text/markdown',
         ];
-        if (allowed.includes(file.mimetype)) {
+
+        if (allowedTypes.includes(file.mimetype)) {
             cb(null, true);
         } else {
-            cb(new Error('Неподдерживаемый тип файла'));
+            cb(new Error(`Неподдерживаемый тип файла: ${file.mimetype}`));
         }
+    }
+});
+
+// Создание урока с загрузкой файлов
+router.post('/lessons/create', upload.fields([
+    { name: 'videoFile', maxCount: 1 },
+    { name: 'lessonFile', maxCount: 1 }
+]), async (req, res) => {
+    try {
+        const { courseId, title, description, orderNumber, isFree } = req.body;
+
+        // Создаем урок
+        const lesson = await lessonService.createLesson({
+            courseId,
+            title,
+            description,
+            orderNumber: parseInt(orderNumber) || 0,
+            isFree: isFree === 'on',
+        });
+
+        // Обработка загруженного видео
+        if (req.files && req.files.videoFile && req.files.videoFile[0]) {
+            const file = req.files.videoFile[0];
+            const fileData = {
+                filename: file.filename,
+                originalname: file.originalname,
+                size: file.size,
+                mimetype: file.mimetype,
+                path: file.path,
+                url: `/uploads/videos/${file.filename}`,
+            };
+            await lessonService.addLessonFile(lesson.id, fileData);
+            console.log(`[ADMIN] Video uploaded: ${file.originalname} (${file.size} bytes)`);
+        }
+
+        // Обработка файла урока
+        if (req.files && req.files.lessonFile && req.files.lessonFile[0]) {
+            const file = req.files.lessonFile[0];
+            const fileData = {
+                filename: file.filename,
+                originalname: file.originalname,
+                size: file.size,
+                mimetype: file.mimetype,
+                path: file.path,
+                url: `/uploads/files/${file.filename}`,
+            };
+            await lessonService.addLessonFile(lesson.id, fileData);
+            console.log(`[ADMIN] File uploaded: ${file.originalname} (${file.size} bytes)`);
+        }
+
+        res.redirect('/admin/lessons?courseId=' + courseId);
+    } catch (error) {
+        logger.error({ err: error }, 'Create lesson error');
+        res.redirect('/admin/lessons?error=' + encodeURIComponent(error.message));
+    }
+});
+
+// Обновление урока с загрузкой файлов
+router.post('/lessons/update', upload.fields([
+    { name: 'videoFile', maxCount: 1 },
+    { name: 'lessonFile', maxCount: 1 }
+]), async (req, res) => {
+    try {
+        const { id, courseId, title, description, orderNumber, isFree, videoUrl } = req.body;
+
+        // Обновляем данные урока
+        await lessonService.updateLesson(id, {
+            title,
+            description,
+            orderNumber: parseInt(orderNumber) || 0,
+            isFree: isFree === 'on',
+            videoUrl: videoUrl || '',
+        });
+
+        // Обработка загруженного видео
+        if (req.files && req.files.videoFile && req.files.videoFile[0]) {
+            const file = req.files.videoFile[0];
+            const fileData = {
+                filename: file.filename,
+                originalname: file.originalname,
+                size: file.size,
+                mimetype: file.mimetype,
+                path: file.path,
+                url: `/uploads/videos/${file.filename}`,
+            };
+            await lessonService.addLessonFile(id, fileData);
+            console.log(`[ADMIN] Video uploaded: ${file.originalname}`);
+        }
+
+        // Обработка файла урока
+        if (req.files && req.files.lessonFile && req.files.lessonFile[0]) {
+            const file = req.files.lessonFile[0];
+            const fileData = {
+                filename: file.filename,
+                originalname: file.originalname,
+                size: file.size,
+                mimetype: file.mimetype,
+                path: file.path,
+                url: `/uploads/files/${file.filename}`,
+            };
+            await lessonService.addLessonFile(id, fileData);
+            console.log(`[ADMIN] File uploaded: ${file.originalname}`);
+        }
+
+        res.redirect('/admin/lessons?courseId=' + courseId);
+    } catch (error) {
+        logger.error({ err: error }, 'Update lesson error');
+        res.redirect('/admin/lessons?error=' + encodeURIComponent(error.message));
     }
 });
 
