@@ -1,3 +1,4 @@
+// server.js
 require('dotenv').config();
 
 const express = require('express');
@@ -74,6 +75,7 @@ try {
 
 const app = express();
 
+// Настройка шаблонов
 try {
     app.set('view engine', 'ejs');
     const viewsPath = path.join(__dirname, 'admin', 'views');
@@ -88,6 +90,7 @@ try {
     console.error('[STARTUP] Views error:', error.message);
 }
 
+// Middleware
 try {
     app.use(helmet({
         contentSecurityPolicy: false,
@@ -102,6 +105,7 @@ try {
     process.exit(1);
 }
 
+// Сессии
 try {
     const sessionConfig = {
         secret: config.session.secret,
@@ -117,7 +121,6 @@ try {
 
     if (config.server.nodeEnv === 'production') {
         console.warn('[STARTUP] ⚠️ Using MemoryStore for sessions is not recommended for production');
-        console.warn('[STARTUP] ⚠️ Consider using Redis or PostgreSQL for session storage');
     }
 
     app.use(session(sessionConfig));
@@ -127,15 +130,14 @@ try {
     process.exit(1);
 }
 
+// Статические файлы
 try {
     const publicPath = path.join(__dirname, 'public');
     if (!fs.existsSync(publicPath)) {
         fs.mkdirSync(publicPath, { recursive: true });
         console.log('[STARTUP] Created public directory');
     }
-
     app.use('/static', express.static(publicPath));
-    console.log('[STARTUP] Static: /public');
 
     if (!fs.existsSync(UPLOADS_DIR)) {
         fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -146,19 +148,21 @@ try {
     console.warn('[STARTUP] Static files warning:', error.message);
 }
 
+// Инициализация сервисов
 const MaxAPI = require('./platforms/max');
+const dispatcher = require('./core/dispatcher');
 
-// ============ ОБРАБОТЧИКИ СОБЫТИЙ (ОПРЕДЕЛЕНЫ ДО ИСПОЛЬЗОВАНИЯ) ============
+// ============================================================
+// ОБРАБОТЧИКИ СОБЫТИЙ MAX
+// ============================================================
 
 async function handleBotStarted(update) {
     console.log('[HANDLER] handleBotStarted called');
-    
     try {
         const chatId = update.chat_id || update.message?.recipient?.chat_id;
         const payload = update.payload || '';
         const userId = update.user?.user_id || update.user?.id || update.message?.sender?.user_id;
 
-        console.log(`[HANDLER] Bot started: chatId=${chatId}, userId=${userId}, payload=${payload}`);
         logger.info({ chatId, userId, payload }, 'Bot started');
 
         if (!chatId) {
@@ -167,30 +171,28 @@ async function handleBotStarted(update) {
         }
 
         const maxApi = new MaxAPI();
-        
-        try {
-            console.log('[HANDLER] Sending welcome keyboard...');
-            await maxApi.sendKeyboard({
-                chatId: chatId,
-                text: `👋 **Привет! Добро пожаловать в обучающий бот!**\n\nЯ помогу тебе учиться. Выбери действие:`,
-                buttons: [
-                    [
-                        { type: 'callback', text: '📚 Курсы', payload: 'show_courses' },
-                        { type: 'callback', text: '❓ Помощь', payload: 'show_help' }
-                    ]
-                ],
-                parseMode: 'markdown',
-            });
-            console.log('[HANDLER] Welcome message sent');
-            logger.info(`Welcome message sent to ${chatId}`);
-        } catch (error) {
-            console.error('[HANDLER] Error sending welcome:', error.message);
-            if (error.response?.data?.code === 'dialog.not.found') {
-                console.log(`[HANDLER] Dialog not found for ${chatId}, waiting for user`);
-            } else {
-                throw error;
-            }
-        }
+
+        const text = '👋 **Добро пожаловать в обучающий бот!**\n\nЯ помогу тебе учиться. Выбери действие:';
+
+        const buttons = [
+            [
+                { type: 'callback', text: '📚 Мои курсы', payload: 'my_courses' },
+                { type: 'callback', text: '📚 Все курсы', payload: 'all_courses' },
+            ],
+            [
+                { type: 'callback', text: '📊 Прогресс', payload: 'show_progress' },
+                { type: 'callback', text: '❓ Помощь', payload: 'show_help' },
+            ]
+        ];
+
+        await maxApi.sendKeyboard({
+            chatId: chatId,
+            text: text,
+            buttons: buttons,
+            parseMode: 'markdown',
+        });
+
+        logger.info(`Welcome message sent to ${chatId}`);
 
     } catch (error) {
         console.error('[HANDLER] Error in handleBotStarted:', error);
@@ -200,7 +202,6 @@ async function handleBotStarted(update) {
 
 async function handleMessageCreated(update) {
     console.log('[HANDLER] handleMessageCreated called');
-    
     try {
         const chatId = update.chat_id || update.message?.recipient?.chat_id;
         const message = update.message;
@@ -214,28 +215,11 @@ async function handleMessageCreated(update) {
             return;
         }
 
-        if (!text) {
-            console.log('[HANDLER] Empty message, ignoring');
-            return;
-        }
-
         logger.info({ chatId, userId, text: text.substring(0, 50) }, 'Message received');
 
-        const maxApi = new MaxAPI();
+        // Отправляем в диспетчер
+        await dispatcher.handleMessage('max', chatId.toString(), text);
 
-        if (text.startsWith('/start')) {
-            console.log('[HANDLER] Handling /start command');
-            await handleStartCommand(chatId, userId, text, maxApi);
-        } else if (text.startsWith('/help')) {
-            console.log('[HANDLER] Handling /help command');
-            await handleHelpCommand(chatId, maxApi);
-        } else if (text.startsWith('/courses')) {
-            console.log('[HANDLER] Handling /courses command');
-            await handleCoursesCommand(chatId, maxApi);
-        } else {
-            console.log('[HANDLER] Handling text message');
-            await handleTextMessage(chatId, userId, text, maxApi);
-        }
         console.log('[HANDLER] Message handling complete');
 
     } catch (error) {
@@ -246,7 +230,6 @@ async function handleMessageCreated(update) {
 
 async function handleMessageCallback(update) {
     console.log('[HANDLER] handleMessageCallback called');
-    
     try {
         const chatId = update.chat_id || update.message?.recipient?.chat_id;
         const callback = update.callback;
@@ -254,6 +237,7 @@ async function handleMessageCallback(update) {
         const userId = update.user?.user_id || update.user?.id || update.message?.sender?.user_id;
 
         console.log(`[HANDLER] Callback: chatId=${chatId}, payload=${payload}`);
+
         logger.info({ chatId, userId, payload }, 'Callback received');
 
         if (!chatId) {
@@ -261,34 +245,9 @@ async function handleMessageCallback(update) {
             return;
         }
 
-        const maxApi = new MaxAPI();
+        // Отправляем в диспетчер
+        await dispatcher.handleMessage('max', chatId.toString(), '', payload);
 
-        if (payload === 'show_courses') {
-            console.log('[HANDLER] Showing courses');
-            await showCourses(chatId, maxApi);
-        } else if (payload === 'show_help') {
-            console.log('[HANDLER] Showing help');
-            await maxApi.sendMessage({
-                chatId: chatId,
-                text: `📚 **Помощь по боту**\n\n` +
-                      `/start - Начать обучение\n` +
-                      `/help - Показать это сообщение\n` +
-                      `/courses - Показать список курсов\n\n` +
-                      `Просто напиши мне сообщение, и я помогу!`,
-                parseMode: 'markdown',
-            });
-        } else if (payload.startsWith('course_')) {
-            const courseId = payload.replace('course_', '');
-            console.log(`[HANDLER] Showing course: ${courseId}`);
-            await showCourseDetails(chatId, courseId, maxApi);
-        } else {
-            console.log(`[HANDLER] Unknown payload: ${payload}`);
-            await maxApi.sendMessage({
-                chatId: chatId,
-                text: `✅ Вы выбрали: ${payload}`,
-                parseMode: 'markdown',
-            });
-        }
         console.log('[HANDLER] Callback handling complete');
 
     } catch (error) {
@@ -297,193 +256,9 @@ async function handleMessageCallback(update) {
     }
 }
 
-// ============ КОМАНДЫ ============
-
-async function handleStartCommand(chatId, userId, text, maxApi) {
-    console.log('[COMMAND] handleStartCommand called');
-    
-    const payload = text.split(' ')[1] || '';
-    if (payload) {
-        console.log(`[COMMAND] Deep link: ${payload}`);
-    }
-
-    try {
-        console.log('[COMMAND] Sending start keyboard...');
-        await maxApi.sendKeyboard({
-            chatId: chatId,
-            text: `👋 **Добро пожаловать в обучающий бот!**\n\nЯ помогу тебе освоить новые знания. Выбери действие:`,
-            buttons: [
-                [
-                    { type: 'callback', text: '📚 Смотреть курсы', payload: 'show_courses' },
-                    { type: 'callback', text: '❓ Помощь', payload: 'show_help' },
-                ]
-            ],
-            parseMode: 'markdown',
-        });
-        console.log('[COMMAND] Start keyboard sent');
-    } catch (error) {
-        console.error('[COMMAND] Error:', error.message);
-        throw error;
-    }
-}
-
-async function handleHelpCommand(chatId, maxApi) {
-    console.log('[COMMAND] handleHelpCommand called');
-    
-    try {
-        await maxApi.sendMessage({
-            chatId: chatId,
-            text: `📚 **Помощь по боту**\n\n` +
-                  `/start - Начать обучение\n` +
-                  `/help - Показать это сообщение\n` +
-                  `/courses - Показать список курсов\n\n` +
-                  `Просто напиши мне сообщение, и я помогу!`,
-            parseMode: 'markdown',
-        });
-        console.log('[COMMAND] Help sent');
-    } catch (error) {
-        console.error('[COMMAND] Error:', error.message);
-        throw error;
-    }
-}
-
-async function handleCoursesCommand(chatId, maxApi) {
-    console.log('[COMMAND] handleCoursesCommand called');
-    await showCourses(chatId, maxApi);
-}
-
-async function showCourses(chatId, maxApi) {
-    console.log('[COMMAND] showCourses called');
-    
-    try {
-        const courseService = require('./core/course');
-        const courses = await courseService.getAllCourses(true);
-        console.log(`[COMMAND] Found ${courses.length} courses`);
-
-        if (courses.length === 0) {
-            await maxApi.sendMessage({
-                chatId: chatId,
-                text: '📚 **Курсы**\n\nПока нет доступных курсов. Загляните позже!',
-                parseMode: 'markdown',
-            });
-            return;
-        }
-
-        let text = '📚 **Доступные курсы**\n\n';
-        const buttons = [];
-
-        courses.forEach((course, index) => {
-            text += `${index + 1}. **${course.title}**\n`;
-            text += `   ${course.description || 'Без описания'}\n`;
-            text += `   ${course.price > 0 ? `💰 ${course.price} руб.` : '🆓 Бесплатно'}\n\n`;
-            
-            buttons.push([
-                {
-                    type: 'callback',
-                    text: `📖 ${course.title.substring(0, 20)}`,
-                    payload: `course_${course.id}`
-                }
-            ]);
-        });
-
-        buttons.push([
-            { type: 'callback', text: '❓ Помощь', payload: 'show_help' }
-        ]);
-
-        await maxApi.sendKeyboard({
-            chatId: chatId,
-            text: text + 'Выберите курс:',
-            buttons: buttons,
-            parseMode: 'markdown',
-        });
-        console.log('[COMMAND] Courses sent');
-
-    } catch (error) {
-        console.error('[COMMAND] Error in showCourses:', error);
-        throw error;
-    }
-}
-
-async function showCourseDetails(chatId, courseId, maxApi) {
-    console.log(`[COMMAND] showCourseDetails: ${courseId}`);
-    
-    try {
-        const courseService = require('./core/course');
-        const course = await courseService.getCourseById(courseId);
-        
-        if (!course) {
-            await maxApi.sendMessage({
-                chatId: chatId,
-                text: '❌ Курс не найден',
-                parseMode: 'markdown',
-            });
-            return;
-        }
-
-        const lessons = await courseService.getCourseLessons(courseId);
-        
-        let text = `📚 **${course.title}**\n\n`;
-        text += `${course.description || 'Без описания'}\n\n`;
-        text += `📖 **Уроки:** ${lessons.length}\n`;
-        text += `${course.price > 0 ? `💰 ${course.price} руб.` : '🆓 Бесплатно'}\n\n`;
-        
-        if (lessons.length > 0) {
-            text += '**Уроки:**\n';
-            lessons.forEach((lesson, index) => {
-                text += `${index + 1}. ${lesson.title} ${lesson.is_free ? '🆓' : '🔒'}\n`;
-            });
-        }
-
-        const buttons = [
-            [
-                { type: 'callback', text: '📚 Все курсы', payload: 'show_courses' },
-                { type: 'callback', text: '❓ Помощь', payload: 'show_help' }
-            ]
-        ];
-
-        await maxApi.sendKeyboard({
-            chatId: chatId,
-            text: text,
-            buttons: buttons,
-            parseMode: 'markdown',
-        });
-        console.log('[COMMAND] Course details sent');
-
-    } catch (error) {
-        console.error('[COMMAND] Error:', error);
-        await maxApi.sendMessage({
-            chatId: chatId,
-            text: '❌ Ошибка при загрузке курса',
-            parseMode: 'markdown',
-        });
-    }
-}
-
-async function handleTextMessage(chatId, userId, text, maxApi) {
-    console.log('[COMMAND] handleTextMessage called');
-    
-    const buttons = [
-        [
-            { type: 'callback', text: '📚 Курсы', payload: 'show_courses' },
-            { type: 'callback', text: '❓ Помощь', payload: 'show_help' },
-        ]
-    ];
-
-    try {
-        await maxApi.sendKeyboard({
-            chatId: chatId,
-            text: `📝 Я получил твое сообщение:\n\n"${text}"\n\nЧто хочешь сделать дальше?`,
-            buttons: buttons,
-            parseMode: 'markdown',
-        });
-        console.log('[COMMAND] Text response sent');
-    } catch (error) {
-        console.error('[COMMAND] Error:', error.message);
-        throw error;
-    }
-}
-
-// ============ РОУТЫ ============
+// ============================================================
+// РОУТЫ
+// ============================================================
 
 app.get('/', (req, res) => {
     res.json({
@@ -493,6 +268,7 @@ app.get('/', (req, res) => {
         pid: process.pid,
         uid: process.getuid?.() || 'unknown',
         directories: { data: DATA_DIR, logs: LOG_DIR, uploads: UPLOADS_DIR },
+        platforms: ['max', 'vk'],
     });
 });
 
@@ -510,11 +286,14 @@ app.get('/dashboard', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
 });
 
-// ============ MAX WEBHOOK ============
+// ============================================================
+// MAX WEBHOOK
+// ============================================================
+
 app.post('/webhook/max', async (req, res) => {
-    console.log('[WEBHOOK] ========== WEBHOOK RECEIVED ==========');
+    console.log('[WEBHOOK] ========== MAX WEBHOOK RECEIVED ==========');
     console.log('[WEBHOOK] Body:', JSON.stringify(req.body, null, 2));
-    
+
     try {
         const webhookSecret = config.max.webhookSecret;
         if (webhookSecret) {
@@ -532,30 +311,37 @@ app.post('/webhook/max', async (req, res) => {
             try {
                 const update = req.body;
                 console.log('[WEBHOOK] Processing update type:', update.update_type);
-                
+
                 switch (update.update_type) {
                     case 'bot_started':
                         console.log('[WEBHOOK] Handling bot_started');
                         await handleBotStarted(update);
                         break;
+
                     case 'message_created':
                         console.log('[WEBHOOK] Handling message_created');
                         await handleMessageCreated(update);
                         break;
+
                     case 'message_callback':
                         console.log('[WEBHOOK] Handling message_callback');
                         await handleMessageCallback(update);
                         break;
+
                     case 'bot_added':
                         console.log(`[WEBHOOK] Bot added to chat: ${update.chat_id}`);
                         break;
+
                     case 'bot_removed':
                         console.log(`[WEBHOOK] Bot removed from chat: ${update.chat_id}`);
                         break;
+
                     default:
                         console.log(`[WEBHOOK] Unhandled update type: ${update.update_type}`);
                 }
+
                 console.log('[WEBHOOK] Processing complete');
+
             } catch (error) {
                 console.error('[WEBHOOK] Error processing:', error);
                 logger.error({ err: error, update: req.body }, 'Error processing webhook');
@@ -568,21 +354,23 @@ app.post('/webhook/max', async (req, res) => {
     }
 });
 
-// VK Webhook
-app.post('/webhook/vk', (req, res) => {
-    try {
-        const { type } = req.body;
-        if (type === 'confirmation') {
-            return res.send(config.vk.confirmationToken || 'test');
-        }
-        res.send('ok');
-    } catch (error) {
-        logger.error('VK webhook error:', error.message);
-        res.send('ok');
-    }
-});
+// ============================================================
+// VK WEBHOOK
+// ============================================================
 
-// Admin endpoints
+const vkWebhook = require('./platforms/vk');
+
+app.post('/webhook/vk', vkWebhook.webhookHandler);
+
+// ============================================================
+// АДМИН-ПАНЕЛЬ
+// ============================================================
+
+// Подключаем админ-панель
+const adminRoutes = require('./admin/admin');
+app.use('/admin', adminRoutes);
+
+// API для админки
 app.post('/admin/register-webhook', async (req, res) => {
     try {
         const maxApi = new MaxAPI();
@@ -629,10 +417,10 @@ app.delete('/admin/webhook', async (req, res) => {
 
 app.get('/admin/logs', (req, res) => {
     try {
-        const logDir = '/tmp/logs';
+        const logDir = LOG_DIR;
         if (fs.existsSync(logDir)) {
             const files = fs.readdirSync(logDir);
-            let logs = {};
+            const logs = {};
             for (const file of files) {
                 if (file.endsWith('.log')) {
                     const content = fs.readFileSync(path.join(logDir, file), 'utf-8');
@@ -648,48 +436,64 @@ app.get('/admin/logs', (req, res) => {
     }
 });
 
-app.get('/admin', (req, res) => {
-    res.json({ message: 'Admin API' });
-});
-
-// ============ ТЕСТОВЫЙ КУРС ============
+// ============================================================
+// ТЕСТОВЫЙ КУРС
+// ============================================================
 
 app.post('/admin/test-course', async (req, res) => {
     console.log('[ADMIN] Creating test course...');
     try {
         const courseService = require('./core/course');
         const { title, description, price } = req.body;
-        
+
         const course = await courseService.createCourse({
             title: title || 'Тестовый курс',
             description: description || 'Описание тестового курса',
-            price: price || 0
+            price: price || 0,
+            isActive: true,
         });
-        
+
         const lessonService = require('./core/lesson');
         await lessonService.createLesson({
             courseId: course.id,
             title: 'Введение',
             description: 'Первый урок',
             orderNumber: 1,
-            isFree: true
+            isFree: true,
         });
-        
+
+        await lessonService.createLesson({
+            courseId: course.id,
+            title: 'Основы',
+            description: 'Второй урок',
+            orderNumber: 2,
+            isFree: true,
+        });
+
+        await lessonService.createLesson({
+            courseId: course.id,
+            title: 'Продвинутый уровень',
+            description: 'Третий урок',
+            orderNumber: 3,
+            isFree: false,
+        });
+
         console.log(`[ADMIN] Test course created: ${course.id}`);
         res.json({ success: true, course });
+
     } catch (error) {
         console.error('[ADMIN] Error:', error);
         res.status(500).json({ error: error.message });
     }
 });
 
-// ============ 404 ============
+// ============================================================
+// 404 и ERROR HANDLER
+// ============================================================
 
 app.use((req, res) => {
     res.status(404).json({ error: 'Not found' });
 });
-
-// ============ ERROR HANDLER ============
 
 app.use((err, req, res, next) => {
     console.error('[ERROR]', err.message);
@@ -697,7 +501,9 @@ app.use((err, req, res, next) => {
     res.status(500).json({ error: 'Internal server error' });
 });
 
-// ============ ЗАПУСК ============
+// ============================================================
+// ЗАПУСК
+// ============================================================
 
 const PORT = parseInt(process.env.PORT) || 8080;
 const HOST = '0.0.0.0';
@@ -708,7 +514,8 @@ const server = app.listen(PORT, HOST, () => {
     console.log(`[STARTUP] ✅ Server running on port ${PORT}`);
     console.log(`[STARTUP] Health: http://${HOST}:${PORT}/health`);
     console.log(`[STARTUP] Root: http://${HOST}:${PORT}/`);
-    console.log(`[STARTUP] Webhook URL: ${config.server.publicUrl}/webhook/max`);
+    console.log(`[STARTUP] MAX Webhook URL: ${config.server.publicUrl}/webhook/max`);
+    console.log(`[STARTUP] VK Webhook URL: ${config.server.publicUrl}/webhook/vk`);
     console.log(`[STARTUP] Dashboard: ${config.server.publicUrl}/dashboard`);
     console.log(`[STARTUP] ✅ Ready`);
 });
