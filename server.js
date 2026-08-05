@@ -103,17 +103,17 @@ try {
 }
 
 try {
-    const sessionConfig = {
-        secret: config.session.secret,
-        resave: false,
-        saveUninitialized: false,
-        cookie: {
-            maxAge: config.session.maxAge,
-            secure: config.server.nodeEnv === 'production',
-            httpOnly: true,
-            sameSite: 'lax',
-        },
-    };
+const sessionConfig = {
+    secret: config.session.secret,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+        maxAge: config.session.maxAge,
+        secure: false,  // <-- ИЗМЕНИ НА false
+        httpOnly: true,
+        sameSite: 'lax',
+    },
+};
 
     if (config.server.nodeEnv === 'production') {
         console.warn('[STARTUP] ⚠️ Using MemoryStore for sessions is not recommended for production');
