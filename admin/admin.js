@@ -20,11 +20,22 @@ const paymentService = require('../core/payment');
 // МУЛЬТЕР ДЛЯ ЗАГРУЗКИ ФАЙЛОВ
 // ============================================================
 
-// admin/admin.js - ИСПРАВЛЕННОЕ СОЗДАНИЕ УРОКА
+// ============================================================
+// НАСТРОЙКА MULTER ДЛЯ ЗАГРУЗКИ ФАЙЛОВ
+// ============================================================
 
 const UPLOADS_DIR = process.env.UPLOADS_DIR || '/tmp/uploads';
 
-// Настройка multer для загрузки файлов
+// Создаем папки если их нет
+const uploadDirs = ['videos', 'files', 'images', 'admin'];
+for (const dir of uploadDirs) {
+    const fullPath = path.join(UPLOADS_DIR, dir);
+    if (!fs.existsSync(fullPath)) {
+        fs.mkdirSync(fullPath, { recursive: true });
+        console.log(`[ADMIN] Created upload dir: ${fullPath}`);
+    }
+}
+
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
         let subDir = 'files';
@@ -33,11 +44,7 @@ const storage = multer.diskStorage({
         } else if (file.mimetype && file.mimetype.startsWith('image/')) {
             subDir = 'images';
         }
-        
         const dir = path.join(UPLOADS_DIR, subDir);
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
-        }
         cb(null, dir);
     },
     filename: (req, file, cb) => {
@@ -45,7 +52,9 @@ const storage = multer.diskStorage({
         const random = Math.round(Math.random() * 1E9);
         const ext = path.extname(file.originalname);
         const name = path.basename(file.originalname, ext);
-        cb(null, `${name}-${timestamp}-${random}${ext}`);
+        // Убираем спецсимволы из имени
+        const cleanName = name.replace(/[^a-zA-Zа-яА-Я0-9]/g, '_');
+        cb(null, `${cleanName}-${timestamp}-${random}${ext}`);
     }
 });
 
@@ -56,16 +65,21 @@ const upload = multer({
     },
     fileFilter: (req, file, cb) => {
         const allowedTypes = [
-            'video/mp4', 'video/webm', 'video/quicktime', 'video/x-msvideo',
+            // Видео
+            'video/mp4', 'video/webm', 'video/quicktime', 'video/x-msvideo', 'video/avi',
+            // Документы
             'application/pdf', 'application/msword',
             'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
             'application/vnd.ms-excel',
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'application/zip', 'application/x-zip-compressed',
+            'application/vnd.ms-powerpoint',
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            'application/zip', 'application/x-zip-compressed', 'application/x-rar-compressed',
+            // Изображения
             'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+            // Текст
             'text/plain', 'text/markdown',
         ];
-
         if (allowedTypes.includes(file.mimetype)) {
             cb(null, true);
         } else {
@@ -75,7 +89,7 @@ const upload = multer({
 });
 
 // ============================================================
-// СОЗДАНИЕ УРОКА С ЗАГРУЗКОЙ ФАЙЛОВ
+// СОЗДАНИЕ УРОКА
 // ============================================================
 
 router.post('/lessons/create', upload.fields([
@@ -83,9 +97,9 @@ router.post('/lessons/create', upload.fields([
     { name: 'lessonFile', maxCount: 1 }
 ]), async (req, res) => {
     try {
-        console.log('[ADMIN] Creating lesson...');
+        console.log('[ADMIN] ===== CREATE LESSON =====');
         console.log('[ADMIN] Body:', req.body);
-        console.log('[ADMIN] Files:', req.files);
+        console.log('[ADMIN] Files:', req.files ? Object.keys(req.files) : 'none');
 
         const { courseId, title, description, orderNumber, isFree } = req.body;
 
@@ -104,10 +118,10 @@ router.post('/lessons/create', upload.fields([
 
         console.log(`[ADMIN] Lesson created: ${lesson.id}`);
 
-        // 2. Обработка загруженного видео
+        // 2. Сохраняем видео
         if (req.files && req.files.videoFile && req.files.videoFile[0]) {
             const file = req.files.videoFile[0];
-            console.log(`[ADMIN] Processing video: ${file.originalname} (${file.size} bytes)`);
+            console.log(`[ADMIN] Saving video: ${file.originalname} (${file.size} bytes)`);
             
             const fileData = {
                 filename: file.filename,
@@ -118,14 +132,14 @@ router.post('/lessons/create', upload.fields([
                 url: `/uploads/videos/${file.filename}`,
             };
             
-            const savedFile = await lessonService.addLessonFile(lesson.id, fileData);
-            console.log(`[ADMIN] ✅ Video saved to DB: ${savedFile.id}`);
+            const saved = await lessonService.addLessonFile(lesson.id, fileData);
+            console.log(`[ADMIN] Video saved: ${saved.id}`);
         }
 
-        // 3. Обработка файла урока
+        // 3. Сохраняем файл
         if (req.files && req.files.lessonFile && req.files.lessonFile[0]) {
             const file = req.files.lessonFile[0];
-            console.log(`[ADMIN] Processing file: ${file.originalname} (${file.size} bytes)`);
+            console.log(`[ADMIN] Saving file: ${file.originalname} (${file.size} bytes)`);
             
             const fileData = {
                 filename: file.filename,
@@ -136,20 +150,18 @@ router.post('/lessons/create', upload.fields([
                 url: `/uploads/files/${file.filename}`,
             };
             
-            const savedFile = await lessonService.addLessonFile(lesson.id, fileData);
-            console.log(`[ADMIN] ✅ File saved to DB: ${savedFile.id}`);
+            const saved = await lessonService.addLessonFile(lesson.id, fileData);
+            console.log(`[ADMIN] File saved: ${saved.id}`);
         }
 
-        console.log(`[ADMIN] ✅ Lesson created successfully: ${lesson.id}`);
+        console.log(`[ADMIN] Lesson created successfully: ${lesson.id}`);
         res.redirect('/admin/lessons?courseId=' + courseId);
 
     } catch (error) {
         console.error('[ADMIN] Create lesson error:', error);
-        logger.error({ err: error }, 'Create lesson error');
         res.redirect('/admin/lessons?error=' + encodeURIComponent(error.message));
     }
 });
-
 // admin/admin.js - ОБНОВЛЕНИЕ УРОКА
 
 router.post('/lessons/update', upload.fields([
