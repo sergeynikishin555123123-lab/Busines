@@ -327,9 +327,10 @@ async function handleBotStarted(update) {
     console.log('[HANDLER] handleBotStarted called');
     
     try {
-        const chatId = update.chat_id;
+        // ПРАВИЛЬНОЕ извлечение chat_id
+        const chatId = update.chat_id || update.message?.recipient?.chat_id;
         const payload = update.payload || '';
-        const userId = update.user?.user_id || update.user?.id;
+        const userId = update.user?.user_id || update.user?.id || update.message?.sender?.user_id;
 
         console.log(`[HANDLER] Bot started: chatId=${chatId}, userId=${userId}, payload=${payload}`);
         logger.info({ chatId, userId, payload }, 'Bot started');
@@ -371,50 +372,57 @@ async function handleBotStarted(update) {
     }
 }
 
-async function handleMessageCreated(update) {
-    console.log('[HANDLER] handleMessageCreated called');
+async function handleMessageCallback(update) {
+    console.log('[HANDLER] handleMessageCallback called');
     
     try {
-        // ПРАВИЛЬНОЕ извлечение данных из update
-        const chatId = update.chat_id;
-        const message = update.message;
-        const text = message?.body?.text || message?.text || '';
-        const userId = message?.sender?.user_id || update.user?.user_id;
+        // ПРАВИЛЬНОЕ извлечение chat_id
+        const chatId = update.chat_id || update.message?.recipient?.chat_id;
+        const callback = update.callback;
+        const payload = callback?.payload || '';
+        const userId = update.user?.user_id || update.user?.id || update.message?.sender?.user_id;
 
-        console.log(`[HANDLER] chatId: ${chatId}, userId: ${userId}, text: "${text}"`);
+        console.log(`[HANDLER] Callback: chatId=${chatId}, payload=${payload}`);
+        logger.info({ chatId, userId, payload }, 'Callback received');
 
         if (!chatId) {
             console.log('[HANDLER] No chatId, ignoring');
             return;
         }
 
-        if (!text) {
-            console.log('[HANDLER] Empty message, ignoring');
-            return;
-        }
-
-        logger.info({ chatId, userId, text: text.substring(0, 50) }, 'Message received');
-
         const maxApi = new MaxAPI();
 
-        if (text.startsWith('/start')) {
-            console.log('[HANDLER] Handling /start command');
-            await handleStartCommand(chatId, userId, text, maxApi);
-        } else if (text.startsWith('/help')) {
-            console.log('[HANDLER] Handling /help command');
-            await handleHelpCommand(chatId, maxApi);
-        } else if (text.startsWith('/courses')) {
-            console.log('[HANDLER] Handling /courses command');
-            await handleCoursesCommand(chatId, maxApi);
+        if (payload === 'show_courses') {
+            console.log('[HANDLER] Showing courses');
+            await showCourses(chatId, maxApi);
+        } else if (payload === 'show_help') {
+            console.log('[HANDLER] Showing help');
+            await maxApi.sendMessage({
+                chatId: chatId,
+                text: `📚 **Помощь по боту**\n\n` +
+                      `/start - Начать обучение\n` +
+                      `/help - Показать это сообщение\n` +
+                      `/courses - Показать список курсов\n\n` +
+                      `Просто напиши мне сообщение, и я помогу!`,
+                parseMode: 'markdown',
+            });
+        } else if (payload.startsWith('course_')) {
+            const courseId = payload.replace('course_', '');
+            console.log(`[HANDLER] Showing course: ${courseId}`);
+            await showCourseDetails(chatId, courseId, maxApi);
         } else {
-            console.log('[HANDLER] Handling text message');
-            await handleTextMessage(chatId, userId, text, maxApi);
+            console.log(`[HANDLER] Unknown payload: ${payload}`);
+            await maxApi.sendMessage({
+                chatId: chatId,
+                text: `✅ Вы выбрали: ${payload}`,
+                parseMode: 'markdown',
+            });
         }
-        console.log('[HANDLER] Message handling complete');
+        console.log('[HANDLER] Callback handling complete');
 
     } catch (error) {
-        console.error('[HANDLER] Error in handleMessageCreated:', error);
-        logger.error({ err: error, update }, 'Error handling message_created');
+        console.error('[HANDLER] Error in handleMessageCallback:', error);
+        logger.error({ err: error, update }, 'Error handling message_callback');
     }
 }
 
