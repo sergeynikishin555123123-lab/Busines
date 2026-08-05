@@ -149,48 +149,59 @@ class MaxAPI {
         return this.sendMessage({ chatId, text, parseMode, attachments: [attachment] });
     }
 
-    // ============================================================
-    // ============== ЗАГРУЗКА ФАЙЛА В MAX ========================
-    // ============================================================
-    async uploadFile(filePath, fileType = 'file') {
-        try {
-            console.log(`[MAX] Uploading file: ${filePath}, type: ${fileType}`);
+   // platforms/max.js - ИСПРАВЛЕННЫЙ МЕТОД uploadFile
 
-            if (!fs.existsSync(filePath)) {
-                throw new Error(`File not found: ${filePath}`);
-            }
+async uploadFile(filePath, fileType = 'file') {
+    try {
+        console.log(`[MAX] Uploading file: ${filePath}, type: ${fileType}`);
 
-            const fileStats = fs.statSync(filePath);
-            console.log(`[MAX] File size: ${fileStats.size} bytes`);
-
-            const formData = new FormData();
-            formData.append('file', fs.createReadStream(filePath));
-            formData.append('type', fileType);
-
-            // Важно: используем правильный эндпоинт для загрузки
-            const response = await this.client.post('/uploads', formData, {
-                headers: {
-                    ...formData.getHeaders(),
-                    'Authorization': config.max.token,
-                },
-                maxContentLength: Infinity,
-                maxBodyLength: Infinity,
-            });
-
-            console.log(`[MAX] ✅ File uploaded, token: ${response.data.token}`);
-            logger.info({ filePath, token: response.data.token, type: fileType }, 'File uploaded successfully');
-            return response.data.token;
-
-        } catch (error) {
-            console.error(`[MAX] ❌ Failed to upload file: ${filePath}`, error.message);
-            if (error.response) {
-                console.error('[MAX] Response status:', error.response.status);
-                console.error('[MAX] Response data:', error.response.data);
-            }
-            logger.error({ err: error, filePath }, 'Failed to upload file to MAX');
-            throw error;
+        if (!fs.existsSync(filePath)) {
+            throw new Error(`File not found: ${filePath}`);
         }
+
+        const fileStats = fs.statSync(filePath);
+        console.log(`[MAX] File size: ${fileStats.size} bytes`);
+
+        // ВАЖНО: Используем правильный формат FormData
+        const formData = new FormData();
+        
+        // Добавляем файл с правильным полем
+        const readStream = fs.createReadStream(filePath);
+        formData.append('file', readStream, {
+            filename: path.basename(filePath),
+            contentType: fileType === 'video' ? 'video/mp4' : 'application/octet-stream'
+        });
+        
+        // Добавляем тип файла ОБЯЗАТЕЛЬНО
+        formData.append('type', fileType);
+
+        // ОТПРАВЛЯЕМ ЗАПРОС
+        const response = await this.client.post('/uploads', formData, {
+            headers: {
+                ...formData.getHeaders(),
+                'Authorization': config.max.token,
+                // Убираем Content-Type, т.к. form-data установит свой
+            },
+            maxContentLength: Infinity,
+            maxBodyLength: Infinity,
+            // Увеличиваем таймаут для больших файлов
+            timeout: 600000, // 10 минут
+        });
+
+        console.log(`[MAX] ✅ File uploaded, token: ${response.data.token}`);
+        logger.info({ filePath, token: response.data.token, type: fileType }, 'File uploaded successfully');
+        return response.data.token;
+
+    } catch (error) {
+        console.error(`[MAX] ❌ Failed to upload file: ${filePath}`, error.message);
+        if (error.response) {
+            console.error('[MAX] Response status:', error.response.status);
+            console.error('[MAX] Response data:', error.response.data);
+        }
+        logger.error({ err: error, filePath }, 'Failed to upload file to MAX');
+        throw error;
     }
+}
 
     // ============================================================
     // ============== НОВЫЙ МЕТОД: ЗАГРУЗКА ФАЙЛА ИЗ URL =========
