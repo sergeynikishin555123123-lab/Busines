@@ -1336,7 +1336,7 @@ async function handleAdminUploadFile(chatId, lessonId, maxApi) {
     }
 }
 
-// server.js - ИСПРАВЛЕННАЯ ФУНКЦИЯ handleAdminAttachment
+// server.js - ИСПРАВЛЕННАЯ handleAdminAttachment С ПРАВИЛЬНОЙ ЗАГРУЗКОЙ
 
 async function handleAdminAttachment(chatId, attachments, maxApi) {
     try {
@@ -1372,11 +1372,16 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
 
                 console.log(`[ADMIN] File already in MAX: ${fileName}, token: ${token.substring(0, 20)}...`);
 
+                // Определяем тип файла для MAX
+                let maxType = 'file';
+                if (context === 'uploading_video') maxType = 'video';
+                else if (attachment.type === 'image') maxType = 'image';
+
                 const fileData = {
                     filename: `${token}-${Date.now()}`,
                     originalname: fileName,
                     size: attachment.payload.size || 0,
-                    mimetype: fileType,
+                    mimetype: maxType,
                     path: token,
                     url: token,
                     token: token,
@@ -1397,7 +1402,7 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
             }
 
             // ============================================================
-            // ВАРИАНТ 2: Файл пришел как file_id (MAX API)
+            // ВАРИАНТ 2: Файл пришел как файл (нужно загрузить через /uploads)
             // ============================================================
             if (attachment.payload && attachment.payload.file_id) {
                 const fileId = attachment.payload.file_id;
@@ -1406,7 +1411,7 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
 
                 console.log(`[ADMIN] File ID from MAX: ${fileId}`);
 
-                // В MAX API file_id - это и есть токен
+                // В MAX API file_id - это уже токен
                 const token = fileId;
 
                 const fileData = {
@@ -1434,67 +1439,21 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
             }
 
             // ============================================================
-            // ВАРИАНТ 3: Файл пришел как медиа (video, image, file)
+            // ВАРИАНТ 3: Файл пришел как медиа (video, image) - нужно загрузить
             // ============================================================
-            if (attachment.payload && attachment.payload.media_id) {
-                const mediaId = attachment.payload.media_id;
-                const fileName = attachment.payload.filename || 'file';
+            if (attachment.payload && (attachment.payload.media_id || attachment.payload.url)) {
+                let fileUrl = attachment.payload.url;
+                let fileName = attachment.payload.filename || 'file';
                 const fileType = context === 'uploading_video' ? 'video' : 'file';
 
-                console.log(`[ADMIN] Media ID from MAX: ${mediaId}`);
-
-                const fileData = {
-                    filename: `${mediaId}-${Date.now()}`,
-                    originalname: fileName,
-                    size: attachment.payload.size || 0,
-                    mimetype: fileType,
-                    path: mediaId,
-                    url: mediaId,
-                    token: mediaId,
-                    is_max_uploaded: true,
-                };
-
-                await lessonService.addLessonFile(lessonId, fileData);
-
-                await maxApi.sendMessage({
-                    chatId: chatId,
-                    text: `✅ **Файл загружен в MAX!**\n\n📎 ${fileName}\n🔑 Токен: ${mediaId.substring(0, 20)}...`,
-                    parseMode: 'markdown',
-                });
-
-                session.context = 'editing_lesson';
-                await showAdminLessonDetail(chatId, lessonId, maxApi);
-                return;
-            }
-
-            // ============================================================
-            // ВАРИАНТ 4: Файл пришел как URL
-            // ============================================================
-            if (attachment.payload && attachment.payload.url) {
-                const fileUrl = attachment.payload.url;
-                const fileName = attachment.payload.filename || 'file';
-
-                console.log(`[ADMIN] File URL: ${fileUrl}`);
-
-                try {
-                    // Скачиваем файл
-                    const response = await axios.get(fileUrl, {
-                        responseType: 'arraybuffer',
-                        timeout: 300000,
-                    });
-
-                    const tempPath = path.join(UPLOADS_DIR, 'temp', `${Date.now()}-${fileName}`);
-                    fs.writeFileSync(tempPath, Buffer.from(response.data));
-
-                    const fileType = context === 'uploading_video' ? 'video' : 'file';
-                    const token = await maxApi.uploadFile(tempPath, fileType);
-
-                    fs.unlinkSync(tempPath);
-
+                // Если есть media_id, используем его как токен
+                if (attachment.payload.media_id) {
+                    const token = attachment.payload.media_id;
+                    
                     const fileData = {
                         filename: `${token}-${Date.now()}`,
                         originalname: fileName,
-                        size: response.data.length,
+                        size: attachment.payload.size || 0,
                         mimetype: fileType,
                         path: token,
                         url: token,
@@ -1513,15 +1472,59 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
                     session.context = 'editing_lesson';
                     await showAdminLessonDetail(chatId, lessonId, maxApi);
                     return;
+                }
 
-                } catch (error) {
-                    console.error('[ADMIN] Error downloading file:', error.message);
-                    await maxApi.sendMessage({
-                        chatId: chatId,
-                        text: `❌ Ошибка загрузки файла: ${error.message}`,
-                        parseMode: 'markdown',
-                    });
-                    return;
+                // Если есть URL - скачиваем и загружаем
+                if (fileUrl) {
+                    console.log(`[ADMIN] Downloading file from URL: ${fileUrl}`);
+
+                    try {
+                        // Скачиваем файл
+                        const response = await axios.get(fileUrl, {
+                            responseType: 'arraybuffer',
+                            timeout: 300000,
+                        });
+
+                        const tempPath = path.join(UPLOADS_DIR, 'temp', `${Date.now()}-${fileName}`);
+                        fs.writeFileSync(tempPath, Buffer.from(response.data));
+
+                        // Загружаем в MAX через правильный метод
+                        const token = await maxApi.uploadFileWithRetry(tempPath, fileType);
+
+                        fs.unlinkSync(tempPath);
+
+                        const fileData = {
+                            filename: `${token}-${Date.now()}`,
+                            originalname: fileName,
+                            size: response.data.length,
+                            mimetype: fileType,
+                            path: token,
+                            url: token,
+                            token: token,
+                            is_max_uploaded: true,
+                        };
+
+                        await lessonService.addLessonFile(lessonId, fileData);
+
+                        await maxApi.sendMessage({
+                            chatId: chatId,
+                            text: `✅ **Файл загружен в MAX!**\n\n📎 ${fileName}\n🔑 Токен: ${token.substring(0, 20)}...`,
+                            parseMode: 'markdown',
+                        });
+
+                        session.context = 'editing_lesson';
+                        await showAdminLessonDetail(chatId, lessonId, maxApi);
+                        return;
+
+                    } catch (error) {
+                        console.error('[ADMIN] Error downloading file:', error.message);
+                        await maxApi.sendMessage({
+                            chatId: chatId,
+                            text: `❌ Ошибка загрузки файла: ${error.message}`,
+                            parseMode: 'markdown',
+                        });
+                        return;
+                    }
                 }
             }
         }
