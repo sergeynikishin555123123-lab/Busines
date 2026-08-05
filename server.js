@@ -298,7 +298,7 @@ async function handleMessageCreated(update) {
     }
 }
 
-// server.js - ДОБАВЛЯЕМ В handleMessageCallback
+// server.js - ДОБАВЛЯЕМ ОБРАБОТКУ LESSON
 
 async function handleMessageCallback(update) {
     console.log('[HANDLER] handleMessageCallback called');
@@ -310,7 +310,6 @@ async function handleMessageCallback(update) {
         const userId = update.user?.user_id || update.user?.id || update.message?.sender?.user_id;
 
         console.log(`[HANDLER] Callback: chatId=${chatId}, payload=${payload}`);
-        logger.info({ chatId, userId, payload }, 'Callback received');
 
         if (!chatId) {
             console.log('[HANDLER] No chatId, ignoring');
@@ -321,10 +320,8 @@ async function handleMessageCallback(update) {
         const lessonService = require('./core/lesson');
 
         if (payload === 'show_courses') {
-            console.log('[HANDLER] Showing courses');
             await showCourses(chatId, maxApi);
         } else if (payload === 'show_help') {
-            console.log('[HANDLER] Showing help');
             await maxApi.sendMessage({
                 chatId: chatId,
                 text: `📚 **Помощь по боту**\n\n` +
@@ -336,35 +333,274 @@ async function handleMessageCallback(update) {
             });
         } else if (payload.startsWith('course_')) {
             const courseId = payload.replace('course_', '');
-            console.log(`[HANDLER] Showing course: ${courseId}`);
             await showCourseDetails(chatId, courseId, maxApi);
         } else if (payload.startsWith('lesson_')) {
             const lessonId = payload.replace('lesson_', '');
             console.log(`[HANDLER] Sending lesson: ${lessonId}`);
+            
             // ОТПРАВЛЯЕМ УРОК С ВИДЕО И ФАЙЛАМИ
-            await lessonService.sendLessonToUser(lessonId, chatId, maxApi);
+            await sendLessonToUser(chatId, lessonId, maxApi);
+            
         } else if (payload.startsWith('test_')) {
             const testId = payload.replace('test_', '');
             console.log(`[HANDLER] Showing test: ${testId}`);
-            // TODO: Показываем тест
-            await maxApi.sendMessage({
-                chatId: chatId,
-                text: `📝 **Тест**\n\nФункция в разработке`,
-                parseMode: 'markdown',
-            });
+            await showTest(chatId, testId, maxApi);
+        } else if (payload.startsWith('test_answer_')) {
+            const parts = payload.split('_');
+            const testId = parts[2];
+            const answerId = parts[3];
+            console.log(`[HANDLER] Test answer: testId=${testId}, answerId=${answerId}`);
+            await handleTestAnswer(chatId, testId, answerId, maxApi);
         } else {
-            console.log(`[HANDLER] Unknown payload: ${payload}`);
             await maxApi.sendMessage({
                 chatId: chatId,
                 text: `✅ Вы выбрали: ${payload}`,
                 parseMode: 'markdown',
             });
         }
-        console.log('[HANDLER] Callback handling complete');
+    } catch (error) {
+        console.error('[HANDLER] Error:', error);
+        logger.error({ err: error, update }, 'Error handling callback');
+    }
+}
+
+// ============================================================
+// ОТПРАВКА УРОКА ПОЛЬЗОВАТЕЛЮ
+// ============================================================
+
+async function sendLessonToUser(chatId, lessonId, maxApi) {
+    try {
+        console.log(`[LESSON] Sending lesson ${lessonId} to ${chatId}`);
+        
+        const lessonService = require('./core/lesson');
+        const lesson = await lessonService.getLessonWithFiles(lessonId);
+        
+        if (!lesson) {
+            await maxApi.sendMessage({
+                chatId: chatId,
+                text: '❌ Урок не найден',
+                parseMode: 'markdown',
+            });
+            return;
+        }
+
+        // Получаем файлы
+        const videoFile = lesson.files?.find(f => f.type === 'video');
+        const otherFiles = lesson.files?.filter(f => f.type !== 'video') || [];
+
+        console.log(`[LESSON] Video: ${videoFile ? videoFile.originalname : 'none'}`);
+        console.log(`[LESSON] Files: ${otherFiles.length}`);
+
+        // 1. ОТПРАВЛЯЕМ ВИДЕО (если есть)
+        if (videoFile) {
+            try {
+                console.log(`[LESSON] Sending video: ${videoFile.path}`);
+                
+                // Проверяем, что файл существует
+                if (fs.existsSync(videoFile.path)) {
+                    await maxApi.sendVideo({
+                        chatId: chatId,
+                        videoPath: videoFile.path,
+                        caption: `🎬 **${lesson.title}**\n\n${lesson.description || ''}`,
+                        parseMode: 'markdown',
+                    });
+                    console.log(`[LESSON] Video sent to ${chatId}`);
+                } else {
+                    console.error(`[LESSON] Video file not found: ${videoFile.path}`);
+                    await maxApi.sendMessage({
+                        chatId: chatId,
+                        text: `🎬 **${lesson.title}**\n\n${lesson.description || ''}\n\n⚠️ Видео временно недоступно.`,
+                        parseMode: 'markdown',
+                    });
+                }
+            } catch (error) {
+                console.error('[LESSON] Failed to send video:', error.message);
+                await maxApi.sendMessage({
+                    chatId: chatId,
+                    text: `📖 **${lesson.title}**\n\n${lesson.description || ''}`,
+                    parseMode: 'markdown',
+                });
+            }
+        } else {
+            // Если видео нет - отправляем описание
+            await maxApi.sendMessage({
+                chatId: chatId,
+                text: `📖 **${lesson.title}**\n\n${lesson.description || 'Нет описания'}`,
+                parseMode: 'markdown',
+            });
+        }
+
+        // 2. ОТПРАВЛЯЕМ ФАЙЛЫ (кроме видео)
+        for (const file of otherFiles) {
+            try {
+                console.log(`[LESSON] Sending file: ${file.originalname}`);
+                
+                if (fs.existsSync(file.path)) {
+                    await maxApi.sendFile({
+                        chatId: chatId,
+                        filePath: file.path,
+                        caption: `📎 **${file.originalname}**`,
+                        parseMode: 'markdown',
+                    });
+                    console.log(`[LESSON] File sent: ${file.originalname}`);
+                } else {
+                    console.error(`[LESSON] File not found: ${file.path}`);
+                }
+            } catch (error) {
+                console.error('[LESSON] Failed to send file:', error.message);
+            }
+        }
+
+        // 3. ТЕСТ - кнопка "Проверить себя"
+        const test = await lessonService.getLessonTest(lessonId);
+        if (test) {
+            const buttons = [
+                [
+                    { type: 'callback', text: '✅ Проверить себя', payload: `test_${test.id}` },
+                ],
+                [
+                    { type: 'callback', text: '📚 Назад к курсу', payload: `course_${lesson.course_id}` },
+                ]
+            ];
+
+            await maxApi.sendKeyboard({
+                chatId: chatId,
+                text: `📝 **Готов проверить знания?**\n\nПройти тест по уроку "${lesson.title}"`,
+                buttons: buttons,
+                parseMode: 'markdown',
+            });
+        } else {
+            // Если теста нет - просто кнопка назад
+            const buttons = [
+                [
+                    { type: 'callback', text: '📚 Назад к курсу', payload: `course_${lesson.course_id}` },
+                ]
+            ];
+
+            await maxApi.sendKeyboard({
+                chatId: chatId,
+                text: `✅ Урок завершён!\n\nВы изучили "${lesson.title}"`,
+                buttons: buttons,
+                parseMode: 'markdown',
+            });
+        }
+
+        console.log(`[LESSON] Lesson ${lessonId} sent to ${chatId}`);
 
     } catch (error) {
-        console.error('[HANDLER] Error in handleMessageCallback:', error);
-        logger.error({ err: error, update }, 'Error handling message_callback');
+        console.error('[LESSON] Error sending lesson:', error);
+        logger.error({ err: error, chatId, lessonId }, 'Failed to send lesson');
+    }
+}
+
+// ============================================================
+// ПОКАЗ ТЕСТА
+// ============================================================
+
+async function showTest(chatId, testId, maxApi) {
+    try {
+        console.log(`[TEST] Showing test ${testId} to ${chatId}`);
+        
+        const lessonService = require('./core/lesson');
+        const test = await lessonService.getLessonTest(testId);
+        
+        if (!test) {
+            await maxApi.sendMessage({
+                chatId: chatId,
+                text: '❌ Тест не найден',
+                parseMode: 'markdown',
+            });
+            return;
+        }
+
+        // Проверяем, есть ли ответы
+        if (!test.answers || test.answers.length === 0) {
+            await maxApi.sendMessage({
+                chatId: chatId,
+                text: '❌ В тесте нет вопросов',
+                parseMode: 'markdown',
+            });
+            return;
+        }
+
+        // Формируем кнопки с вариантами ответов
+        const buttons = [];
+        for (const answer of test.answers) {
+            buttons.push([
+                { 
+                    type: 'callback', 
+                    text: answer.answer || 'Вариант ответа', 
+                    payload: `test_answer_${testId}_${answer.id}` 
+                }
+            ]);
+        }
+
+        // Кнопка назад
+        buttons.push([
+            { type: 'callback', text: '📚 Назад к уроку', payload: `lesson_${test.lesson_id}` }
+        ]);
+
+        await maxApi.sendKeyboard({
+            chatId: chatId,
+            text: `📝 **${test.question || 'Проверьте свои знания'}**\n\nВыберите правильный ответ:`,
+            buttons: buttons,
+            parseMode: 'markdown',
+        });
+
+        console.log(`[TEST] Test ${testId} shown to ${chatId}`);
+
+    } catch (error) {
+        console.error('[TEST] Error showing test:', error);
+        logger.error({ err: error, chatId, testId }, 'Failed to show test');
+    }
+}
+
+// ============================================================
+// ОБРАБОТКА ОТВЕТА НА ТЕСТ
+// ============================================================
+
+async function handleTestAnswer(chatId, testId, answerId, maxApi) {
+    try {
+        console.log(`[TEST] Answer: testId=${testId}, answerId=${answerId}`);
+        
+        const lessonService = require('./core/lesson');
+        const result = await lessonService.checkTestAnswer(testId, answerId, chatId);
+
+        // Получаем информацию о тесте для сообщения
+        const test = await lessonService.getLessonTest(testId);
+        const selectedAnswer = test.answers?.find(a => a.id === answerId);
+
+        let text = '';
+        if (result.correct) {
+            text = `✅ **Правильно!** 🎉\n\nОтличная работа! Вы успешно прошли тест.`;
+        } else {
+            text = `❌ **Неправильно.**\n\n`;
+            text += `Ваш ответ: ${selectedAnswer?.answer || 'Неизвестно'}\n`;
+            text += `Попробуйте еще раз или перечитайте материал урока.`;
+        }
+
+        const buttons = [
+            [
+                { type: 'callback', text: '📚 Назад к курсу', payload: `course_${test.lesson_id}` },
+            ]
+        ];
+
+        await maxApi.sendKeyboard({
+            chatId: chatId,
+            text: text,
+            buttons: buttons,
+            parseMode: 'markdown',
+        });
+
+        console.log(`[TEST] Answer processed: correct=${result.correct}`);
+
+    } catch (error) {
+        console.error('[TEST] Error handling answer:', error);
+        await maxApi.sendMessage({
+            chatId: chatId,
+            text: '❌ Ошибка при проверке ответа. Попробуйте позже.',
+            parseMode: 'markdown',
+        });
     }
 }
 
@@ -475,9 +711,9 @@ async function showCourses(chatId, maxApi) {
     }
 }
 
+// server.js - showCourseDetails с кнопками уроков
+
 async function showCourseDetails(chatId, courseId, maxApi) {
-    console.log(`[COMMAND] showCourseDetails: ${courseId}`);
-    
     try {
         const courseService = require('./core/course');
         const course = await courseService.getCourseById(courseId);
@@ -495,22 +731,33 @@ async function showCourseDetails(chatId, courseId, maxApi) {
         
         let text = `📚 **${course.title}**\n\n`;
         text += `${course.description || 'Без описания'}\n\n`;
-        text += `📖 **Уроки:** ${lessons.length}\n`;
+        text += `📖 **Уроков:** ${lessons.length}\n`;
         text += `${course.price > 0 ? `💰 ${course.price} руб.` : '🆓 Бесплатно'}\n\n`;
+        
+        // Формируем кнопки для каждого урока
+        const buttons = [];
         
         if (lessons.length > 0) {
             text += '**Уроки:**\n';
             lessons.forEach((lesson, index) => {
                 text += `${index + 1}. ${lesson.title} ${lesson.is_free ? '🆓' : '🔒'}\n`;
+                
+                // Кнопка для урока
+                buttons.push([
+                    {
+                        type: 'callback',
+                        text: `📖 ${lesson.title.substring(0, 25)}`,
+                        payload: `lesson_${lesson.id}`
+                    }
+                ]);
             });
         }
 
-        const buttons = [
-            [
-                { type: 'callback', text: '📚 Все курсы', payload: 'show_courses' },
-                { type: 'callback', text: '❓ Помощь', payload: 'show_help' }
-            ]
-        ];
+        // Кнопки навигации
+        buttons.push([
+            { type: 'callback', text: '📚 Все курсы', payload: 'show_courses' },
+            { type: 'callback', text: '❓ Помощь', payload: 'show_help' }
+        ]);
 
         await maxApi.sendKeyboard({
             chatId: chatId,
@@ -518,6 +765,7 @@ async function showCourseDetails(chatId, courseId, maxApi) {
             buttons: buttons,
             parseMode: 'markdown',
         });
+
         console.log('[COMMAND] Course details sent');
 
     } catch (error) {
@@ -529,7 +777,6 @@ async function showCourseDetails(chatId, courseId, maxApi) {
         });
     }
 }
-
 async function handleTextMessage(chatId, userId, text, maxApi) {
     console.log('[COMMAND] handleTextMessage called');
     
