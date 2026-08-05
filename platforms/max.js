@@ -1,5 +1,3 @@
-// platforms/max.js - ОРИГИНАЛЬНАЯ РАБОЧАЯ ВЕРСИЯ
-
 const axios = require('axios');
 const FormData = require('form-data');
 const fs = require('fs');
@@ -12,7 +10,7 @@ class MaxAPI {
         console.log('[MAX] Initializing API client...');
         console.log('[MAX] Base URL:', config.max.baseUrl);
         console.log('[MAX] Token:', config.max.token ? '✅ Set' : '❌ Not set');
-
+        
         this.client = axios.create({
             baseURL: config.max.baseUrl,
             timeout: 30000,
@@ -67,10 +65,8 @@ class MaxAPI {
         if (!this.messageQueues.has(chatId)) {
             this.messageQueues.set(chatId, []);
         }
-
         const queue = this.messageQueues.get(chatId);
         queue.push(sendFunction);
-
         if (queue.length === 1) {
             await this.processQueue(chatId);
         }
@@ -98,29 +94,30 @@ class MaxAPI {
         }
     }
 
-    // ОТПРАВКА СООБЩЕНИЯ
+    // ИСПРАВЛЕННЫЙ МЕТОД ОТПРАВКИ СООБЩЕНИЙ
     async sendMessage({ chatId, text, parseMode = 'markdown', attachments = [] }) {
         return this.enqueueMessage(chatId, async () => {
             try {
+                // ПРАВИЛЬНАЯ структура запроса к MAX API
                 const requestData = {
                     text: text,
                     format: parseMode,
                 };
-
+                
+                // Добавляем attachments только если они есть
                 if (attachments && attachments.length > 0) {
                     requestData.attachments = attachments;
                 }
-
+                
                 const response = await this.client.post('/messages', requestData, {
                     params: {
-                        chat_id: chatId,
+                        chat_id: chatId,  // chat_id в query-параметрах
                     }
                 });
-
+                
                 console.log(`[MAX] Message sent to ${chatId}: ${text.substring(0, 50)}`);
                 logger.info({ chatId, text: text.substring(0, 50) }, 'Message sent successfully');
                 return response.data;
-
             } catch (error) {
                 console.error(`[MAX] Failed to send message to ${chatId}:`, error.message);
                 if (error.response) {
@@ -132,7 +129,7 @@ class MaxAPI {
         });
     }
 
-    // ОТПРАВКА КЛАВИАТУРЫ
+    // ОТПРАВКА КЛАВИАТУРЫ (ИСПРАВЛЕНА)
     async sendKeyboard({ chatId, text, buttons, parseMode = 'markdown' }) {
         const attachment = {
             type: 'inline_keyboard',
@@ -140,7 +137,6 @@ class MaxAPI {
                 buttons: buttons
             }
         };
-
         return this.sendMessage({ chatId, text, parseMode, attachments: [attachment] });
     }
 
@@ -186,10 +182,8 @@ class MaxAPI {
                 maxContentLength: Infinity,
                 maxBodyLength: Infinity,
             });
-
             logger.info({ filePath, token: response.data.token }, 'File uploaded successfully');
             return response.data.token;
-
         } catch (error) {
             logger.error({ err: error, filePath }, 'Failed to upload file');
             throw error;
@@ -203,15 +197,12 @@ class MaxAPI {
                 url: webhookUrl,
                 update_types: ['message_created', 'bot_started', 'message_callback', 'bot_added', 'bot_removed'],
             };
-
             if (secret) {
                 payload.secret = secret;
             }
-
             const response = await this.client.post('/subscriptions', payload);
             logger.info({ webhookUrl }, 'Webhook registered successfully');
             return response.data;
-
         } catch (error) {
             logger.error({ err: error, webhookUrl }, 'Failed to register webhook');
             throw error;
