@@ -1,9 +1,10 @@
 // platforms/max.js
-// КЛИЕНТ MAX API - ПОЛНАЯ ВЕРСИЯ
+// КЛИЕНТ MAX API - ПОЛНАЯ ВЕРСИЯ ПО ДОКУМЕНТАЦИИ
 
 const axios = require('axios');
 const FormData = require('form-data');
 const fs = require('fs');
+const path = require('path');
 const config = require('../config');
 const logger = require('../logger');
 const { RateLimiter } = require('../core/queue');
@@ -14,27 +15,24 @@ class MaxAPI {
         console.log('[MAX] Base URL:', config.max.baseUrl);
         console.log('[MAX] Token:', config.max.token ? '✅ Set' : '❌ Not set');
 
-       // platforms/max.js - В конструкторе
-
-this.client = axios.create({
-    baseURL: config.max.baseUrl,
-    timeout: 600000, // 10 минут для больших файлов
-    maxContentLength: Infinity,
-    maxBodyLength: Infinity,
-    headers: {
-        'Authorization': config.max.token,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-    },
-});
+        this.client = axios.create({
+            baseURL: config.max.baseUrl,
+            timeout: 600000, // 10 минут для больших файлов
+            maxContentLength: Infinity,
+            maxBodyLength: Infinity,
+            headers: {
+                'Authorization': config.max.token,
+                'Accept': 'application/json',
+            },
+        });
 
         this.messageQueues = new Map();
-        this.rateLimiter = new RateLimiter(config.rateLimit.messagesPerChatPerSecond, 1000);
+        this.rateLimiter = new RateLimiter(config.rateLimit?.messagesPerChatPerSecond || 30, 1000);
 
         this.client.interceptors.request.use(
             (config) => {
                 console.log(`[MAX] Request: ${config.method.toUpperCase()} ${config.baseURL}${config.url}`);
-                if (config.data) {
+                if (config.data && typeof config.data === 'object') {
                     console.log('[MAX] Request data:', JSON.stringify(config.data, null, 2));
                 }
                 return config;
@@ -119,11 +117,7 @@ this.client = axios.create({
                     requestData.attachments = attachments;
                 }
 
-                const response = await this.client.post('/messages', requestData, {
-                    params: {
-                        chat_id: chatId
-                    }
-                });
+                const response = await this.client.post('/messages', requestData);
 
                 console.log(`[MAX] ✅ Message sent to ${chatId}: ${text.substring(0, 50)}`);
                 logger.info({ chatId, text: text.substring(0, 50) }, 'Message sent successfully');
@@ -153,100 +147,122 @@ this.client = axios.create({
         return this.sendMessage({ chatId, text, parseMode, attachments: [attachment] });
     }
 
-   // platforms/max.js - ИСПРАВЛЕННЫЙ МЕТОД uploadFile
-
-async uploadFile(filePath, fileType = 'file') {
-    try {
-        console.log(`[MAX] Uploading file: ${filePath}, type: ${fileType}`);
-
-        if (!fs.existsSync(filePath)) {
-            throw new Error(`File not found: ${filePath}`);
-        }
-
-        const fileStats = fs.statSync(filePath);
-        console.log(`[MAX] File size: ${fileStats.size} bytes`);
-
-        // ВАЖНО: Используем правильный формат FormData
-        const formData = new FormData();
-        
-        // Добавляем файл с правильным полем
-        const readStream = fs.createReadStream(filePath);
-        formData.append('file', readStream, {
-            filename: path.basename(filePath),
-            contentType: fileType === 'video' ? 'video/mp4' : 'application/octet-stream'
-        });
-        
-        // Добавляем тип файла ОБЯЗАТЕЛЬНО
-        formData.append('type', fileType);
-
-        // ОТПРАВЛЯЕМ ЗАПРОС
-        const response = await this.client.post('/uploads', formData, {
-            headers: {
-                ...formData.getHeaders(),
-                'Authorization': config.max.token,
-                // Убираем Content-Type, т.к. form-data установит свой
-            },
-            maxContentLength: Infinity,
-            maxBodyLength: Infinity,
-            // Увеличиваем таймаут для больших файлов
-            timeout: 600000, // 10 минут
-        });
-
-        console.log(`[MAX] ✅ File uploaded, token: ${response.data.token}`);
-        logger.info({ filePath, token: response.data.token, type: fileType }, 'File uploaded successfully');
-        return response.data.token;
-
-    } catch (error) {
-        console.error(`[MAX] ❌ Failed to upload file: ${filePath}`, error.message);
-        if (error.response) {
-            console.error('[MAX] Response status:', error.response.status);
-            console.error('[MAX] Response data:', error.response.data);
-        }
-        logger.error({ err: error, filePath }, 'Failed to upload file to MAX');
-        throw error;
-    }
-}
-
     // ============================================================
-    // ============== НОВЫЙ МЕТОД: ЗАГРУЗКА ФАЙЛА ИЗ URL =========
+    // ============== ЗАГРУЗКА ФАЙЛА В MAX (ПО ДОКУМЕНТАЦИИ) =====
     // ============================================================
-    async uploadFileFromUrl(fileUrl, fileType = 'file') {
+    /**
+     * Загрузка медиафайла в MAX
+     * @param {string} filePath - путь к файлу
+     * @param {string} fileType - тип файла: 'image', 'video', 'audio', 'file'
+     * @returns {Promise<string>} - токен файла
+     */
+    async uploadFile(filePath, fileType = 'file') {
         try {
-            console.log(`[MAX] Downloading file from URL: ${fileUrl}, type: ${fileType}`);
+            console.log(`[MAX] Uploading file: ${filePath}, type: ${fileType}`);
 
-            // Скачиваем файл
-            const response = await axios.get(fileUrl, {
-                responseType: 'arraybuffer',
-                timeout: 300000,
+            if (!fs.existsSync(filePath)) {
+                throw new Error(`File not found: ${filePath}`);
+            }
+
+            const fileStats = fs.statSync(filePath);
+            console.log(`[MAX] File size: ${fileStats.size} bytes`);
+
+            // ШАГ 1: Получаем URL для загрузки
+            // POST /uploads?type={type}
+            const uploadResponse = await this.client.post(`/uploads?type=${fileType}`);
+            const uploadUrl = uploadResponse.data.url;
+            
+            console.log(`[MAX] Got upload URL: ${uploadUrl}`);
+
+            // ШАГ 2: Загружаем файл по полученному URL
+            // Используем multipart/form-data как в документации
+            const formData = new FormData();
+            formData.append('data', fs.createReadStream(filePath));
+
+            const uploadResult = await axios.post(uploadUrl, formData, {
+                headers: {
+                    ...formData.getHeaders(),
+                    'Authorization': config.max.token,
+                },
+                maxContentLength: Infinity,
+                maxBodyLength: Infinity,
+                timeout: 600000,
             });
 
-            // Сохраняем временно
-            const tempPath = `/tmp/upload-${Date.now()}.tmp`;
-            fs.writeFileSync(tempPath, Buffer.from(response.data));
+            // ШАГ 3: Получаем токен из ответа
+            const token = uploadResult.data.token;
+            
+            if (!token) {
+                throw new Error('No token received from upload');
+            }
 
-            // Загружаем в MAX
-            const token = await this.uploadFile(tempPath, fileType);
-
-            // Удаляем временный файл
-            fs.unlinkSync(tempPath);
-
-            console.log(`[MAX] ✅ File uploaded from URL, token: ${token}`);
+            console.log(`[MAX] ✅ File uploaded, token: ${token}`);
+            logger.info({ filePath, token, type: fileType }, 'File uploaded successfully');
             return token;
 
         } catch (error) {
-            console.error(`[MAX] ❌ Failed to upload file from URL: ${fileUrl}`, error.message);
-            logger.error({ err: error, fileUrl }, 'Failed to upload file from URL');
+            console.error(`[MAX] ❌ Failed to upload file: ${filePath}`, error.message);
+            if (error.response) {
+                console.error('[MAX] Response status:', error.response.status);
+                console.error('[MAX] Response data:', error.response.data);
+            }
+            logger.error({ err: error, filePath }, 'Failed to upload file to MAX');
             throw error;
         }
     }
 
     // ============================================================
-    // ОТПРАВКА ВИДЕО (через загрузку файла)
+    // ЗАГРУЗКА ФАЙЛА С ПОВТОРАМИ ПРИ ОШИБКЕ attachment.not.ready
+    // ============================================================
+    /**
+     * Загрузка файла с автоматическими повторами при ошибке attachment.not.ready
+     */
+    async uploadFileWithRetry(filePath, fileType = 'file', maxRetries = 5) {
+        let lastError = null;
+        
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                const token = await this.uploadFile(filePath, fileType);
+                
+                // Ждем обработки файла на сервере
+                const waitTime = Math.min(attempt * 2000, 10000);
+                console.log(`[MAX] Waiting ${waitTime}ms for file processing...`);
+                await this.sleep(waitTime);
+                
+                return token;
+            } catch (error) {
+                lastError = error;
+                console.log(`[MAX] Upload attempt ${attempt} failed: ${error.message}`);
+                
+                // Если ошибка не связана с обработкой файла, пробуем снова
+                if (error.response?.data?.code === 'attachment.not.ready') {
+                    console.log(`[MAX] File not ready, retrying in ${attempt * 2}s...`);
+                    await this.sleep(attempt * 2000);
+                    continue;
+                }
+                
+                // Для других ошибок тоже пробуем повторить
+                if (attempt < maxRetries) {
+                    await this.sleep(attempt * 1000);
+                    continue;
+                }
+            }
+        }
+        
+        throw lastError || new Error('Failed to upload file after max retries');
+    }
+
+    async sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    // ============================================================
+    // ОТПРАВКА ВИДЕО
     // ============================================================
     async sendVideo({ chatId, videoPath, caption = '', parseMode = 'markdown' }) {
         try {
             console.log(`[MAX] Uploading video for chat ${chatId}...`);
-            const token = await this.uploadFile(videoPath, 'video');
+            const token = await this.uploadFileWithRetry(videoPath, 'video');
 
             const attachment = {
                 type: 'video',
@@ -269,12 +285,12 @@ async uploadFile(filePath, fileType = 'file') {
     }
 
     // ============================================================
-    // ОТПРАВКА ФАЙЛА (через загрузку файла)
+    // ОТПРАВКА ФАЙЛА
     // ============================================================
     async sendFile({ chatId, filePath, caption = '', parseMode = 'markdown' }) {
         try {
             console.log(`[MAX] Uploading file for chat ${chatId}...`);
-            const token = await this.uploadFile(filePath, 'file');
+            const token = await this.uploadFileWithRetry(filePath, 'file');
 
             const attachment = {
                 type: 'file',
@@ -297,10 +313,37 @@ async uploadFile(filePath, fileType = 'file') {
     }
 
     // ============================================================
-    // ============== ОТПРАВКА ПО ТОКЕНУ (БЕЗ ПОВТОРНОЙ ЗАГРУЗКИ) =
+    // ОТПРАВКА ИЗОБРАЖЕНИЯ
+    // ============================================================
+    async sendImage({ chatId, imagePath, caption = '', parseMode = 'markdown' }) {
+        try {
+            console.log(`[MAX] Uploading image for chat ${chatId}...`);
+            const token = await this.uploadFileWithRetry(imagePath, 'image');
+
+            const attachment = {
+                type: 'image',
+                payload: { token: token }
+            };
+
+            console.log(`[MAX] Sending image message to ${chatId}...`);
+            return await this.sendMessage({
+                chatId,
+                text: caption,
+                parseMode,
+                attachments: [attachment]
+            });
+
+        } catch (error) {
+            console.error(`[MAX] ❌ Failed to send image to ${chatId}:`, error.message);
+            logger.error({ err: error, chatId, imagePath }, 'Failed to send image');
+            throw error;
+        }
+    }
+
+    // ============================================================
+    // ОТПРАВКА ПО ТОКЕНУ (БЕЗ ПОВТОРНОЙ ЗАГРУЗКИ)
     // ============================================================
 
-    // ОТПРАВКА ВИДЕО ПО ТОКЕНУ
     async sendVideoByToken({ chatId, token, caption = '', parseMode = 'markdown' }) {
         try {
             console.log(`[MAX] Sending video by token to ${chatId}...`);
@@ -324,7 +367,6 @@ async uploadFile(filePath, fileType = 'file') {
         }
     }
 
-    // ОТПРАВКА ФАЙЛА ПО ТОКЕНУ
     async sendFileByToken({ chatId, token, caption = '', parseMode = 'markdown' }) {
         try {
             console.log(`[MAX] Sending file by token to ${chatId}...`);
@@ -348,7 +390,6 @@ async uploadFile(filePath, fileType = 'file') {
         }
     }
 
-    // ОТПРАВКА ИЗОБРАЖЕНИЯ ПО ТОКЕНУ
     async sendImageByToken({ chatId, token, caption = '', parseMode = 'markdown' }) {
         try {
             console.log(`[MAX] Sending image by token to ${chatId}...`);
@@ -368,36 +409,6 @@ async uploadFile(filePath, fileType = 'file') {
         } catch (error) {
             console.error(`[MAX] ❌ Failed to send image by token to ${chatId}:`, error.message);
             logger.error({ err: error, chatId, token }, 'Failed to send image by token');
-            throw error;
-        }
-    }
-
-    // ============================================================
-    // ============== РАБОТА С ВЛОЖЕНИЯМИ В СООБЩЕНИЯХ ===========
-    // ============================================================
-
-    // ПОЛУЧЕНИЕ ИНФОРМАЦИИ О ФАЙЛЕ ПО ТОКЕНУ
-    async getFileInfo(token) {
-        try {
-            console.log(`[MAX] Getting file info for token: ${token.substring(0, 20)}...`);
-            
-            const response = await this.client.get(`/uploads/${token}`);
-            return response.data;
-        } catch (error) {
-            console.error('[MAX] Failed to get file info:', error.message);
-            return null;
-        }
-    }
-
-    // УДАЛЕНИЕ ФАЙЛА ПО ТОКЕНУ
-    async deleteFile(token) {
-        try {
-            console.log(`[MAX] Deleting file: ${token.substring(0, 20)}...`);
-            
-            const response = await this.client.delete(`/uploads/${token}`);
-            return response.data;
-        } catch (error) {
-            console.error('[MAX] Failed to delete file:', error.message);
             throw error;
         }
     }
@@ -474,20 +485,39 @@ async uploadFile(filePath, fileType = 'file') {
     }
 
     // ============================================================
-    // ============== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ =====================
+    // ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
     // ============================================================
 
-    // ПРОВЕРКА ТОКЕНА
     async validateToken(token) {
         try {
-            const info = await this.getFileInfo(token);
-            return info && info.id;
+            // Пытаемся получить информацию о файле
+            const response = await this.client.get(`/uploads/${token}`);
+            return response.data && response.data.id;
         } catch (error) {
             return false;
         }
     }
 
-    // ПОЛУЧЕНИЕ СТАТИСТИКИ БОТА
+    async getFileInfo(token) {
+        try {
+            const response = await this.client.get(`/uploads/${token}`);
+            return response.data;
+        } catch (error) {
+            console.error('[MAX] Failed to get file info:', error.message);
+            return null;
+        }
+    }
+
+    async deleteFile(token) {
+        try {
+            const response = await this.client.delete(`/uploads/${token}`);
+            return response.data;
+        } catch (error) {
+            console.error('[MAX] Failed to delete file:', error.message);
+            throw error;
+        }
+    }
+
     async getBotStats() {
         try {
             const response = await this.client.get('/me/stats');
@@ -498,7 +528,6 @@ async uploadFile(filePath, fileType = 'file') {
         }
     }
 
-    // ОТПРАВКА УВЕДОМЛЕНИЯ О НАБОРЕ ТЕКСТА
     async sendTyping(chatId) {
         try {
             await this.client.post('/messages/typing', { chat_id: chatId });
@@ -507,7 +536,6 @@ async uploadFile(filePath, fileType = 'file') {
         }
     }
 
-    // ОТМЕТКА СООБЩЕНИЯ КАК ПРОЧИТАННОГО
     async markAsRead(chatId, messageId) {
         try {
             await this.client.post('/messages/read', {
