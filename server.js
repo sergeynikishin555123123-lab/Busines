@@ -1,4 +1,5 @@
-// server.js - ИСПРАВЛЕННАЯ ВЕРСИЯ (используем userId вместо chatId)
+// server.js - ПОЛНАЯ ВЕРСИЯ С АДМИН-ПАНЕЛЬЮ В БОТЕ MAX
+
 require('dotenv').config();
 
 const express = require('express');
@@ -91,11 +92,15 @@ try {
 async function ensureAdmin() {
     try {
         const admins = database.readTable('admins');
+        
         if (admins.length === 0) {
             console.log('[STARTUP] No admin found, creating default admin...');
+            
             const login = config.admin.defaultLogin || 'admin';
             const password = config.admin.defaultPassword || 'admin123';
+            
             const passwordHash = await bcrypt.hash(password, 12);
+            
             const newAdmin = {
                 id: database.generateId(),
                 login: login,
@@ -104,8 +109,10 @@ async function ensureAdmin() {
                 platform_user_id: null,
                 created_at: database.now(),
             };
+            
             admins.push(newAdmin);
             database.writeTable('admins', admins);
+            
             console.log(`[STARTUP] ✅ Admin created: ${login} / ${password}`);
             logger.info({ login }, 'Default admin created');
         } else {
@@ -276,17 +283,16 @@ const adminSessions = new Map();
 async function handleBotStarted(update) {
     console.log('[HANDLER] handleBotStarted called');
     try {
-        // ВАЖНО: используем user_id из update.user
-        const userId = update.user?.user_id || update.chat_id;
-        if (!userId) return;
+        const chatId = update.chat_id || update.message?.recipient?.chat_id;
+        if (!chatId) return;
 
         const maxApi = new MaxAPI();
         await maxApi.sendKeyboard({
-            chatId: userId, // <-- ИСПОЛЬЗУЕМ USER_ID
+            chatId: chatId,
             text: `👋 **Привет! Я обучающий бот!**\n\nВыбери действие:`,
             buttons: [
-                [{ type: 'callback', text: '📚 Уроки', payload: 'show_lessons' }],
-                [{ type: 'callback', text: '💰 Купить доступ', payload: 'buy_access' }],
+                [{ type: 'callback', text: '📚 Все курсы', payload: 'show_courses' }],
+                [{ type: 'callback', text: '🔐 Админ-панель', payload: 'admin_panel' }],
                 [{ type: 'callback', text: '❓ Помощь', payload: 'show_help' }]
             ],
             parseMode: 'markdown',
@@ -297,27 +303,21 @@ async function handleBotStarted(update) {
 }
 
 // ============================================================
-// ОБРАБОТКА СООБЩЕНИЙ
+// ОБРАБОТКА СООБЩЕНИЙ С ВЛОЖЕНИЯМИ
 // ============================================================
 
 async function handleMessageCreated(update) {
     console.log('[HANDLER] handleMessageCreated called');
     try {
+        const chatId = update.chat_id || update.message?.recipient?.chat_id;
         const message = update.message;
-        const userId = message?.sender?.user_id || update.user?.user_id;
-        const chatIdFromUpdate = update.chat_id || message?.recipient?.chat_id;
         const text = message?.body?.text || message?.text || '';
+        const userId = message?.sender?.user_id || update.user?.user_id;
         const attachments = message?.attachments || [];
 
-        // ВАЖНО: используем userId для отправки сообщений
-        const recipientId = userId || chatIdFromUpdate;
+        console.log(`[HANDLER] chatId: ${chatId}, userId: ${userId}, text: "${text}", attachments: ${attachments.length}`);
 
-        console.log(`[HANDLER] userId: ${userId}, chatId: ${chatIdFromUpdate}, text: "${text}", attachments: ${attachments.length}`);
-
-        if (!recipientId) {
-            console.log('[HANDLER] No recipient found');
-            return;
-        }
+        if (!chatId) return;
 
         const maxApi = new MaxAPI();
 
@@ -325,36 +325,36 @@ async function handleMessageCreated(update) {
         // ОБРАБОТКА ВЛОЖЕНИЙ ОТ АДМИНИСТРАТОРА
         // ============================================================
         if (attachments.length > 0) {
-            const session = adminSessions.get(recipientId);
+            const session = adminSessions.get(chatId);
             if (session && session.mode === 'admin') {
-                await handleAdminAttachment(recipientId, attachments, maxApi);
+                await handleAdminAttachment(chatId, attachments, maxApi);
                 return;
             }
         }
 
         // Админ-режим: ожидание пароля
-        const adminSession = adminSessions.get(recipientId);
+        const adminSession = adminSessions.get(chatId);
         if (adminSession && adminSession.mode === 'awaiting_password') {
-            await handleAdminPassword(recipientId, text, maxApi);
+            await handleAdminPassword(chatId, text, maxApi);
             return;
         }
 
         if (adminSession && adminSession.mode === 'admin') {
-            await handleAdminCommand(recipientId, text, maxApi);
+            await handleAdminCommand(chatId, text, maxApi);
             return;
         }
 
         // Обычные команды
         if (text.startsWith('/start')) {
-            await handleStartCommand(recipientId, userId, text, maxApi);
+            await handleStartCommand(chatId, userId, text, maxApi);
         } else if (text.startsWith('/help')) {
-            await handleHelpCommand(recipientId, maxApi);
+            await handleHelpCommand(chatId, maxApi);
         } else if (text.startsWith('/courses')) {
-            await handleCoursesCommand(recipientId, maxApi);
+            await handleCoursesCommand(chatId, maxApi);
         } else if (text.startsWith('/admin')) {
-            await showAdminLogin(recipientId, maxApi);
+            await showAdminLogin(chatId, maxApi);
         } else {
-            await handleTextMessage(recipientId, userId, text, maxApi);
+            await handleTextMessage(chatId, userId, text, maxApi);
         }
     } catch (error) {
         console.error('[HANDLER] Error in handleMessageCreated:', error);
@@ -369,20 +369,14 @@ async function handleMessageCreated(update) {
 async function handleMessageCallback(update) {
     console.log('[HANDLER] handleMessageCallback called');
     try {
+        const chatId = update.chat_id || update.message?.recipient?.chat_id;
         const callback = update.callback;
         const payload = callback?.payload || '';
-        const userId = update.user?.user_id || update.message?.sender?.user_id;
-        const chatIdFromUpdate = update.chat_id || update.message?.recipient?.chat_id;
+        const userId = update.user?.user_id || update.user?.id || update.message?.sender?.user_id;
 
-        // ВАЖНО: используем userId для отправки сообщений
-        const recipientId = userId || chatIdFromUpdate;
+        console.log(`[HANDLER] Callback: chatId=${chatId}, payload=${payload}`);
 
-        console.log(`[HANDLER] Callback: userId=${userId}, recipientId=${recipientId}, payload=${payload}`);
-
-        if (!recipientId) {
-            console.log('[HANDLER] No recipient found');
-            return;
-        }
+        if (!chatId) return;
 
         const maxApi = new MaxAPI();
 
@@ -390,71 +384,48 @@ async function handleMessageCallback(update) {
         // АДМИН-ПАНЕЛЬ CALLBACK
         // ============================================================
         if (payload === 'admin_panel') {
-            await showAdminLogin(recipientId, maxApi);
+            await showAdminLogin(chatId, maxApi);
             return;
         }
 
         if (payload === 'admin_login') {
-            adminSessions.set(recipientId, { mode: 'awaiting_password' });
+            adminSessions.set(chatId, { mode: 'awaiting_password' });
             await maxApi.sendMessage({
-                chatId: recipientId,
+                chatId: chatId,
                 text: `🔐 **Введите пароль администратора**\n\nОтправьте пароль сообщением.`,
                 parseMode: 'markdown',
             });
             return;
         }
 
-        const adminSession = adminSessions.get(recipientId);
+        const adminSession = adminSessions.get(chatId);
         if (adminSession && adminSession.mode === 'admin') {
-            await handleAdminCallback(recipientId, payload, maxApi);
+            await handleAdminCallback(chatId, payload, maxApi);
             return;
         }
 
-        // ============================================================
-        // НОВЫЕ КНОПКИ
-        // ============================================================
-        if (payload === 'show_lessons') {
-            await showLessons(recipientId, maxApi);
-            return;
-        }
-        
-        if (payload === 'buy_access') {
-            await buyAccess(recipientId, maxApi);
-            return;
-        }
-        
-        if (payload === 'show_help') {
-            await showHelp(recipientId, maxApi);
-            return;
-        }
-        
-        if (payload === 'main_menu') {
-            await handleStartCommand(recipientId, userId, '', maxApi);
-            return;
-        }
-
-        // ============================================================
-        // СТАРЫЕ КНОПКИ
-        // ============================================================
+        // Обычные команды
         if (payload === 'show_courses') {
-            await showCourses(recipientId, maxApi);
+            await showCourses(chatId, maxApi);
+        } else if (payload === 'show_help') {
+            await showHelp(chatId, maxApi);
         } else if (payload.startsWith('course_')) {
             const courseId = payload.replace('course_', '');
-            await showCourseDetails(recipientId, courseId, maxApi);
+            await showCourseDetails(chatId, courseId, maxApi);
         } else if (payload.startsWith('lesson_')) {
             const lessonId = payload.replace('lesson_', '');
-            await sendLessonToUser(recipientId, lessonId, maxApi);
+            await sendLessonToUser(chatId, lessonId, maxApi);
         } else if (payload.startsWith('test_')) {
             const testId = payload.replace('test_', '');
-            await showTest(recipientId, testId, maxApi);
+            await showTest(chatId, testId, maxApi);
         } else if (payload.startsWith('test_answer_')) {
             const parts = payload.split('_');
             const testId = parts[2];
             const answerId = parts[3];
-            await handleTestAnswer(recipientId, testId, answerId, maxApi);
+            await handleTestAnswer(chatId, testId, answerId, maxApi);
         } else {
             await maxApi.sendMessage({
-                chatId: recipientId,
+                chatId: chatId,
                 text: `✅ Вы выбрали: ${payload}`,
                 parseMode: 'markdown',
             });
@@ -462,89 +433,6 @@ async function handleMessageCallback(update) {
     } catch (error) {
         console.error('[HANDLER] Error in handleMessageCallback:', error);
         logger.error({ err: error, update }, 'Error handling message_callback');
-    }
-}
-
-// ============================================================
-// НОВЫЕ ФУНКЦИИ ДЛЯ КНОПОК
-// ============================================================
-
-async function showLessons(chatId, maxApi) {
-    try {
-        const lessons = database.readTable('lessons');
-        
-        if (lessons.length === 0) {
-            await maxApi.sendMessage({
-                chatId: chatId,
-                text: '📚 **Уроки**\n\nПока нет доступных уроков.',
-                parseMode: 'markdown',
-            });
-            return;
-        }
-
-        const freeLessons = lessons.filter(l => l.is_free === true);
-        
-        if (freeLessons.length === 0) {
-            await maxApi.sendMessage({
-                chatId: chatId,
-                text: '📚 **Уроки**\n\nПока нет бесплатных уроков.\n\n💰 Купите доступ, чтобы открыть все уроки!',
-                parseMode: 'markdown',
-            });
-            return;
-        }
-
-        let text = '📚 **Бесплатные уроки**\n\n';
-        const buttons = [];
-
-        freeLessons.forEach((lesson, index) => {
-            text += `${index + 1}. **${lesson.title}**\n`;
-            text += `   ${lesson.description || 'Без описания'}\n\n`;
-            buttons.push([
-                { type: 'callback', text: `📖 ${lesson.title.substring(0, 20)}`, payload: `lesson_${lesson.id}` }
-            ]);
-        });
-
-        buttons.push([
-            { type: 'callback', text: '💰 Купить доступ', payload: 'buy_access' },
-            { type: 'callback', text: '❓ Помощь', payload: 'show_help' }
-        ]);
-
-        await maxApi.sendKeyboard({
-            chatId: chatId,
-            text: text + 'Выберите урок:',
-            buttons: buttons,
-            parseMode: 'markdown',
-        });
-
-    } catch (error) {
-        console.error('[COMMAND] Error in showLessons:', error);
-        await maxApi.sendMessage({
-            chatId: chatId,
-            text: '❌ Ошибка при загрузке уроков.',
-            parseMode: 'markdown',
-        });
-    }
-}
-
-async function buyAccess(chatId, maxApi) {
-    try {
-        const price = 1000;
-        
-        await maxApi.sendMessage({
-            chatId: chatId,
-            text: `💰 **Покупка доступа**\n\nСтоимость: ${price} ₽\n\nВ тестовом режиме доступ открывается автоматически.`,
-            parseMode: 'markdown',
-        });
-        
-        // TODO: Добавить логику оплаты
-        
-    } catch (error) {
-        console.error('[PAYMENT] Error:', error);
-        await maxApi.sendMessage({
-            chatId: chatId,
-            text: '❌ Ошибка при оформлении покупки. Попробуйте позже.',
-            parseMode: 'markdown',
-        });
     }
 }
 
@@ -905,6 +793,7 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
             return;
         }
 
+        const context = session.context || '';
         const lessonId = session.lessonId;
 
         if (!lessonId) {
@@ -919,10 +808,13 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
         for (const attachment of attachments) {
             console.log(`[ADMIN] Attachment type: ${attachment.type}`);
 
+            // Если файл уже в MAX - сохраняем токен
             if (attachment.payload && attachment.payload.token) {
                 const token = attachment.payload.token;
                 const fileType = attachment.type || 'file';
                 const fileName = attachment.payload.filename || 'file';
+
+                console.log(`[ADMIN] File already in MAX: ${fileName}, token: ${token.substring(0, 20)}...`);
 
                 const fileData = {
                     filename: `${token}-${Date.now()}`,
@@ -939,18 +831,68 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
 
                 await maxApi.sendMessage({
                     chatId: chatId,
-                    text: `✅ **Файл загружен!**\n\n📎 ${fileName}`,
+                    text: `✅ **Файл загружен!**\n\n📎 ${fileName}\n🔑 Токен: ${token.substring(0, 20)}...`,
                     parseMode: 'markdown',
                 });
 
                 await showAdminLessonDetail(chatId, lessonId, maxApi);
                 return;
             }
+
+            // Если файл пришел как ссылка
+            if (attachment.payload && attachment.payload.url) {
+                const fileUrl = attachment.payload.url;
+                const fileName = attachment.payload.filename || 'file';
+
+                try {
+                    const response = await axios.get(fileUrl, {
+                        responseType: 'arraybuffer',
+                        timeout: 300000,
+                    });
+
+                    const tempPath = path.join(UPLOADS_DIR, 'temp', `${Date.now()}-${fileName}`);
+                    fs.writeFileSync(tempPath, Buffer.from(response.data));
+
+                    const token = await maxApi.uploadFile(tempPath, 'file');
+                    fs.unlinkSync(tempPath);
+
+                    const fileData = {
+                        filename: `${token}-${Date.now()}`,
+                        originalname: fileName,
+                        size: response.data.length,
+                        mimetype: 'file',
+                        path: token,
+                        url: token,
+                        token: token,
+                        is_max_uploaded: true,
+                    };
+
+                    await lessonService.addLessonFile(lessonId, fileData);
+
+                    await maxApi.sendMessage({
+                        chatId: chatId,
+                        text: `✅ **Файл загружен!**\n\n📎 ${fileName}\n🔑 Токен: ${token.substring(0, 20)}...`,
+                        parseMode: 'markdown',
+                    });
+
+                    await showAdminLessonDetail(chatId, lessonId, maxApi);
+                    return;
+
+                } catch (error) {
+                    console.error('[ADMIN] Error downloading file:', error.message);
+                    await maxApi.sendMessage({
+                        chatId: chatId,
+                        text: `❌ Ошибка загрузки файла: ${error.message}`,
+                        parseMode: 'markdown',
+                    });
+                    return;
+                }
+            }
         }
 
         await maxApi.sendMessage({
             chatId: chatId,
-            text: '❌ Не удалось обработать вложение. Отправьте файл как вложение.',
+            text: `❌ Не удалось обработать вложение. Отправьте файл как вложение.`,
             parseMode: 'markdown',
         });
 
@@ -965,7 +907,7 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
 }
 
 // ============================================================
-// ЗАГРУЗКА ВИДЕО И ФАЙЛОВ
+// ЗАГРУЗКА ВИДЕО И ФАЙЛОВ (запрос от админа)
 // ============================================================
 
 async function handleAdminUploadVideo(chatId, lessonId, maxApi) {
@@ -980,7 +922,9 @@ async function handleAdminUploadVideo(chatId, lessonId, maxApi) {
             chatId: chatId,
             text: `🎬 **Загрузка видео**\n\nОтправьте видео файлом в этот чат.\n\n` +
                   `Поддерживаются: MP4, WebM, MOV\n` +
-                  `Максимальный размер: 250MB`,
+                  `Максимальный размер: 250MB\n` +
+                  `Максимальная длительность: 30 минут\n\n` +
+                  `❗ Видео будет автоматически загружено в MAX.`,
             parseMode: 'markdown',
         });
 
@@ -1055,6 +999,7 @@ async function handleAdminCallback(chatId, payload, maxApi) {
             return;
         }
 
+        // Выход
         if (payload === 'admin_logout') {
             adminSessions.delete(chatId);
             await maxApi.sendMessage({ chatId: chatId, text: `🚪 Вы вышли из админ-панели.`, parseMode: 'markdown' });
@@ -1066,6 +1011,7 @@ async function handleAdminCallback(chatId, payload, maxApi) {
             return;
         }
 
+        // Курсы
         if (payload === 'admin_courses') {
             await handleAdminCourses(chatId, maxApi);
             return;
@@ -1117,6 +1063,7 @@ async function handleAdminCallback(chatId, payload, maxApi) {
             return;
         }
 
+        // Уроки
         if (payload.startsWith('admin_lesson_create_')) {
             const courseId = payload.replace('admin_lesson_create_', '');
             await handleAdminLessonCreate(chatId, courseId, maxApi);
@@ -1173,6 +1120,7 @@ async function handleAdminCallback(chatId, payload, maxApi) {
             return;
         }
 
+        // Статистика
         if (payload === 'admin_stats') {
             const users = database.readTable('users');
             const lessons = database.readTable('lessons');
@@ -1225,6 +1173,7 @@ async function sendLessonToUser(chatId, lessonId, maxApi) {
 
         console.log(`[LESSON] Lesson: ${lesson.title}, Files: ${lesson.files ? lesson.files.length : 0}`);
 
+        // 1. Отправляем видео
         const videoFile = lesson.files?.find(f => f.type === 'video');
         if (videoFile) {
             try {
@@ -1236,6 +1185,16 @@ async function sendLessonToUser(chatId, lessonId, maxApi) {
                         parseMode: 'markdown',
                     });
                     console.log(`[LESSON] ✅ Video sent by token`);
+                } else if (videoFile.path && fs.existsSync(videoFile.path)) {
+                    await maxApi.sendVideo({
+                        chatId: chatId,
+                        videoPath: videoFile.path,
+                        caption: `🎬 **${lesson.title}**\n\n${lesson.description || ''}`,
+                        parseMode: 'markdown',
+                    });
+                    console.log(`[LESSON] ✅ Video sent by path`);
+                } else {
+                    throw new Error('Video not available');
                 }
             } catch (error) {
                 console.error('[LESSON] Failed to send video:', error.message);
@@ -1253,6 +1212,7 @@ async function sendLessonToUser(chatId, lessonId, maxApi) {
             });
         }
 
+        // 2. Отправляем файлы
         const otherFiles = lesson.files?.filter(f => f.type !== 'video') || [];
         for (const file of otherFiles) {
             try {
@@ -1264,12 +1224,21 @@ async function sendLessonToUser(chatId, lessonId, maxApi) {
                         parseMode: 'markdown',
                     });
                     console.log(`[LESSON] ✅ File sent by token: ${file.original_name}`);
+                } else if (file.path && fs.existsSync(file.path)) {
+                    await maxApi.sendFile({
+                        chatId: chatId,
+                        filePath: file.path,
+                        caption: `📎 **${file.original_name}**`,
+                        parseMode: 'markdown',
+                    });
+                    console.log(`[LESSON] ✅ File sent by path: ${file.original_name}`);
                 }
             } catch (error) {
                 console.error('[LESSON] Failed to send file:', error.message);
             }
         }
 
+        // 3. Тест
         const test = await lessonService.getLessonTest(lessonId);
         if (test && test.answers && test.answers.length > 0) {
             await maxApi.sendKeyboard({
@@ -1306,7 +1275,7 @@ async function sendLessonToUser(chatId, lessonId, maxApi) {
 }
 
 // ============================================================
-// ОСТАЛЬНЫЕ ФУНКЦИИ
+// ОСТАЛЬНЫЕ ФУНКЦИИ (КОМАНДЫ, ТЕСТЫ)
 // ============================================================
 
 async function handleStartCommand(chatId, userId, text, maxApi) {
@@ -1314,8 +1283,7 @@ async function handleStartCommand(chatId, userId, text, maxApi) {
         chatId: chatId,
         text: `👋 **Добро пожаловать!**\n\nВыберите действие:`,
         buttons: [
-            [{ type: 'callback', text: '📚 Уроки', payload: 'show_lessons' }],
-            [{ type: 'callback', text: '💰 Купить доступ', payload: 'buy_access' }],
+            [{ type: 'callback', text: '📚 Курсы', payload: 'show_courses' }],
             [{ type: 'callback', text: '❓ Помощь', payload: 'show_help' }]
         ],
         parseMode: 'markdown',
@@ -1339,8 +1307,7 @@ async function handleTextMessage(chatId, userId, text, maxApi) {
         chatId: chatId,
         text: `📝 Я получил сообщение.\n\nЧто хочешь сделать?`,
         buttons: [
-            [{ type: 'callback', text: '📚 Уроки', payload: 'show_lessons' }],
-            [{ type: 'callback', text: '💰 Купить доступ', payload: 'buy_access' }],
+            [{ type: 'callback', text: '📚 Курсы', payload: 'show_courses' }],
             [{ type: 'callback', text: '❓ Помощь', payload: 'show_help' }]
         ],
         parseMode: 'markdown',
@@ -1616,7 +1583,6 @@ app.post('/webhook/max', async (req, res) => {
                         break;
                     case 'bot_added':
                         console.log(`[WEBHOOK] Bot added to chat: ${update.chat_id}`);
-                        await handleBotStarted(update);
                         break;
                     case 'bot_removed':
                         console.log(`[WEBHOOK] Bot removed from chat: ${update.chat_id}`);
