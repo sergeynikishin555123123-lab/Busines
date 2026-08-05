@@ -12,7 +12,7 @@ console.log('[STARTUP] NODE_ENV:', process.env.NODE_ENV);
 console.log('[STARTUP] PORT:', process.env.PORT);
 console.log('[STARTUP] PWD:', process.cwd());
 console.log('[STARTUP] UID:', process.getuid?.() || 'unknown');
-
+   
 const DATA_DIR = process.env.DATA_DIR || '/tmp/data';
 const LOG_DIR = process.env.LOG_DIR || '/tmp/logs';
 const UPLOADS_DIR = process.env.UPLOADS_DIR || '/tmp/uploads';
@@ -71,6 +71,56 @@ try {
     console.error('[STARTUP] DB init error:', error.message);
     process.exit(1);
 }
+
+// ============================================================
+// АВТОМАТИЧЕСКОЕ СОЗДАНИЕ АДМИНА
+// ============================================================
+async function ensureAdmin() {
+    try {
+        const admins = database.readTable('admins');
+        
+        if (admins.length === 0) {
+            console.log('[STARTUP] No admin found, creating default admin...');
+            
+            const bcrypt = require('bcryptjs');
+            const login = config.admin.defaultLogin || 'admin';
+            const password = config.admin.defaultPassword || 'admin123';
+            
+            const passwordHash = await bcrypt.hash(password, 12);
+            
+            const newAdmin = {
+                id: database.generateId(),
+                login: login,
+                password_hash: passwordHash,
+                role: 'superadmin',
+                created_at: database.now(),
+            };
+            
+            admins.push(newAdmin);
+            database.writeTable('admins', admins);
+            
+            console.log(`[STARTUP] ✅ Admin created: ${login} / ${password}`);
+            if (logger && logger.info) {
+                logger.info({ login }, 'Default admin created');
+            }
+        } else {
+            console.log(`[STARTUP] Admin(s) already exist: ${admins.map(a => a.login).join(', ')}`);
+        }
+    } catch (error) {
+        console.error('[STARTUP] Error creating admin:', error.message);
+        // Не останавливаем запуск, просто логируем ошибку
+    }
+}
+
+// Запускаем создание админа СИНХРОННО (без await на верхнем уровне)
+// Используем IIFE (Immediately Invoked Function Expression)
+(async function initAdmin() {
+    await ensureAdmin();
+})();
+
+// ============================================================
+// СОЗДАНИЕ EXPRESS APP
+// ============================================================
 
 const app = express();
 
