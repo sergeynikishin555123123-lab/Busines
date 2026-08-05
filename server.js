@@ -781,7 +781,9 @@ async function showAdminLessonDetail(chatId, lessonId, maxApi) {
     }
 }
 
-// server.js - ТОЛЬКО ЭТУ ФУНКЦИЮ ЗАМЕНИТЬ
+// ============================================================
+// ОБРАБОТКА ВЛОЖЕНИЙ ОТ АДМИНА
+// ============================================================
 
 async function handleAdminAttachment(chatId, attachments, maxApi) {
     try {
@@ -805,12 +807,11 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
 
         for (const attachment of attachments) {
             console.log(`[ADMIN] Attachment type: ${attachment.type}`);
-            console.log(`[ADMIN] Attachment payload:`, JSON.stringify(attachment.payload, null, 2));
 
-            // Если есть токен - используем его (файл уже в MAX)
+            // Если файл уже в MAX - сохраняем токен
             if (attachment.payload && attachment.payload.token) {
                 const token = attachment.payload.token;
-                const fileType = context === 'uploading_video' ? 'video' : 'file';
+                const fileType = attachment.type || 'file';
                 const fileName = attachment.payload.filename || 'file';
 
                 console.log(`[ADMIN] File already in MAX: ${fileName}, token: ${token.substring(0, 20)}...`);
@@ -834,49 +835,14 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
                     parseMode: 'markdown',
                 });
 
-                session.context = 'editing_lesson';
                 await showAdminLessonDetail(chatId, lessonId, maxApi);
                 return;
             }
 
-            // Если есть file_id - используем его как токен
-            if (attachment.payload && attachment.payload.file_id) {
-                const token = attachment.payload.file_id;
-                const fileType = context === 'uploading_video' ? 'video' : 'file';
-                const fileName = attachment.payload.filename || 'file';
-
-                console.log(`[ADMIN] File ID from MAX: ${token}`);
-
-                const fileData = {
-                    filename: `${token}-${Date.now()}`,
-                    originalname: fileName,
-                    size: attachment.payload.size || 0,
-                    mimetype: fileType,
-                    path: token,
-                    url: token,
-                    token: token,
-                    is_max_uploaded: true,
-                };
-
-                await lessonService.addLessonFile(lessonId, fileData);
-
-                await maxApi.sendMessage({
-                    chatId: chatId,
-                    text: `✅ **Файл загружен!**\n\n📎 ${fileName}\n🔑 Токен: ${token.substring(0, 20)}...`,
-                    parseMode: 'markdown',
-                });
-
-                session.context = 'editing_lesson';
-                await showAdminLessonDetail(chatId, lessonId, maxApi);
-                return;
-            }
-
-            // Если есть URL - скачиваем и загружаем
+            // Если файл пришел как ссылка
             if (attachment.payload && attachment.payload.url) {
                 const fileUrl = attachment.payload.url;
                 const fileName = attachment.payload.filename || 'file';
-
-                console.log(`[ADMIN] Downloading file from URL: ${fileUrl}`);
 
                 try {
                     const response = await axios.get(fileUrl, {
@@ -887,16 +853,14 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
                     const tempPath = path.join(UPLOADS_DIR, 'temp', `${Date.now()}-${fileName}`);
                     fs.writeFileSync(tempPath, Buffer.from(response.data));
 
-                    const fileType = context === 'uploading_video' ? 'video' : 'file';
-                    const token = await maxApi.uploadFileWithRetry(tempPath, fileType);
-
+                    const token = await maxApi.uploadFile(tempPath, 'file');
                     fs.unlinkSync(tempPath);
 
                     const fileData = {
                         filename: `${token}-${Date.now()}`,
                         originalname: fileName,
                         size: response.data.length,
-                        mimetype: fileType,
+                        mimetype: 'file',
                         path: token,
                         url: token,
                         token: token,
@@ -911,7 +875,6 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
                         parseMode: 'markdown',
                     });
 
-                    session.context = 'editing_lesson';
                     await showAdminLessonDetail(chatId, lessonId, maxApi);
                     return;
 
@@ -1704,4 +1667,4 @@ const shutdown = (signal) => {
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
-console.log('[STARTUP] ✅ Ready');,
+console.log('[STARTUP] ✅ Ready');
