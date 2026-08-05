@@ -1157,9 +1157,7 @@ async function handleAdminCallback(chatId, payload, maxApi) {
     }
 }
 
-// ============================================================
-// ОТПРАВКА УРОКА ПОЛЬЗОВАТЕЛЮ
-// ============================================================
+// server.js - ИСПРАВЛЕННАЯ ФУНКЦИЯ sendLessonToUser
 
 async function sendLessonToUser(chatId, lessonId, maxApi) {
     try {
@@ -1167,44 +1165,69 @@ async function sendLessonToUser(chatId, lessonId, maxApi) {
         
         const lesson = await lessonService.getLessonWithFiles(lessonId);
         if (!lesson) {
-            await maxApi.sendMessage({ chatId: chatId, text: '❌ Урок не найден', parseMode: 'markdown' });
+            await maxApi.sendMessage({
+                chatId: chatId,
+                text: '❌ Урок не найден',
+                parseMode: 'markdown',
+            });
             return;
         }
 
-        console.log(`[LESSON] Lesson: ${lesson.title}, Files: ${lesson.files ? lesson.files.length : 0}`);
+        console.log(`[LESSON] Lesson: ${lesson.title}`);
+        console.log(`[LESSON] Files: ${lesson.files ? lesson.files.length : 0}`);
 
-        // 1. Отправляем видео
+        // Проверяем наличие видео
         const videoFile = lesson.files?.find(f => f.type === 'video');
+        const otherFiles = lesson.files?.filter(f => f.type !== 'video') || [];
+
+        // ============================================================
+        // 1. ОТПРАВЛЯЕМ ВИДЕО (если есть)
+        // ============================================================
+        let videoSent = false;
+        
         if (videoFile) {
             try {
                 if (videoFile.token) {
+                    // Отправляем по токену MAX
+                    console.log(`[LESSON] Sending video by token: ${videoFile.token.substring(0, 20)}...`);
                     await maxApi.sendVideoByToken({
                         chatId: chatId,
                         token: videoFile.token,
                         caption: `🎬 **${lesson.title}**\n\n${lesson.description || ''}`,
                         parseMode: 'markdown',
                     });
+                    videoSent = true;
                     console.log(`[LESSON] ✅ Video sent by token`);
                 } else if (videoFile.path && fs.existsSync(videoFile.path)) {
+                    // Отправляем через загрузку
+                    console.log(`[LESSON] Sending video by path: ${videoFile.path}`);
                     await maxApi.sendVideo({
                         chatId: chatId,
                         videoPath: videoFile.path,
                         caption: `🎬 **${lesson.title}**\n\n${lesson.description || ''}`,
                         parseMode: 'markdown',
                     });
+                    videoSent = true;
                     console.log(`[LESSON] ✅ Video sent by path`);
                 } else {
-                    throw new Error('Video not available');
+                    console.log(`[LESSON] Video file not available (no token, no path)`);
                 }
             } catch (error) {
                 console.error('[LESSON] Failed to send video:', error.message);
+                // Отправляем текст вместо видео
                 await maxApi.sendMessage({
                     chatId: chatId,
-                    text: `📖 **${lesson.title}**\n\n${lesson.description || ''}\n\n⚠️ Видео недоступно.`,
+                    text: `📖 **${lesson.title}**\n\n${lesson.description || ''}\n\n⚠️ Видео временно недоступно.`,
                     parseMode: 'markdown',
                 });
+                videoSent = true; // Текст отправлен, считаем что контент показан
             }
-        } else {
+        }
+
+        // ============================================================
+        // 2. ЕСЛИ ВИДЕО НЕТ - ОТПРАВЛЯЕМ ОПИСАНИЕ
+        // ============================================================
+        if (!videoFile && !videoSent) {
             await maxApi.sendMessage({
                 chatId: chatId,
                 text: `📖 **${lesson.title}**\n\n${lesson.description || 'Нет описания'}`,
@@ -1212,11 +1235,13 @@ async function sendLessonToUser(chatId, lessonId, maxApi) {
             });
         }
 
-        // 2. Отправляем файлы
-        const otherFiles = lesson.files?.filter(f => f.type !== 'video') || [];
+        // ============================================================
+        // 3. ОТПРАВЛЯЕМ ФАЙЛЫ (кроме видео)
+        // ============================================================
         for (const file of otherFiles) {
             try {
                 if (file.token) {
+                    console.log(`[LESSON] Sending file by token: ${file.original_name}`);
                     await maxApi.sendFileByToken({
                         chatId: chatId,
                         token: file.token,
@@ -1225,6 +1250,7 @@ async function sendLessonToUser(chatId, lessonId, maxApi) {
                     });
                     console.log(`[LESSON] ✅ File sent by token: ${file.original_name}`);
                 } else if (file.path && fs.existsSync(file.path)) {
+                    console.log(`[LESSON] Sending file by path: ${file.original_name}`);
                     await maxApi.sendFile({
                         chatId: chatId,
                         filePath: file.path,
@@ -1234,29 +1260,49 @@ async function sendLessonToUser(chatId, lessonId, maxApi) {
                     console.log(`[LESSON] ✅ File sent by path: ${file.original_name}`);
                 }
             } catch (error) {
-                console.error('[LESSON] Failed to send file:', error.message);
+                console.error(`[LESSON] Failed to send file ${file.original_name}:`, error.message);
+                await maxApi.sendMessage({
+                    chatId: chatId,
+                    text: `📎 **${file.original_name}**\n\nНе удалось отправить файл.`,
+                    parseMode: 'markdown',
+                });
             }
         }
 
-        // 3. Тест
+        // ============================================================
+        // 4. ТЕСТ - КНОПКА "ПРОВЕРИТЬ СЕБЯ"
+        // ============================================================
         const test = await lessonService.getLessonTest(lessonId);
+        
         if (test && test.answers && test.answers.length > 0) {
+            // Есть тест - показываем кнопку
+            const buttons = [
+                [
+                    { type: 'callback', text: '✅ Проверить себя', payload: `test_${test.id}` },
+                ],
+                [
+                    { type: 'callback', text: '📚 Назад к курсу', payload: `course_${lesson.course_id}` },
+                ]
+            ];
+
             await maxApi.sendKeyboard({
                 chatId: chatId,
                 text: `📝 **Готов проверить знания?**\n\nПройти тест по уроку "${lesson.title}"`,
-                buttons: [
-                    [{ type: 'callback', text: '✅ Проверить себя', payload: `test_${test.id}` }],
-                    [{ type: 'callback', text: '📚 Назад к курсу', payload: `course_${lesson.course_id}` }]
-                ],
+                buttons: buttons,
                 parseMode: 'markdown',
             });
         } else {
+            // Нет теста - просто кнопка "Назад"
+            const buttons = [
+                [
+                    { type: 'callback', text: '📚 Назад к курсу', payload: `course_${lesson.course_id}` },
+                ]
+            ];
+
             await maxApi.sendKeyboard({
                 chatId: chatId,
                 text: `✅ Урок завершён!\n\nВы изучили "${lesson.title}"`,
-                buttons: [
-                    [{ type: 'callback', text: '📚 Назад к курсу', payload: `course_${lesson.course_id}` }]
-                ],
+                buttons: buttons,
                 parseMode: 'markdown',
             });
         }
@@ -1266,14 +1312,19 @@ async function sendLessonToUser(chatId, lessonId, maxApi) {
     } catch (error) {
         console.error('[LESSON] Error sending lesson:', error);
         logger.error({ err: error, chatId, lessonId }, 'Failed to send lesson');
-        await maxApi.sendMessage({
-            chatId: chatId,
-            text: '❌ Ошибка при загрузке урока.',
-            parseMode: 'markdown',
-        });
+        
+        // Отправляем сообщение об ошибке
+        try {
+            await maxApi.sendMessage({
+                chatId: chatId,
+                text: '❌ Ошибка при загрузке урока. Попробуйте позже.',
+                parseMode: 'markdown',
+            });
+        } catch (e) {
+            console.error('[LESSON] Failed to send error message:', e);
+        }
     }
 }
-
 // ============================================================
 // ОСТАЛЬНЫЕ ФУНКЦИИ (КОМАНДЫ, ТЕСТЫ)
 // ============================================================
