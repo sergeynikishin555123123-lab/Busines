@@ -276,12 +276,13 @@ class LessonService {
 
     // core/lesson.js - исправленный addLessonFile
 
+// core/lesson.js - ИСПРАВЛЕННЫЙ addLessonFile
+
 async addLessonFile(lessonId, fileData) {
     try {
         const files = database.readTable('lesson_files');
         
         let fileHash = '';
-        // Хешируем только если есть локальный файл
         if (fileData.path && !fileData.is_max_uploaded && fs.existsSync(fileData.path)) {
             try {
                 const fileBuffer = fs.readFileSync(fileData.path);
@@ -302,9 +303,7 @@ async addLessonFile(lessonId, fileData) {
         }
 
         // Если есть токен - это уже загруженный в MAX файл
-        if (fileData.token && fileData.is_max_uploaded) {
-            console.log(`[LESSON] File already in MAX with token: ${fileData.token.substring(0, 20)}...`);
-        }
+        const isMaxUploaded = fileData.is_max_uploaded || !!fileData.token;
 
         const file = {
             id: database.generateId(),
@@ -317,7 +316,7 @@ async addLessonFile(lessonId, fileData) {
             path: fileData.path || fileData.token || '',
             url: fileData.url || null,
             token: fileData.token || null,
-            is_max_uploaded: fileData.is_max_uploaded || false,
+            is_max_uploaded: isMaxUploaded,
             hash: fileHash,
             duration: null,
             created_at: database.now(),
@@ -326,7 +325,9 @@ async addLessonFile(lessonId, fileData) {
         files.push(file);
         database.writeTable('lesson_files', files);
 
-        console.log(`[LESSON] ✅ File added: ${fileData.filename} (${fileType}) to lesson ${lessonId}`);
+        console.log(`[LESSON] ✅ File added: ${fileData.filename} (${fileType}) to lesson ${lessonId}${isMaxUploaded ? ' [MAX]' : ''}`);
+        logger.info({ lessonId, fileId: file.id, type: fileType, isMaxUploaded }, 'Lesson file added');
+
         return file;
 
     } catch (error) {
