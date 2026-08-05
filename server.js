@@ -148,6 +148,13 @@ try {
 
 const MaxAPI = require('./platforms/max');
 
+// ============================================================
+// ПОДКЛЮЧАЕМ АДМИН-ПАНЕЛЬ
+// ============================================================
+const adminRoutes = require('./admin/admin');
+app.use('/admin', adminRoutes);
+console.log('[STARTUP] Admin panel mounted at /admin');
+
 // ============ ОБРАБОТЧИКИ СОБЫТИЙ (ОПРЕДЕЛЕНЫ ДО ИСПОЛЬЗОВАНИЯ) ============
 
 async function handleBotStarted(update) {
@@ -648,10 +655,6 @@ app.get('/admin/logs', (req, res) => {
     }
 });
 
-app.get('/admin', (req, res) => {
-    res.json({ message: 'Admin API' });
-});
-
 // ============ ТЕСТОВЫЙ КУРС ============
 
 app.post('/admin/test-course', async (req, res) => {
@@ -710,6 +713,7 @@ const server = app.listen(PORT, HOST, () => {
     console.log(`[STARTUP] Root: http://${HOST}:${PORT}/`);
     console.log(`[STARTUP] Webhook URL: ${config.server.publicUrl}/webhook/max`);
     console.log(`[STARTUP] Dashboard: ${config.server.publicUrl}/dashboard`);
+    console.log(`[STARTUP] Admin panel: ${config.server.publicUrl}/admin`);
     console.log(`[STARTUP] ✅ Ready`);
 });
 
