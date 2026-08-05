@@ -6,13 +6,13 @@ const path = require('path');
 const helmet = require('helmet');
 const cors = require('cors');
 const fs = require('fs');
-        
+
 console.log('[STARTUP] Starting application...');
 console.log('[STARTUP] NODE_ENV:', process.env.NODE_ENV);
 console.log('[STARTUP] PORT:', process.env.PORT);
 console.log('[STARTUP] PWD:', process.cwd());
 console.log('[STARTUP] UID:', process.getuid?.() || 'unknown');
-   
+
 const DATA_DIR = process.env.DATA_DIR || '/tmp/data';
 const LOG_DIR = process.env.LOG_DIR || '/tmp/logs';
 const UPLOADS_DIR = process.env.UPLOADS_DIR || '/tmp/uploads';
@@ -108,12 +108,10 @@ async function ensureAdmin() {
         }
     } catch (error) {
         console.error('[STARTUP] Error creating admin:', error.message);
-        // Не останавливаем запуск, просто логируем ошибку
     }
 }
 
-// Запускаем создание админа СИНХРОННО (без await на верхнем уровне)
-// Используем IIFE (Immediately Invoked Function Expression)
+// Запускаем создание админа
 (async function initAdmin() {
     await ensureAdmin();
 })();
@@ -153,17 +151,17 @@ try {
 }
 
 try {
-const sessionConfig = {
-    secret: config.session.secret,
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-        maxAge: config.session.maxAge,
-        secure: false,  // <-- ИЗМЕНИ НА false
-        httpOnly: true,
-        sameSite: 'lax',
-    },
-};
+    const sessionConfig = {
+        secret: config.session.secret,
+        resave: false,
+        saveUninitialized: false,
+        cookie: {
+            maxAge: config.session.maxAge,
+            secure: false,
+            httpOnly: true,
+            sameSite: 'lax',
+        },
+    };
 
     if (config.server.nodeEnv === 'production') {
         console.warn('[STARTUP] ⚠️ Using MemoryStore for sessions is not recommended for production');
@@ -196,14 +194,13 @@ try {
     console.warn('[STARTUP] Static files warning:', error.message);
 }
 
-const MaxAPI = require('./platforms/max');
-
-// ============================================================
 // ПОДКЛЮЧАЕМ АДМИН-ПАНЕЛЬ
-// ============================================================
 const adminRoutes = require('./admin/admin');
 app.use('/admin', adminRoutes);
 console.log('[STARTUP] Admin panel mounted at /admin');
+
+const MaxAPI = require('./platforms/max');
+
 
 // ============ ОБРАБОТЧИКИ СОБЫТИЙ (ОПРЕДЕЛЕНЫ ДО ИСПОЛЬЗОВАНИЯ) ============
 
