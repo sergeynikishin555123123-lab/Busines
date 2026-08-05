@@ -314,7 +314,7 @@ async function handleMessageCreated(update) {
         const message = update.message;
         const text = message?.body?.text || message?.text || '';
         const userId = message?.sender?.user_id || update.user?.user_id;
-        const attachments = message?.attachments || [];
+        const attachments = message?.body?.attachments || message?.attachments || [];
         
         // ===== ЛОГИРУЕМ ВСЕ ДАННЫЕ =====
         console.log('[HANDLER] ===== FULL MESSAGE DATA =====');
@@ -325,6 +325,12 @@ async function handleMessageCreated(update) {
         console.log('[HANDLER] message:', JSON.stringify(message, null, 2));
         console.log('[HANDLER] attachments:', JSON.stringify(attachments, null, 2));
         console.log('[HANDLER] ===== END FULL MESSAGE DATA =====');
+        // В начале функции
+console.log('[ADMIN] ===== HANDLE ADMIN ATTACHMENT =====');
+console.log('[ADMIN] chatId:', chatId);
+console.log('[ADMIN] attachments:', JSON.stringify(attachments, null, 2));
+console.log('[ADMIN] session:', JSON.stringify(session, null, 2));
+console.log('[ADMIN] lessonId:', lessonId);
         // =================================
         
         console.log(`[HANDLER] chatId: ${chatId}, userId: ${userId}, text: "${text}", attachments: ${attachments.length}`);
