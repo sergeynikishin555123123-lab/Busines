@@ -274,67 +274,67 @@ class LessonService {
         };
     }
 
-    // ============================================================
-    // УПРАВЛЕНИЕ ФАЙЛАМИ УРОКА
-    // ============================================================
+    // core/lesson.js - исправленный addLessonFile
 
-    async addLessonFile(lessonId, fileData) {
-        try {
-            const files = database.readTable('lesson_files');
-
-            let fileHash = '';
-            if (fileData.path && fs.existsSync(fileData.path)) {
-                try {
-                    const fileBuffer = fs.readFileSync(fileData.path);
-                    fileHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
-                } catch (e) {
-                    console.warn('[LESSON] Could not hash file:', e.message);
-                }
+async addLessonFile(lessonId, fileData) {
+    try {
+        const files = database.readTable('lesson_files');
+        
+        let fileHash = '';
+        // Хешируем только если есть локальный файл
+        if (fileData.path && !fileData.is_max_uploaded && fs.existsSync(fileData.path)) {
+            try {
+                const fileBuffer = fs.readFileSync(fileData.path);
+                fileHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+            } catch (e) {
+                console.warn('[LESSON] Could not hash file:', e.message);
             }
+        }
 
-            let fileType = 'file';
+        // Определяем тип файла
+        let fileType = fileData.type || 'file';
+        if (!fileType || fileType === 'file') {
             if (fileData.mimetype && fileData.mimetype.startsWith('video/')) {
                 fileType = 'video';
             } else if (fileData.mimetype && fileData.mimetype.startsWith('image/')) {
                 fileType = 'image';
-            } else if (fileData.mimetype === 'video' || fileData.mimetype === 'file' || fileData.mimetype === 'image') {
-                fileType = fileData.mimetype;
             }
-
-            // Если есть токен - это уже загруженный в MAX файл
-            if (fileData.token && fileData.is_max_uploaded) {
-                console.log(`[LESSON] File already in MAX with token: ${fileData.token.substring(0, 20)}...`);
-            }
-
-            const file = {
-                id: database.generateId(),
-                lesson_id: lessonId,
-                type: fileType,
-                filename: fileData.filename,
-                original_name: fileData.originalname || fileData.filename,
-                size: fileData.size || 0,
-                mime_type: fileData.mimetype || 'application/octet-stream',
-                path: fileData.path || fileData.url || fileData.token,
-                url: fileData.url,
-                token: fileData.token || null,
-                is_max_uploaded: fileData.is_max_uploaded || false,
-                hash: fileHash,
-                duration: null,
-                created_at: database.now(),
-            };
-
-            files.push(file);
-            database.writeTable('lesson_files', files);
-            console.log(`[LESSON] ✅ File added: ${fileData.filename} (${fileType}) to lesson ${lessonId}`);
-            return file;
-
-        } catch (error) {
-            console.error('[LESSON] Failed to add lesson file:', error);
-            logger.error({ err: error, lessonId, fileData }, 'Failed to add lesson file');
-            throw error;
         }
-    }
 
+        // Если есть токен - это уже загруженный в MAX файл
+        if (fileData.token && fileData.is_max_uploaded) {
+            console.log(`[LESSON] File already in MAX with token: ${fileData.token.substring(0, 20)}...`);
+        }
+
+        const file = {
+            id: database.generateId(),
+            lesson_id: lessonId,
+            type: fileType,
+            filename: fileData.filename || 'file',
+            original_name: fileData.originalname || fileData.filename || 'file',
+            size: fileData.size || 0,
+            mime_type: fileData.mimetype || 'application/octet-stream',
+            path: fileData.path || fileData.token || '',
+            url: fileData.url || null,
+            token: fileData.token || null,
+            is_max_uploaded: fileData.is_max_uploaded || false,
+            hash: fileHash,
+            duration: null,
+            created_at: database.now(),
+        };
+
+        files.push(file);
+        database.writeTable('lesson_files', files);
+
+        console.log(`[LESSON] ✅ File added: ${fileData.filename} (${fileType}) to lesson ${lessonId}`);
+        return file;
+
+    } catch (error) {
+        console.error('[LESSON] Failed to add lesson file:', error);
+        logger.error({ err: error, lessonId, fileData }, 'Failed to add lesson file');
+        throw error;
+    }
+}
     async getLessonFiles(lessonId) {
         try {
             const files = database.readTable('lesson_files');
