@@ -10,7 +10,7 @@ const multer = require('multer');
 
 const database = require('../database');
 const logger = require('../logger');
-const courseService = require('../core/course');
+const courseService = require('../core/course'); 
 const lessonService = require('../core/lesson');
 const userService = require('../core/user');
 const progressService = require('../core/progress');
