@@ -69,24 +69,35 @@ class LessonService {
         };
     }
 
-    async getTestById(testId) {
+   // core/lesson.js - ПРОВЕРКА МЕТОДА getTestById
+
+async getTestById(testId) {
+    try {
         const tests = database.readTable('tests');
         const answers = database.readTable('test_answers');
 
         const test = tests.find(t => t.id === testId);
         if (!test) return null;
 
+        const testAnswers = answers
+            .filter(a => a.test_id === test.id)
+            .map(a => ({
+                id: a.id,
+                answer: a.answer,
+                is_correct: a.is_correct === true,
+            }));
+
+        console.log(`[LESSON] getTestById: ${testId}, answers: ${testAnswers.length}`);
+
         return {
             ...test,
-            answers: answers
-                .filter(a => a.test_id === test.id)
-                .map(a => ({
-                    id: a.id,
-                    answer: a.answer,
-                    is_correct: a.is_correct,
-                })),
+            answers: testAnswers,
         };
+    } catch (error) {
+        console.error('[LESSON] getTestById error:', error);
+        return null;
     }
+}
 
     async checkTestAnswer(testId, answerId, userId) {
         const answers = database.readTable('test_answers');
@@ -391,20 +402,21 @@ class LessonService {
         };
     }
 
-    // ============================================================
-    // УПРАВЛЕНИЕ ТЕСТАМИ
-    // ============================================================
+   // core/lesson.js - ИСПРАВЛЕННЫЙ createTest
 
-    async createTest(lessonId, testData) {
+async createTest(lessonId, testData) {
+    try {
         let tests = database.readTable('tests');
         let answers = database.readTable('test_answers');
 
+        // Удаляем старый тест если есть
         const existingTest = tests.find(t => t.lesson_id === lessonId);
         if (existingTest) {
             answers = answers.filter(a => a.test_id !== existingTest.id);
             tests = tests.filter(t => t.id !== existingTest.id);
         }
 
+        // Создаем новый тест
         const test = {
             id: database.generateId(),
             lesson_id: lessonId,
@@ -412,6 +424,8 @@ class LessonService {
         };
         tests.push(test);
 
+        // Добавляем ответы
+        let addedCount = 0;
         for (const answer of testData.answers || []) {
             if (answer.text && answer.text.trim()) {
                 answers.push({
@@ -420,14 +434,26 @@ class LessonService {
                     answer: answer.text.trim(),
                     is_correct: answer.isCorrect || false,
                 });
+                addedCount++;
             }
         }
 
         database.writeTable('tests', tests);
         database.writeTable('test_answers', answers);
-        logger.info(`Test created for lesson: ${lessonId}, answers: ${answers.length}`);
-        return test;
+        
+        console.log(`[LESSON] Test created for lesson: ${lessonId}, answers: ${addedCount}`);
+        logger.info({ lessonId, testId: test.id, answers: addedCount }, 'Test created');
+
+        // Возвращаем тест с ответами
+        return {
+            ...test,
+            answers: answers.filter(a => a.test_id === test.id),
+        };
+    } catch (error) {
+        console.error('[LESSON] createTest error:', error);
+        throw error;
     }
+}
 
     async updateTest(testId, testData) {
         let tests = database.readTable('tests');
