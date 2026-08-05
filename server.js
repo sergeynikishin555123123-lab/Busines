@@ -1107,16 +1107,24 @@ async function handleAdminTestCreateStep2(chatId, question, maxApi) {
     }
 }
 
+// server.js - ИСПРАВЛЕННАЯ ФУНКЦИЯ handleAdminTestAddAnswer
+
 async function handleAdminTestAddAnswer(chatId, text, maxApi) {
     try {
         const session = adminSessions.get(chatId);
         if (!session || session.context !== 'creating_test_answers') {
+            console.log('[ADMIN] Not in test creation mode');
             return false;
+        }
+
+        // Инициализируем массив, если его нет
+        if (!session.testAnswers) {
+            session.testAnswers = [];
         }
 
         if (text === '/done') {
             // Завершаем создание теста
-            if (session.testAnswers.length < 2) {
+            if (!session.testAnswers || session.testAnswers.length < 2) {
                 await maxApi.sendMessage({
                     chatId: chatId,
                     text: `❌ **Нужно минимум 2 варианта ответа!**\n\nДобавьте ещё варианты.`,
@@ -1125,10 +1133,24 @@ async function handleAdminTestAddAnswer(chatId, text, maxApi) {
                 return true;
             }
 
+            // Проверяем, что есть хотя бы один правильный ответ
+            const hasCorrect = session.testAnswers.some(a => a.isCorrect);
+            if (!hasCorrect) {
+                await maxApi.sendMessage({
+                    chatId: chatId,
+                    text: `❌ **Добавьте хотя бы один правильный ответ!**\n\nДобавьте * (звёздочку) в конце правильного ответа.`,
+                    parseMode: 'markdown',
+                });
+                return true;
+            }
+
+            // СОЗДАЕМ ТЕСТ
             const test = await lessonService.createTest(session.lessonId, {
-                question: session.testQuestion,
+                question: session.testQuestion || 'Проверьте свои знания',
                 answers: session.testAnswers,
             });
+
+            console.log(`[ADMIN] Test created: ${test.id}, answers: ${test.answers.length}`);
 
             session.context = 'editing_lesson';
             session.testAnswers = [];
@@ -1175,6 +1197,11 @@ async function handleAdminTestAddAnswer(chatId, text, maxApi) {
 
     } catch (error) {
         console.error('[ADMIN] Error adding test answer:', error);
+        await maxApi.sendMessage({
+            chatId: chatId,
+            text: `❌ Ошибка при добавлении ответа: ${error.message}`,
+            parseMode: 'markdown',
+        });
         return false;
     }
 }
@@ -1309,9 +1336,7 @@ async function handleAdminUploadFile(chatId, lessonId, maxApi) {
     }
 }
 
-// ============================================================
-// ОБРАБОТКА ВЛОЖЕНИЙ ОТ АДМИНА (ЗАГРУЗКА ФАЙЛОВ В MAX)
-// ============================================================
+// server.js - ИСПРАВЛЕННАЯ ФУНКЦИЯ handleAdminAttachment
 
 async function handleAdminAttachment(chatId, attachments, maxApi) {
     try {
@@ -1335,22 +1360,141 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
 
         for (const attachment of attachments) {
             console.log(`[ADMIN] Attachment type: ${attachment.type}`);
+            console.log(`[ADMIN] Attachment payload:`, JSON.stringify(attachment.payload, null, 2));
 
-            // Проверяем, что это загрузка видео или файла
-            if (context === 'uploading_video' || context === 'uploading_file') {
-                
-                // Вариант 1: Файл уже загружен в MAX (есть токен)
-                if (attachment.payload && attachment.payload.token) {
-                    const token = attachment.payload.token;
-                    const fileType = attachment.type || 'file';
-                    const fileName = attachment.payload.filename || 'file';
+            // ============================================================
+            // ВАРИАНТ 1: Файл уже загружен в MAX (есть токен)
+            // ============================================================
+            if (attachment.payload && attachment.payload.token) {
+                const token = attachment.payload.token;
+                const fileType = attachment.type || 'file';
+                const fileName = attachment.payload.filename || 'file';
 
-                    console.log(`[ADMIN] File already in MAX: ${fileName}, token: ${token.substring(0, 20)}...`);
+                console.log(`[ADMIN] File already in MAX: ${fileName}, token: ${token.substring(0, 20)}...`);
+
+                const fileData = {
+                    filename: `${token}-${Date.now()}`,
+                    originalname: fileName,
+                    size: attachment.payload.size || 0,
+                    mimetype: fileType,
+                    path: token,
+                    url: token,
+                    token: token,
+                    is_max_uploaded: true,
+                };
+
+                await lessonService.addLessonFile(lessonId, fileData);
+
+                await maxApi.sendMessage({
+                    chatId: chatId,
+                    text: `✅ **Файл загружен в MAX!**\n\n📎 ${fileName}\n🔑 Токен: ${token.substring(0, 20)}...`,
+                    parseMode: 'markdown',
+                });
+
+                session.context = 'editing_lesson';
+                await showAdminLessonDetail(chatId, lessonId, maxApi);
+                return;
+            }
+
+            // ============================================================
+            // ВАРИАНТ 2: Файл пришел как file_id (MAX API)
+            // ============================================================
+            if (attachment.payload && attachment.payload.file_id) {
+                const fileId = attachment.payload.file_id;
+                const fileName = attachment.payload.filename || 'file';
+                const fileType = context === 'uploading_video' ? 'video' : 'file';
+
+                console.log(`[ADMIN] File ID from MAX: ${fileId}`);
+
+                // В MAX API file_id - это и есть токен
+                const token = fileId;
+
+                const fileData = {
+                    filename: `${token}-${Date.now()}`,
+                    originalname: fileName,
+                    size: attachment.payload.size || 0,
+                    mimetype: fileType,
+                    path: token,
+                    url: token,
+                    token: token,
+                    is_max_uploaded: true,
+                };
+
+                await lessonService.addLessonFile(lessonId, fileData);
+
+                await maxApi.sendMessage({
+                    chatId: chatId,
+                    text: `✅ **Файл загружен в MAX!**\n\n📎 ${fileName}\n🔑 Токен: ${token.substring(0, 20)}...`,
+                    parseMode: 'markdown',
+                });
+
+                session.context = 'editing_lesson';
+                await showAdminLessonDetail(chatId, lessonId, maxApi);
+                return;
+            }
+
+            // ============================================================
+            // ВАРИАНТ 3: Файл пришел как медиа (video, image, file)
+            // ============================================================
+            if (attachment.payload && attachment.payload.media_id) {
+                const mediaId = attachment.payload.media_id;
+                const fileName = attachment.payload.filename || 'file';
+                const fileType = context === 'uploading_video' ? 'video' : 'file';
+
+                console.log(`[ADMIN] Media ID from MAX: ${mediaId}`);
+
+                const fileData = {
+                    filename: `${mediaId}-${Date.now()}`,
+                    originalname: fileName,
+                    size: attachment.payload.size || 0,
+                    mimetype: fileType,
+                    path: mediaId,
+                    url: mediaId,
+                    token: mediaId,
+                    is_max_uploaded: true,
+                };
+
+                await lessonService.addLessonFile(lessonId, fileData);
+
+                await maxApi.sendMessage({
+                    chatId: chatId,
+                    text: `✅ **Файл загружен в MAX!**\n\n📎 ${fileName}\n🔑 Токен: ${mediaId.substring(0, 20)}...`,
+                    parseMode: 'markdown',
+                });
+
+                session.context = 'editing_lesson';
+                await showAdminLessonDetail(chatId, lessonId, maxApi);
+                return;
+            }
+
+            // ============================================================
+            // ВАРИАНТ 4: Файл пришел как URL
+            // ============================================================
+            if (attachment.payload && attachment.payload.url) {
+                const fileUrl = attachment.payload.url;
+                const fileName = attachment.payload.filename || 'file';
+
+                console.log(`[ADMIN] File URL: ${fileUrl}`);
+
+                try {
+                    // Скачиваем файл
+                    const response = await axios.get(fileUrl, {
+                        responseType: 'arraybuffer',
+                        timeout: 300000,
+                    });
+
+                    const tempPath = path.join(UPLOADS_DIR, 'temp', `${Date.now()}-${fileName}`);
+                    fs.writeFileSync(tempPath, Buffer.from(response.data));
+
+                    const fileType = context === 'uploading_video' ? 'video' : 'file';
+                    const token = await maxApi.uploadFile(tempPath, fileType);
+
+                    fs.unlinkSync(tempPath);
 
                     const fileData = {
                         filename: `${token}-${Date.now()}`,
                         originalname: fileName,
-                        size: attachment.payload.size || 0,
+                        size: response.data.length,
                         mimetype: fileType,
                         path: token,
                         url: token,
@@ -1358,7 +1502,6 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
                         is_max_uploaded: true,
                     };
 
-                    // Сохраняем файл в БД
                     await lessonService.addLessonFile(lessonId, fileData);
 
                     await maxApi.sendMessage({
@@ -1370,100 +1513,14 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
                     session.context = 'editing_lesson';
                     await showAdminLessonDetail(chatId, lessonId, maxApi);
                     return;
-                }
 
-                // Вариант 2: Файл пришел как ссылка (нужно скачать и загрузить в MAX)
-                if (attachment.payload && attachment.payload.url) {
-                    const fileUrl = attachment.payload.url;
-                    const fileName = attachment.payload.filename || 'file';
-
-                    console.log(`[ADMIN] Downloading file from URL: ${fileUrl}`);
-
-                    try {
-                        // Скачиваем файл
-                        const response = await axios.get(fileUrl, {
-                            responseType: 'arraybuffer',
-                            timeout: 300000,
-                        });
-
-                        // Сохраняем временно
-                        const tempPath = path.join(UPLOADS_DIR, 'temp', `${Date.now()}-${fileName}`);
-                        fs.writeFileSync(tempPath, Buffer.from(response.data));
-
-                        // Загружаем в MAX
-                        const fileType = context === 'uploading_video' ? 'video' : 'file';
-                        const token = await maxApi.uploadFile(tempPath, fileType);
-
-                        // Удаляем временный файл
-                        fs.unlinkSync(tempPath);
-
-                        const fileData = {
-                            filename: `${token}-${Date.now()}`,
-                            originalname: fileName,
-                            size: response.data.length,
-                            mimetype: fileType,
-                            path: token,
-                            url: token,
-                            token: token,
-                            is_max_uploaded: true,
-                        };
-
-                        await lessonService.addLessonFile(lessonId, fileData);
-
-                        await maxApi.sendMessage({
-                            chatId: chatId,
-                            text: `✅ **Файл загружен в MAX!**\n\n📎 ${fileName}\n🔑 Токен: ${token.substring(0, 20)}...`,
-                            parseMode: 'markdown',
-                        });
-
-                        session.context = 'editing_lesson';
-                        await showAdminLessonDetail(chatId, lessonId, maxApi);
-                        return;
-
-                    } catch (error) {
-                        console.error('[ADMIN] Error downloading file:', error.message);
-                        await maxApi.sendMessage({
-                            chatId: chatId,
-                            text: `❌ Ошибка загрузки файла: ${error.message}`,
-                            parseMode: 'markdown',
-                        });
-                        return;
-                    }
-                }
-
-                // Вариант 3: Прямая загрузка файла (через multipart/form-data)
-                // В MAX API файлы приходят как attachment с payload.file_id
-                if (attachment.payload && attachment.payload.file_id) {
-                    const fileId = attachment.payload.file_id;
-                    const fileName = attachment.payload.filename || 'file';
-
-                    console.log(`[ADMIN] File ID from MAX: ${fileId}`);
-
-                    // Для MAX API file_id - это и есть токен
-                    const token = fileId;
-                    const fileType = context === 'uploading_video' ? 'video' : 'file';
-
-                    const fileData = {
-                        filename: `${token}-${Date.now()}`,
-                        originalname: fileName,
-                        size: attachment.payload.size || 0,
-                        mimetype: fileType,
-                        path: token,
-                        url: token,
-                        token: token,
-                        is_max_uploaded: true,
-                    };
-
-                    await lessonService.addLessonFile(lessonId, fileData);
-
+                } catch (error) {
+                    console.error('[ADMIN] Error downloading file:', error.message);
                     await maxApi.sendMessage({
                         chatId: chatId,
-                        text: `✅ **Файл загружен в MAX!**\n\n📎 ${fileName}\n🔑 Токен: ${token.substring(0, 20)}...`,
+                        text: `❌ Ошибка загрузки файла: ${error.message}`,
                         parseMode: 'markdown',
                     });
-
-                    session.context = 'editing_lesson';
-                    await showAdminLessonDetail(chatId, lessonId, maxApi);
                     return;
                 }
             }
@@ -2133,21 +2190,51 @@ async function showHelp(chatId, maxApi) {
     });
 }
 
+// server.js - ИСПРАВЛЕННАЯ ФУНКЦИЯ showTest
+
 async function showTest(chatId, testId, maxApi) {
     try {
-        const test = await lessonService.getLessonTest(testId);
-        if (!test || !test.answers || test.answers.length === 0) {
-            await maxApi.sendMessage({ chatId: chatId, text: '❌ Тест не найден', parseMode: 'markdown' });
+        console.log(`[TEST] Showing test: ${testId}`);
+        
+        // Получаем тест по ID
+        const test = await lessonService.getTestById(testId);
+        
+        if (!test) {
+            console.log(`[TEST] Test not found: ${testId}`);
+            await maxApi.sendMessage({ 
+                chatId: chatId, 
+                text: '❌ Тест не найден', 
+                parseMode: 'markdown' 
+            });
             return;
         }
+
+        if (!test.answers || test.answers.length === 0) {
+            await maxApi.sendMessage({ 
+                chatId: chatId, 
+                text: '❌ В тесте нет вопросов', 
+                parseMode: 'markdown' 
+            });
+            return;
+        }
+
+        console.log(`[TEST] Test: ${test.question}, answers: ${test.answers.length}`);
 
         const buttons = [];
         for (const answer of test.answers) {
             buttons.push([
-                { type: 'callback', text: answer.answer || 'Вариант', payload: `test_answer_${testId}_${answer.id}` }
+                { 
+                    type: 'callback', 
+                    text: answer.answer || 'Вариант', 
+                    payload: `test_answer_${test.id}_${answer.id}` 
+                }
             ]);
         }
-        buttons.push([{ type: 'callback', text: '📚 Назад к уроку', payload: `lesson_${test.lesson_id}` }]);
+        buttons.push([{ 
+            type: 'callback', 
+            text: '📚 Назад к уроку', 
+            payload: `lesson_${test.lesson_id}` 
+        }]);
 
         await maxApi.sendKeyboard({
             chatId: chatId,
@@ -2158,6 +2245,11 @@ async function showTest(chatId, testId, maxApi) {
 
     } catch (error) {
         console.error('[TEST] Error showing test:', error);
+        await maxApi.sendMessage({
+            chatId: chatId,
+            text: '❌ Ошибка при загрузке теста',
+            parseMode: 'markdown',
+        });
     }
 }
 
