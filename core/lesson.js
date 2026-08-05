@@ -3,8 +3,16 @@
 
 const database = require('../database');
 const logger = require('../logger');
+const fs = require('fs');           // <-- ДОБАВЛЕНО
+const path = require('path');       // <-- ДОБАВЛЕНО
+const crypto = require('crypto');   // <-- ДОБАВЛЕНО
 
 class LessonService {
+    
+    // ============================================================
+    // БАЗОВЫЕ МЕТОДЫ
+    // ============================================================
+
     async getLessonById(lessonId) {
         const lessons = database.readTable('lessons');
         const courses = database.readTable('courses');
@@ -19,38 +27,33 @@ class LessonService {
         };
     }
 
-   // core/lesson.js - ИСПРАВЛЕННЫЙ МЕТОД getLessonWithFiles
+    async getLessonWithFiles(lessonId) {
+        try {
+            const lesson = await this.getLessonById(lessonId);
+            if (!lesson) return null;
 
-async getLessonWithFiles(lessonId) {
-    try {
-        const lesson = await this.getLessonById(lessonId);
-        if (!lesson) return null;
+            const allFiles = database.readTable('lesson_files');
+            const files = allFiles.filter(f => f.lesson_id === lessonId);
+            
+            console.log(`[LESSON] Found ${files.length} files for lesson ${lessonId}`);
 
-        // Получаем все файлы урока
-        const allFiles = database.readTable('lesson_files');
-        const files = allFiles.filter(f => f.lesson_id === lessonId);
-        
-        console.log(`[LESSON] Found ${files.length} files for lesson ${lessonId}`);
+            const test = await this.getLessonTest(lessonId);
 
-        // Получаем тест
-        const test = await this.getLessonTest(lessonId);
-
-        return {
-            ...lesson,
-            files: files || [],
-            test: test || null,
-        };
-    } catch (error) {
-        console.error('[LESSON] getLessonWithFiles error:', error);
-        return null;
+            return {
+                ...lesson,
+                files: files || [],
+                test: test || null,
+            };
+        } catch (error) {
+            console.error('[LESSON] getLessonWithFiles error:', error);
+            return null;
+        }
     }
-}
 
     async getLessonTest(lessonId) {
         const tests = database.readTable('tests');
         const answers = database.readTable('test_answers');
 
-        // Если передан lessonId, ищем тест для урока
         const test = tests.find(t => t.lesson_id === lessonId);
         if (!test) return null;
 
@@ -66,7 +69,6 @@ async getLessonWithFiles(lessonId) {
         };
     }
 
-    // НОВЫЙ МЕТОД - получение теста по ID
     async getTestById(testId) {
         const tests = database.readTable('tests');
         const answers = database.readTable('test_answers');
@@ -149,7 +151,6 @@ async getLessonWithFiles(lessonId) {
         }
         database.writeTable('lesson_views', views);
 
-        // Обновляем прогресс
         const progress = database.readTable('progress');
         const progExists = progress.find(p => p.user_id === userId && p.lesson_id === lessonId);
 
@@ -166,6 +167,10 @@ async getLessonWithFiles(lessonId) {
             database.writeTable('progress', progress);
         }
     }
+
+    // ============================================================
+    // CRUD УРОКОВ
+    // ============================================================
 
     async createLesson(data) {
         const lessons = database.readTable('lessons');
@@ -216,25 +221,23 @@ async getLessonWithFiles(lessonId) {
         let progress = database.readTable('progress');
         let views = database.readTable('lesson_views');
 
-        // Удаляем файлы
         const lessonFiles = files.filter(f => f.lesson_id === lessonId);
         for (const file of lessonFiles) {
             try {
-                const storageService = require('../services/storage');
-                await storageService.deleteFile(file.url);
+                if (file.path && fs.existsSync(file.path)) {
+                    fs.unlinkSync(file.path);
+                }
             } catch (e) {
-                logger.warn(`Failed to delete file: ${file.url}`, e.message);
+                logger.warn(`Failed to delete file: ${file.path}`, e.message);
             }
         }
 
-        // Удаляем тест
         const test = tests.find(t => t.lesson_id === lessonId);
         if (test) {
             answers = answers.filter(a => a.test_id !== test.id);
             tests = tests.filter(t => t.id !== test.id);
         }
 
-        // Удаляем связанные данные
         files = files.filter(f => f.lesson_id !== lessonId);
         progress = progress.filter(p => p.lesson_id !== lessonId);
         views = views.filter(v => v.lesson_id !== lessonId);
@@ -251,48 +254,151 @@ async getLessonWithFiles(lessonId) {
         return true;
     }
 
-    async addLessonFile(lessonId, fileData) {
-        const files = database.readTable('lesson_files');
+    async getLessonsByCourse(courseId) {
+        const lessons = database.readTable('lessons');
+        return lessons
+            .filter(l => l.course_id === courseId)
+            .sort((a, b) => a.order_number - b.order_number);
+    }
 
-        const file = {
-            id: database.generateId(),
-            lesson_id: lessonId,
-            filename: fileData.filename,
-            url: fileData.url,
-            type: fileData.type || 'application/octet-stream',
-            size: fileData.size || 0,
-            created_at: database.now(),
+    async getAdjacentLessons(lessonId) {
+        const lesson = await this.getLessonById(lessonId);
+        if (!lesson) return { prev: null, next: null };
+
+        const lessons = await this.getLessonsByCourse(lesson.course_id);
+        const currentIndex = lessons.findIndex(l => l.id === lessonId);
+
+        return {
+            prev: currentIndex > 0 ? lessons[currentIndex - 1] : null,
+            next: currentIndex < lessons.length - 1 ? lessons[currentIndex + 1] : null,
         };
+    }
 
-        files.push(file);
-        database.writeTable('lesson_files', files);
-        logger.info(`File added to lesson: ${lessonId}, file: ${fileData.filename}`);
-        return file;
+    // ============================================================
+    // УПРАВЛЕНИЕ ФАЙЛАМИ УРОКА
+    // ============================================================
+
+    async addLessonFile(lessonId, fileData) {
+        try {
+            const files = database.readTable('lesson_files');
+
+            let fileHash = '';
+            if (fileData.path && fs.existsSync(fileData.path)) {
+                try {
+                    const fileBuffer = fs.readFileSync(fileData.path);
+                    fileHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+                } catch (e) {
+                    console.warn('[LESSON] Could not hash file:', e.message);
+                }
+            }
+
+            let fileType = 'file';
+            if (fileData.mimetype && fileData.mimetype.startsWith('video/')) {
+                fileType = 'video';
+            } else if (fileData.mimetype && fileData.mimetype.startsWith('image/')) {
+                fileType = 'image';
+            }
+
+            let duration = null;
+            if (fileType === 'video' && fileData.path && fs.existsSync(fileData.path)) {
+                try {
+                    const { execSync } = require('child_process');
+                    const result = execSync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${fileData.path}"`, {
+                        timeout: 10000
+                    });
+                    duration = parseFloat(result.toString().trim());
+                } catch (e) {
+                    console.warn('[LESSON] Could not get video duration:', e.message);
+                }
+            }
+
+            const file = {
+                id: database.generateId(),
+                lesson_id: lessonId,
+                type: fileType,
+                filename: fileData.filename,
+                original_name: fileData.originalname || fileData.filename,
+                size: fileData.size || 0,
+                mime_type: fileData.mimetype || 'application/octet-stream',
+                path: fileData.path || fileData.url,
+                url: fileData.url,
+                hash: fileHash,
+                duration: duration,
+                created_at: database.now(),
+            };
+
+            files.push(file);
+            database.writeTable('lesson_files', files);
+            console.log(`[LESSON] ✅ File added: ${fileData.filename} (${fileType}) to lesson ${lessonId}`);
+            return file;
+
+        } catch (error) {
+            console.error('[LESSON] Failed to add lesson file:', error);
+            logger.error({ err: error, lessonId, fileData }, 'Failed to add lesson file');
+            throw error;
+        }
+    }
+
+    async getLessonFiles(lessonId) {
+        try {
+            const files = database.readTable('lesson_files');
+            return files.filter(f => f.lesson_id === lessonId);
+        } catch (error) {
+            logger.error({ err: error, lessonId }, 'Failed to get lesson files');
+            return [];
+        }
     }
 
     async deleteLessonFile(fileId) {
-        let files = database.readTable('lesson_files');
-        const file = files.find(f => f.id === fileId);
+        try {
+            let files = database.readTable('lesson_files');
+            const file = files.find(f => f.id === fileId);
 
-        if (file) {
-            try {
-                const storageService = require('../services/storage');
-                await storageService.deleteFile(file.url);
-            } catch (e) {
-                logger.warn(`Failed to delete file: ${file.url}`, e.message);
+            if (file) {
+                if (file.path && fs.existsSync(file.path)) {
+                    try {
+                        fs.unlinkSync(file.path);
+                        console.log(`[LESSON] Deleted file: ${file.path}`);
+                    } catch (e) {
+                        console.warn(`[LESSON] Could not delete file: ${file.path}`, e.message);
+                    }
+                }
+
+                files = files.filter(f => f.id !== fileId);
+                database.writeTable('lesson_files', files);
+                console.log(`[LESSON] File record deleted: ${fileId}`);
+                return true;
             }
-            files = files.filter(f => f.id !== fileId);
-            database.writeTable('lesson_files', files);
-            logger.info(`File deleted: ${fileId}`);
+
+            return false;
+
+        } catch (error) {
+            logger.error({ err: error, fileId }, 'Failed to delete lesson file');
+            throw error;
         }
-        return true;
     }
+
+    async getLessonViewsStats(lessonId) {
+        const views = database.readTable('lesson_views');
+        const lessonViews = views.filter(v => v.lesson_id === lessonId);
+
+        return {
+            totalViews: lessonViews.reduce((sum, v) => sum + (v.view_count || 1), 0),
+            uniqueViewers: lessonViews.length,
+            lastViewed: lessonViews.length > 0
+                ? lessonViews.sort((a, b) => new Date(b.last_viewed_at) - new Date(a.last_viewed_at))[0].last_viewed_at
+                : null,
+        };
+    }
+
+    // ============================================================
+    // УПРАВЛЕНИЕ ТЕСТАМИ
+    // ============================================================
 
     async createTest(lessonId, testData) {
         let tests = database.readTable('tests');
         let answers = database.readTable('test_answers');
 
-        // Удаляем существующий тест
         const existingTest = tests.find(t => t.lesson_id === lessonId);
         if (existingTest) {
             answers = answers.filter(a => a.test_id !== existingTest.id);
@@ -330,17 +436,12 @@ async getLessonWithFiles(lessonId) {
         const testIndex = tests.findIndex(t => t.id === testId);
         if (testIndex === -1) return null;
 
-        // Обновляем вопрос
         if (testData.question !== undefined) {
             tests[testIndex].question = testData.question;
         }
 
-        // Обновляем ответы
         if (testData.answers) {
-            // Удаляем старые ответы
             answers = answers.filter(a => a.test_id !== testId);
-
-            // Добавляем новые
             for (const answer of testData.answers) {
                 if (answer.text && answer.text.trim()) {
                     answers.push({
@@ -385,252 +486,6 @@ async getLessonWithFiles(lessonId) {
             return true;
         }
         return false;
-    }
-
-    async getLessonViewsStats(lessonId) {
-        const views = database.readTable('lesson_views');
-        const lessonViews = views.filter(v => v.lesson_id === lessonId);
-
-        return {
-            totalViews: lessonViews.reduce((sum, v) => sum + (v.view_count || 1), 0),
-            uniqueViewers: lessonViews.length,
-            lastViewed: lessonViews.length > 0
-                ? lessonViews.sort((a, b) => new Date(b.last_viewed_at) - new Date(a.last_viewed_at))[0].last_viewed_at
-                : null,
-        };
-    }
-
-    async getLessonsByCourse(courseId) {
-        const lessons = database.readTable('lessons');
-        return lessons
-            .filter(l => l.course_id === courseId)
-            .sort((a, b) => a.order_number - b.order_number);
-    }
-
-    // Получение следующего и предыдущего урока
-    async getAdjacentLessons(lessonId) {
-        const lesson = await this.getLessonById(lessonId);
-        if (!lesson) return { prev: null, next: null };
-
-        const lessons = await this.getLessonsByCourse(lesson.course_id);
-        const currentIndex = lessons.findIndex(l => l.id === lessonId);
-
-        return {
-            prev: currentIndex > 0 ? lessons[currentIndex - 1] : null,
-            next: currentIndex < lessons.length - 1 ? lessons[currentIndex + 1] : null,
-        };
-    }
-    
- // ============================================================
-    // СОХРАНЕНИЕ ИНФОРМАЦИИ О ФАЙЛЕ
-    // ============================================================
-    async addLessonFile(lessonId, fileData) {
-        try {
-            const files = database.readTable('lesson_files');
-
-            // Вычисляем хэш файла
-            let fileHash = '';
-            if (fileData.path && fs.existsSync(fileData.path)) {
-                const fileBuffer = fs.readFileSync(fileData.path);
-                fileHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
-            }
-
-            // Определяем тип файла
-            let fileType = 'file';
-            if (fileData.mimetype && fileData.mimetype.startsWith('video/')) {
-                fileType = 'video';
-            } else if (fileData.mimetype && fileData.mimetype.startsWith('image/')) {
-                fileType = 'image';
-            }
-
-            // Получаем длительность видео (если это видео)
-            let duration = null;
-            if (fileType === 'video' && fileData.path && fs.existsSync(fileData.path)) {
-                try {
-                    // Используем ffprobe для получения длительности
-                    const { execSync } = require('child_process');
-                    const result = execSync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${fileData.path}"`, {
-                        timeout: 10000
-                    });
-                    duration = parseFloat(result.toString().trim());
-                } catch (e) {
-                    console.warn('[LESSON] Could not get video duration:', e.message);
-                }
-            }
-
-            const file = {
-                id: database.generateId(),
-                lesson_id: lessonId,
-                type: fileType,
-                filename: fileData.filename,
-                original_name: fileData.originalname || fileData.filename,
-                size: fileData.size || 0,
-                mime_type: fileData.mimetype || 'application/octet-stream',
-                path: fileData.path || fileData.url,
-                url: fileData.url,
-                hash: fileHash,
-                duration: duration,
-                created_at: database.now(),
-            };
-
-            files.push(file);
-            database.writeTable('lesson_files', files);
-            logger.info(`[LESSON] File added: ${fileData.filename} (${fileType}) to lesson ${lessonId}`);
-            return file;
-
-        } catch (error) {
-            logger.error({ err: error, lessonId, fileData }, 'Failed to add lesson file');
-            throw error;
-        }
-    }
-
-    // ============================================================
-    // ПОЛУЧЕНИЕ ФАЙЛОВ УРОКА
-    // ============================================================
-    async getLessonFiles(lessonId) {
-        try {
-            const files = database.readTable('lesson_files');
-            return files.filter(f => f.lesson_id === lessonId);
-        } catch (error) {
-            logger.error({ err: error, lessonId }, 'Failed to get lesson files');
-            return [];
-        }
-    }
-
-    // ============================================================
-    // УДАЛЕНИЕ ФАЙЛА
-    // ============================================================
-    async deleteLessonFile(fileId) {
-        try {
-            let files = database.readTable('lesson_files');
-            const file = files.find(f => f.id === fileId);
-
-            if (file) {
-                // Удаляем физический файл
-                if (file.path && fs.existsSync(file.path)) {
-                    try {
-                        fs.unlinkSync(file.path);
-                        logger.info(`[LESSON] Deleted file: ${file.path}`);
-                    } catch (e) {
-                        logger.warn(`[LESSON] Could not delete file: ${file.path}`, e.message);
-                    }
-                }
-
-                files = files.filter(f => f.id !== fileId);
-                database.writeTable('lesson_files', files);
-                logger.info(`[LESSON] File record deleted: ${fileId}`);
-                return true;
-            }
-
-            return false;
-
-        } catch (error) {
-            logger.error({ err: error, fileId }, 'Failed to delete lesson file');
-            throw error;
-        }
-    }
-
-    // ============================================================
-    // ОТПРАВКА УРОКА ПОЛЬЗОВАТЕЛЮ (ВИДЕО + ФАЙЛЫ + ТЕСТ)
-    // ============================================================
-    async sendLessonToUser(lessonId, userId, maxApi) {
-        try {
-            const lesson = await this.getLessonWithFiles(lessonId);
-            if (!lesson) {
-                throw new Error('Lesson not found');
-            }
-
-            const chatId = userId;
-
-            // 1. Отправляем видео (если есть)
-            const videoFile = lesson.files?.find(f => f.type === 'video');
-            if (videoFile && videoFile.path && fs.existsSync(videoFile.path)) {
-                try {
-                    console.log(`[LESSON] Sending video to ${userId}...`);
-                    await maxApi.sendVideo({
-                        chatId: chatId,
-                        videoPath: videoFile.path,
-                        caption: `🎬 **${lesson.title}**\n\n${lesson.description || ''}`,
-                        parseMode: 'markdown',
-                    });
-                    console.log(`[LESSON] Video sent to ${userId}`);
-                } catch (error) {
-                    console.error(`[LESSON] Failed to send video to ${userId}:`, error.message);
-                    // Отправляем сообщение об ошибке
-                    await maxApi.sendMessage({
-                        chatId: chatId,
-                        text: `⚠️ Не удалось отправить видео. Пожалуйста, попробуйте позже.`,
-                        parseMode: 'markdown',
-                    });
-                }
-            }
-
-            // 2. Отправляем файлы (кроме видео)
-            const otherFiles = lesson.files?.filter(f => f.type !== 'video') || [];
-            for (const file of otherFiles) {
-                if (file.path && fs.existsSync(file.path)) {
-                    try {
-                        console.log(`[LESSON] Sending file to ${userId}: ${file.original_name}`);
-                        await maxApi.sendFile({
-                            chatId: chatId,
-                            filePath: file.path,
-                            caption: `📎 **${file.original_name}**\n\nФайл к уроку: ${lesson.title}`,
-                            parseMode: 'markdown',
-                        });
-                        console.log(`[LESSON] File sent to ${userId}`);
-                    } catch (error) {
-                        console.error(`[LESSON] Failed to send file to ${userId}:`, error.message);
-                    }
-                }
-            }
-
-            // 3. Отправляем описание урока (если нет видео)
-            if (!videoFile) {
-                await maxApi.sendMessage({
-                    chatId: chatId,
-                    text: `📖 **${lesson.title}**\n\n${lesson.description || 'Нет описания'}`,
-                    parseMode: 'markdown',
-                });
-            }
-
-            // 4. Отправляем кнопку "Проверить себя" (если есть тест)
-            const test = await this.getLessonTest(lessonId);
-            if (test) {
-                const buttons = [
-                    [
-                        { type: 'callback', text: '✅ Проверить себя', payload: `test_${test.id}` },
-                        { type: 'callback', text: '📚 Назад к курсу', payload: `course_${lesson.course_id}` },
-                    ]
-                ];
-
-                await maxApi.sendKeyboard({
-                    chatId: chatId,
-                    text: `📝 **Готов проверить знания?**\n\nПройти тест по уроку "${lesson.title}"`,
-                    buttons: buttons,
-                    parseMode: 'markdown',
-                });
-            } else {
-                // Если теста нет - просто кнопка назад
-                const buttons = [
-                    [
-                        { type: 'callback', text: '📚 Назад к курсу', payload: `course_${lesson.course_id}` },
-                    ]
-                ];
-
-                await maxApi.sendKeyboard({
-                    chatId: chatId,
-                    text: `✅ Урок завершён!`,
-                    buttons: buttons,
-                    parseMode: 'markdown',
-                });
-            }
-
-            return true;
-
-        } catch (error) {
-            logger.error({ err: error, lessonId, userId }, 'Failed to send lesson to user');
-            throw error;
-        }
     }
 }
 
