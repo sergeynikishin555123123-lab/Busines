@@ -14,15 +14,19 @@ class MaxAPI {
         console.log('[MAX] Base URL:', config.max.baseUrl);
         console.log('[MAX] Token:', config.max.token ? '✅ Set' : '❌ Not set');
 
-        this.client = axios.create({
-            baseURL: config.max.baseUrl,
-            timeout: 30000,
-            headers: {
-                'Authorization': config.max.token,
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
-            },
-        });
+       // platforms/max.js - В конструкторе
+
+this.client = axios.create({
+    baseURL: config.max.baseUrl,
+    timeout: 600000, // 10 минут для больших файлов
+    maxContentLength: Infinity,
+    maxBodyLength: Infinity,
+    headers: {
+        'Authorization': config.max.token,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+    },
+});
 
         this.messageQueues = new Map();
         this.rateLimiter = new RateLimiter(config.rateLimit.messagesPerChatPerSecond, 1000);
