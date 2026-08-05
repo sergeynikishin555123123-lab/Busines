@@ -1,3 +1,5 @@
+// platforms/max.js - ИСПРАВЛЕННАЯ ВЕРСИЯ (работает!)
+
 const axios = require('axios');
 const FormData = require('form-data');
 const fs = require('fs');
@@ -10,20 +12,20 @@ class MaxAPI {
         console.log('[MAX] Initializing API client...');
         console.log('[MAX] Base URL:', config.max.baseUrl);
         console.log('[MAX] Token:', config.max.token ? '✅ Set' : '❌ Not set');
-        
+
         this.client = axios.create({
-            baseURL: config.max.baseUrl,
+            baseURL: config.max.baseUrl,  // https://platform-api2.max.ru
             timeout: 30000,
             headers: {
                 'Authorization': config.max.token,
                 'Content-Type': 'application/json',
+                'Accept': 'application/json',
             },
         });
 
         this.messageQueues = new Map();
         this.rateLimiter = new RateLimiter(config.rateLimit.messagesPerChatPerSecond, 1000);
 
-        // Логирование запросов
         this.client.interceptors.request.use(
             (config) => {
                 console.log(`[MAX] Request: ${config.method.toUpperCase()} ${config.baseURL}${config.url}`);
@@ -46,8 +48,8 @@ class MaxAPI {
             },
             (error) => {
                 if (error.response) {
-                    console.error(`[MAX] Response error: ${error.response.status} ${error.config.url}`);
-                    console.error('[MAX] Response data:', JSON.stringify(error.response.data, null, 2));
+                    console.error(`[MAX] Response error: ${error.response.status} ${error.config?.url}`);
+                    console.error('[MAX] Response data:', error.response.data);
                 } else {
                     console.error('[MAX] Network error:', error.message);
                 }
@@ -65,8 +67,10 @@ class MaxAPI {
         if (!this.messageQueues.has(chatId)) {
             this.messageQueues.set(chatId, []);
         }
+
         const queue = this.messageQueues.get(chatId);
         queue.push(sendFunction);
+
         if (queue.length === 1) {
             await this.processQueue(chatId);
         }
@@ -94,32 +98,34 @@ class MaxAPI {
         }
     }
 
-    // ИСПРАВЛЕННЫЙ МЕТОД ОТПРАВКИ СООБЩЕНИЙ
+    // ============================================================
+    // ОТПРАВКА СООБЩЕНИЯ - chat_id в query параметре
+    // ============================================================
     async sendMessage({ chatId, text, parseMode = 'markdown', attachments = [] }) {
         return this.enqueueMessage(chatId, async () => {
             try {
-                // ПРАВИЛЬНАЯ структура запроса к MAX API
                 const requestData = {
                     text: text,
                     format: parseMode,
                 };
-                
-                // Добавляем attachments только если они есть
+
                 if (attachments && attachments.length > 0) {
                     requestData.attachments = attachments;
                 }
-                
+
+                // ПРАВИЛЬНЫЙ СПОСОБ: chat_id в query параметре
                 const response = await this.client.post('/messages', requestData, {
                     params: {
-                        chat_id: chatId,  // chat_id в query-параметрах
+                        chat_id: chatId
                     }
                 });
-                
-                console.log(`[MAX] Message sent to ${chatId}: ${text.substring(0, 50)}`);
+
+                console.log(`[MAX] ✅ Message sent to ${chatId}: ${text.substring(0, 50)}`);
                 logger.info({ chatId, text: text.substring(0, 50) }, 'Message sent successfully');
                 return response.data;
+
             } catch (error) {
-                console.error(`[MAX] Failed to send message to ${chatId}:`, error.message);
+                console.error(`[MAX] ❌ Failed to send message to ${chatId}:`, error.message);
                 if (error.response) {
                     console.error('[MAX] Error response:', error.response.data);
                 }
@@ -129,7 +135,9 @@ class MaxAPI {
         });
     }
 
-    // ОТПРАВКА КЛАВИАТУРЫ (ИСПРАВЛЕНА)
+    // ============================================================
+    // ОТПРАВКА КЛАВИАТУРЫ
+    // ============================================================
     async sendKeyboard({ chatId, text, buttons, parseMode = 'markdown' }) {
         const attachment = {
             type: 'inline_keyboard',
@@ -140,7 +148,9 @@ class MaxAPI {
         return this.sendMessage({ chatId, text, parseMode, attachments: [attachment] });
     }
 
+    // ============================================================
     // ОТПРАВКА ИЗОБРАЖЕНИЯ
+    // ============================================================
     async sendImage({ chatId, imageToken, caption = '', parseMode = 'markdown' }) {
         const attachment = {
             type: 'image',
@@ -149,7 +159,9 @@ class MaxAPI {
         return this.sendMessage({ chatId, text: caption, parseMode, attachments: [attachment] });
     }
 
+    // ============================================================
     // ОТПРАВКА ВИДЕО
+    // ============================================================
     async sendVideo({ chatId, videoToken, caption = '', parseMode = 'markdown' }) {
         const attachment = {
             type: 'video',
@@ -158,7 +170,9 @@ class MaxAPI {
         return this.sendMessage({ chatId, text: caption, parseMode, attachments: [attachment] });
     }
 
+    // ============================================================
     // ОТПРАВКА ФАЙЛА
+    // ============================================================
     async sendFile({ chatId, fileToken, caption = '', parseMode = 'markdown' }) {
         const attachment = {
             type: 'file',
@@ -167,7 +181,9 @@ class MaxAPI {
         return this.sendMessage({ chatId, text: caption, parseMode, attachments: [attachment] });
     }
 
+    // ============================================================
     // ЗАГРУЗКА ФАЙЛА
+    // ============================================================
     async uploadFile(filePath, fileType = 'file') {
         try {
             const formData = new FormData();
@@ -182,27 +198,34 @@ class MaxAPI {
                 maxContentLength: Infinity,
                 maxBodyLength: Infinity,
             });
+
             logger.info({ filePath, token: response.data.token }, 'File uploaded successfully');
             return response.data.token;
+
         } catch (error) {
             logger.error({ err: error, filePath }, 'Failed to upload file');
             throw error;
         }
     }
 
+    // ============================================================
     // УПРАВЛЕНИЕ ВЕБХУКОМ
+    // ============================================================
     async registerWebhook(webhookUrl, secret = '') {
         try {
             const payload = {
                 url: webhookUrl,
                 update_types: ['message_created', 'bot_started', 'message_callback', 'bot_added', 'bot_removed'],
             };
+
             if (secret) {
                 payload.secret = secret;
             }
+
             const response = await this.client.post('/subscriptions', payload);
             logger.info({ webhookUrl }, 'Webhook registered successfully');
             return response.data;
+
         } catch (error) {
             logger.error({ err: error, webhookUrl }, 'Failed to register webhook');
             throw error;
@@ -232,7 +255,9 @@ class MaxAPI {
         }
     }
 
+    // ============================================================
     // РЕГИСТРАЦИЯ КОМАНД
+    // ============================================================
     async registerCommands(commands) {
         try {
             const response = await this.client.patch('/me/commands', { commands });
@@ -244,6 +269,9 @@ class MaxAPI {
         }
     }
 
+    // ============================================================
+    // ИНФОРМАЦИЯ О БОТЕ
+    // ============================================================
     async getMe() {
         try {
             const response = await this.client.get('/me');
