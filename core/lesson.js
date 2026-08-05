@@ -19,19 +19,32 @@ class LessonService {
         };
     }
 
-    async getLessonWithFiles(lessonId) {
+   // core/lesson.js - ИСПРАВЛЕННЫЙ МЕТОД getLessonWithFiles
+
+async getLessonWithFiles(lessonId) {
+    try {
         const lesson = await this.getLessonById(lessonId);
         if (!lesson) return null;
 
-        const files = database.readTable('lesson_files').filter(f => f.lesson_id === lessonId);
+        // Получаем все файлы урока
+        const allFiles = database.readTable('lesson_files');
+        const files = allFiles.filter(f => f.lesson_id === lessonId);
+        
+        console.log(`[LESSON] Found ${files.length} files for lesson ${lessonId}`);
+
+        // Получаем тест
         const test = await this.getLessonTest(lessonId);
 
         return {
             ...lesson,
-            files,
-            test,
+            files: files || [],
+            test: test || null,
         };
+    } catch (error) {
+        console.error('[LESSON] getLessonWithFiles error:', error);
+        return null;
     }
+}
 
     async getLessonTest(lessonId) {
         const tests = database.readTable('tests');
