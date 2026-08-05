@@ -148,186 +148,12 @@ try {
 
 const MaxAPI = require('./platforms/max');
 
-// ============ РОУТЫ ============
-
-app.get('/', (req, res) => {
-    res.json({
-        name: 'Learning Bot Platform',
-        version: '1.0.0',
-        status: 'running',
-        pid: process.pid,
-        uid: process.getuid?.() || 'unknown',
-        directories: { data: DATA_DIR, logs: LOG_DIR, uploads: UPLOADS_DIR },
-    });
-});
-
-app.get('/health', (req, res) => {
-    res.json({
-        status: 'ok',
-        timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
-        pid: process.pid,
-        memory: process.memoryUsage(),
-    });
-});
-
-// Dashboard
-app.get('/dashboard', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
-});
-
-// ============ MAX WEBHOOK ============
-app.post('/webhook/max', async (req, res) => {
-    console.log('[WEBHOOK] ========== WEBHOOK RECEIVED ==========');
-    console.log('[WEBHOOK] Body:', JSON.stringify(req.body, null, 2));
-    
-    try {
-        const webhookSecret = config.max.webhookSecret;
-        if (webhookSecret) {
-            const received = req.headers['x-max-bot-api-secret'];
-            if (!received || received !== webhookSecret) {
-                console.warn('[WEBHOOK] Invalid secret!');
-                return res.status(401).send('Unauthorized');
-            }
-        }
-
-        // Отправляем 200 OK сразу
-        res.status(200).send('ok');
-        console.log('[WEBHOOK] Sent 200 OK');
-
-        // Обрабатываем событие асинхронно
-        setImmediate(async () => {
-            try {
-                const update = req.body;
-                console.log('[WEBHOOK] Processing update type:', update.update_type);
-                
-                switch (update.update_type) {
-                    case 'bot_started':
-                        console.log('[WEBHOOK] Handling bot_started');
-                        await handleBotStarted(update);
-                        break;
-                    case 'message_created':
-                        console.log('[WEBHOOK] Handling message_created');
-                        await handleMessageCreated(update);
-                        break;
-                    case 'message_callback':
-                        console.log('[WEBHOOK] Handling message_callback');
-                        await handleMessageCallback(update);
-                        break;
-                    case 'bot_added':
-                        console.log(`[WEBHOOK] Bot added to chat: ${update.chat_id}`);
-                        break;
-                    case 'bot_removed':
-                        console.log(`[WEBHOOK] Bot removed from chat: ${update.chat_id}`);
-                        break;
-                    default:
-                        console.log(`[WEBHOOK] Unhandled update type: ${update.update_type}`);
-                }
-                console.log('[WEBHOOK] Processing complete');
-            } catch (error) {
-                console.error('[WEBHOOK] Error processing:', error);
-                logger.error({ err: error, update: req.body }, 'Error processing webhook');
-            }
-        });
-
-    } catch (error) {
-        console.error('[WEBHOOK] Fatal error:', error);
-        res.status(500).send('Internal server error');
-    }
-});
-
-// VK Webhook
-app.post('/webhook/vk', (req, res) => {
-    try {
-        const { type } = req.body;
-        if (type === 'confirmation') {
-            return res.send(config.vk.confirmationToken || 'test');
-        }
-        res.send('ok');
-    } catch (error) {
-        logger.error('VK webhook error:', error.message);
-        res.send('ok');
-    }
-});
-
-// Admin endpoints
-app.post('/admin/register-webhook', async (req, res) => {
-    try {
-        const maxApi = new MaxAPI();
-        const webhookUrl = `${config.server.publicUrl}/webhook/max`;
-        const result = await maxApi.registerWebhook(webhookUrl);
-        res.json({ success: true, result, webhookUrl });
-    } catch (error) {
-        logger.error({ err: error }, 'Failed to register webhook');
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.get('/admin/webhook-info', async (req, res) => {
-    try {
-        const maxApi = new MaxAPI();
-        const info = await maxApi.getWebhookInfo();
-        res.json(info);
-    } catch (error) {
-        logger.error({ err: error }, 'Failed to get webhook info');
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.delete('/admin/webhook', async (req, res) => {
-    try {
-        const maxApi = new MaxAPI();
-        const url = req.query.url;
-        if (url) {
-            await maxApi.deleteWebhook(url);
-        } else {
-            // Если URL не указан, удаляем все подписки
-            const info = await maxApi.getWebhookInfo();
-            if (info && info.subscriptions) {
-                for (const sub of info.subscriptions) {
-                    await maxApi.deleteWebhook(sub.url);
-                }
-            }
-        }
-        res.json({ success: true });
-    } catch (error) {
-        logger.error({ err: error }, 'Failed to delete webhook');
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.get('/admin/logs', (req, res) => {
-    try {
-        const logDir = '/tmp/logs';
-        if (fs.existsSync(logDir)) {
-            const files = fs.readdirSync(logDir);
-            let logs = {};
-            for (const file of files) {
-                if (file.endsWith('.log')) {
-                    const content = fs.readFileSync(path.join(logDir, file), 'utf-8');
-                    logs[file] = content.split('\n').slice(-50).join('\n');
-                }
-            }
-            res.json(logs);
-        } else {
-            res.json({ error: 'Log directory not found' });
-        }
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.get('/admin', (req, res) => {
-    res.json({ message: 'Admin API' });
-});
-
-// ============ ОБРАБОТЧИКИ СОБЫТИЙ ============
+// ============ ОБРАБОТЧИКИ СОБЫТИЙ (ОПРЕДЕЛЕНЫ ДО ИСПОЛЬЗОВАНИЯ) ============
 
 async function handleBotStarted(update) {
     console.log('[HANDLER] handleBotStarted called');
     
     try {
-        // ПРАВИЛЬНОЕ извлечение chat_id
         const chatId = update.chat_id || update.message?.recipient?.chat_id;
         const payload = update.payload || '';
         const userId = update.user?.user_id || update.user?.id || update.message?.sender?.user_id;
@@ -372,57 +198,49 @@ async function handleBotStarted(update) {
     }
 }
 
-async function handleMessageCallback(update) {
-    console.log('[HANDLER] handleMessageCallback called');
+async function handleMessageCreated(update) {
+    console.log('[HANDLER] handleMessageCreated called');
     
     try {
-        // ПРАВИЛЬНОЕ извлечение chat_id
         const chatId = update.chat_id || update.message?.recipient?.chat_id;
-        const callback = update.callback;
-        const payload = callback?.payload || '';
-        const userId = update.user?.user_id || update.user?.id || update.message?.sender?.user_id;
+        const message = update.message;
+        const text = message?.body?.text || message?.text || '';
+        const userId = message?.sender?.user_id || update.user?.user_id;
 
-        console.log(`[HANDLER] Callback: chatId=${chatId}, payload=${payload}`);
-        logger.info({ chatId, userId, payload }, 'Callback received');
+        console.log(`[HANDLER] chatId: ${chatId}, userId: ${userId}, text: "${text}"`);
 
         if (!chatId) {
-            console.log('[HANDLER] No chatId, ignoring');
+            console.log('[HANDLER] No chatId found');
             return;
         }
 
+        if (!text) {
+            console.log('[HANDLER] Empty message, ignoring');
+            return;
+        }
+
+        logger.info({ chatId, userId, text: text.substring(0, 50) }, 'Message received');
+
         const maxApi = new MaxAPI();
 
-        if (payload === 'show_courses') {
-            console.log('[HANDLER] Showing courses');
-            await showCourses(chatId, maxApi);
-        } else if (payload === 'show_help') {
-            console.log('[HANDLER] Showing help');
-            await maxApi.sendMessage({
-                chatId: chatId,
-                text: `📚 **Помощь по боту**\n\n` +
-                      `/start - Начать обучение\n` +
-                      `/help - Показать это сообщение\n` +
-                      `/courses - Показать список курсов\n\n` +
-                      `Просто напиши мне сообщение, и я помогу!`,
-                parseMode: 'markdown',
-            });
-        } else if (payload.startsWith('course_')) {
-            const courseId = payload.replace('course_', '');
-            console.log(`[HANDLER] Showing course: ${courseId}`);
-            await showCourseDetails(chatId, courseId, maxApi);
+        if (text.startsWith('/start')) {
+            console.log('[HANDLER] Handling /start command');
+            await handleStartCommand(chatId, userId, text, maxApi);
+        } else if (text.startsWith('/help')) {
+            console.log('[HANDLER] Handling /help command');
+            await handleHelpCommand(chatId, maxApi);
+        } else if (text.startsWith('/courses')) {
+            console.log('[HANDLER] Handling /courses command');
+            await handleCoursesCommand(chatId, maxApi);
         } else {
-            console.log(`[HANDLER] Unknown payload: ${payload}`);
-            await maxApi.sendMessage({
-                chatId: chatId,
-                text: `✅ Вы выбрали: ${payload}`,
-                parseMode: 'markdown',
-            });
+            console.log('[HANDLER] Handling text message');
+            await handleTextMessage(chatId, userId, text, maxApi);
         }
-        console.log('[HANDLER] Callback handling complete');
+        console.log('[HANDLER] Message handling complete');
 
     } catch (error) {
-        console.error('[HANDLER] Error in handleMessageCallback:', error);
-        logger.error({ err: error, update }, 'Error handling message_callback');
+        console.error('[HANDLER] Error in handleMessageCreated:', error);
+        logger.error({ err: error, update }, 'Error handling message_created');
     }
 }
 
@@ -430,10 +248,10 @@ async function handleMessageCallback(update) {
     console.log('[HANDLER] handleMessageCallback called');
     
     try {
-        const chatId = update.chat_id;
+        const chatId = update.chat_id || update.message?.recipient?.chat_id;
         const callback = update.callback;
         const payload = callback?.payload || '';
-        const userId = update.user?.user_id || update.user?.id;
+        const userId = update.user?.user_id || update.user?.id || update.message?.sender?.user_id;
 
         console.log(`[HANDLER] Callback: chatId=${chatId}, payload=${payload}`);
         logger.info({ chatId, userId, payload }, 'Callback received');
@@ -664,6 +482,175 @@ async function handleTextMessage(chatId, userId, text, maxApi) {
         throw error;
     }
 }
+
+// ============ РОУТЫ ============
+
+app.get('/', (req, res) => {
+    res.json({
+        name: 'Learning Bot Platform',
+        version: '1.0.0',
+        status: 'running',
+        pid: process.pid,
+        uid: process.getuid?.() || 'unknown',
+        directories: { data: DATA_DIR, logs: LOG_DIR, uploads: UPLOADS_DIR },
+    });
+});
+
+app.get('/health', (req, res) => {
+    res.json({
+        status: 'ok',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        pid: process.pid,
+        memory: process.memoryUsage(),
+    });
+});
+
+app.get('/dashboard', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
+});
+
+// ============ MAX WEBHOOK ============
+app.post('/webhook/max', async (req, res) => {
+    console.log('[WEBHOOK] ========== WEBHOOK RECEIVED ==========');
+    console.log('[WEBHOOK] Body:', JSON.stringify(req.body, null, 2));
+    
+    try {
+        const webhookSecret = config.max.webhookSecret;
+        if (webhookSecret) {
+            const received = req.headers['x-max-bot-api-secret'];
+            if (!received || received !== webhookSecret) {
+                console.warn('[WEBHOOK] Invalid secret!');
+                return res.status(401).send('Unauthorized');
+            }
+        }
+
+        res.status(200).send('ok');
+        console.log('[WEBHOOK] Sent 200 OK');
+
+        setImmediate(async () => {
+            try {
+                const update = req.body;
+                console.log('[WEBHOOK] Processing update type:', update.update_type);
+                
+                switch (update.update_type) {
+                    case 'bot_started':
+                        console.log('[WEBHOOK] Handling bot_started');
+                        await handleBotStarted(update);
+                        break;
+                    case 'message_created':
+                        console.log('[WEBHOOK] Handling message_created');
+                        await handleMessageCreated(update);
+                        break;
+                    case 'message_callback':
+                        console.log('[WEBHOOK] Handling message_callback');
+                        await handleMessageCallback(update);
+                        break;
+                    case 'bot_added':
+                        console.log(`[WEBHOOK] Bot added to chat: ${update.chat_id}`);
+                        break;
+                    case 'bot_removed':
+                        console.log(`[WEBHOOK] Bot removed from chat: ${update.chat_id}`);
+                        break;
+                    default:
+                        console.log(`[WEBHOOK] Unhandled update type: ${update.update_type}`);
+                }
+                console.log('[WEBHOOK] Processing complete');
+            } catch (error) {
+                console.error('[WEBHOOK] Error processing:', error);
+                logger.error({ err: error, update: req.body }, 'Error processing webhook');
+            }
+        });
+
+    } catch (error) {
+        console.error('[WEBHOOK] Fatal error:', error);
+        res.status(500).send('Internal server error');
+    }
+});
+
+// VK Webhook
+app.post('/webhook/vk', (req, res) => {
+    try {
+        const { type } = req.body;
+        if (type === 'confirmation') {
+            return res.send(config.vk.confirmationToken || 'test');
+        }
+        res.send('ok');
+    } catch (error) {
+        logger.error('VK webhook error:', error.message);
+        res.send('ok');
+    }
+});
+
+// Admin endpoints
+app.post('/admin/register-webhook', async (req, res) => {
+    try {
+        const maxApi = new MaxAPI();
+        const webhookUrl = `${config.server.publicUrl}/webhook/max`;
+        const result = await maxApi.registerWebhook(webhookUrl);
+        res.json({ success: true, result, webhookUrl });
+    } catch (error) {
+        logger.error({ err: error }, 'Failed to register webhook');
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/admin/webhook-info', async (req, res) => {
+    try {
+        const maxApi = new MaxAPI();
+        const info = await maxApi.getWebhookInfo();
+        res.json(info);
+    } catch (error) {
+        logger.error({ err: error }, 'Failed to get webhook info');
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.delete('/admin/webhook', async (req, res) => {
+    try {
+        const maxApi = new MaxAPI();
+        const url = req.query.url;
+        if (url) {
+            await maxApi.deleteWebhook(url);
+        } else {
+            const info = await maxApi.getWebhookInfo();
+            if (info && info.subscriptions) {
+                for (const sub of info.subscriptions) {
+                    await maxApi.deleteWebhook(sub.url);
+                }
+            }
+        }
+        res.json({ success: true });
+    } catch (error) {
+        logger.error({ err: error }, 'Failed to delete webhook');
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/admin/logs', (req, res) => {
+    try {
+        const logDir = '/tmp/logs';
+        if (fs.existsSync(logDir)) {
+            const files = fs.readdirSync(logDir);
+            let logs = {};
+            for (const file of files) {
+                if (file.endsWith('.log')) {
+                    const content = fs.readFileSync(path.join(logDir, file), 'utf-8');
+                    logs[file] = content.split('\n').slice(-50).join('\n');
+                }
+            }
+            res.json(logs);
+        } else {
+            res.json({ error: 'Log directory not found' });
+        }
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/admin', (req, res) => {
+    res.json({ message: 'Admin API' });
+});
 
 // ============ ТЕСТОВЫЙ КУРС ============
 
