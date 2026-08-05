@@ -64,7 +64,11 @@ const upload = multer({
 // ============================================================
 
 function checkAuth(req, res, next) {
+    console.log('[ADMIN] checkAuth, session:', req.session);
+    console.log('[ADMIN] adminId:', req.session?.adminId);
+    
     if (req.session && req.session.adminId) {
+        console.log('[ADMIN] Auth OK, user:', req.session.adminLogin);
         return next();
     }
     res.redirect('/admin/login');
@@ -82,7 +86,7 @@ async function getAdmin(req) {
 
 router.get('/login', (req, res) => {
     if (req.session && req.session.adminId) {
-        return res.redirect('/admin');
+        return res.redirect('/admin/');
     }
     res.send(`
 <!DOCTYPE html>
@@ -224,7 +228,16 @@ router.post('/login', async (req, res) => {
         req.session.adminRole = admin.role;
 
         logger.info({ login, role: admin.role }, 'Admin logged in');
-        res.redirect('/admin');
+
+        // СОХРАНЯЕМ СЕССИЮ ЯВНО ПЕРЕД РЕДИРЕКТОМ
+        req.session.save((err) => {
+            if (err) {
+                console.error('[ADMIN] Session save error:', err);
+                return res.redirect('/admin/login?error=' + encodeURIComponent('Ошибка сессии'));
+            }
+            console.log('[ADMIN] Session saved, redirecting to /admin/');
+            res.redirect('/admin/');
+        });
 
     } catch (error) {
         logger.error({ err: error }, 'Login error');
