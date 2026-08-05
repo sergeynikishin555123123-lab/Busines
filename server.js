@@ -251,6 +251,8 @@ async function handleMessageCreated(update) {
     }
 }
 
+// server.js - ДОБАВЛЯЕМ В handleMessageCallback
+
 async function handleMessageCallback(update) {
     console.log('[HANDLER] handleMessageCallback called');
     
@@ -269,6 +271,7 @@ async function handleMessageCallback(update) {
         }
 
         const maxApi = new MaxAPI();
+        const lessonService = require('./core/lesson');
 
         if (payload === 'show_courses') {
             console.log('[HANDLER] Showing courses');
@@ -288,6 +291,20 @@ async function handleMessageCallback(update) {
             const courseId = payload.replace('course_', '');
             console.log(`[HANDLER] Showing course: ${courseId}`);
             await showCourseDetails(chatId, courseId, maxApi);
+        } else if (payload.startsWith('lesson_')) {
+            const lessonId = payload.replace('lesson_', '');
+            console.log(`[HANDLER] Sending lesson: ${lessonId}`);
+            // ОТПРАВЛЯЕМ УРОК С ВИДЕО И ФАЙЛАМИ
+            await lessonService.sendLessonToUser(lessonId, chatId, maxApi);
+        } else if (payload.startsWith('test_')) {
+            const testId = payload.replace('test_', '');
+            console.log(`[HANDLER] Showing test: ${testId}`);
+            // TODO: Показываем тест
+            await maxApi.sendMessage({
+                chatId: chatId,
+                text: `📝 **Тест**\n\nФункция в разработке`,
+                parseMode: 'markdown',
+            });
         } else {
             console.log(`[HANDLER] Unknown payload: ${payload}`);
             await maxApi.sendMessage({
