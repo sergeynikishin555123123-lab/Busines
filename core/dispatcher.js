@@ -1,6 +1,4 @@
-// core/dispatcher.js
-// ДИСПЕТЧЕР СООБЩЕНИЙ - маршрутизирует входящие сообщения с платформ
-
+// core/dispatcher.js - НОВАЯ ВЕРСИЯ
 const database = require('../database');
 const logger = require('../logger');
 const courseService = require('./course');
@@ -17,20 +15,16 @@ class Dispatcher {
     }
 
     registerHandlers() {
-        // Регистрируем обработчики команд
         this.handlers.set('/start', this.handleStart.bind(this));
         this.handlers.set('/help', this.handleHelp.bind(this));
-        this.handlers.set('/courses', this.handleCourses.bind(this));
-        this.handlers.set('/mycourses', this.handleMyCourses.bind(this));
-        this.handlers.set('/progress', this.handleProgress.bind(this));
+        this.handlers.set('/admin', this.handleAdminLogin.bind(this)); // <-- КОМАНДА ДЛЯ АДМИНКИ
     }
 
-    // ГЛАВНЫЙ МЕТОД - точка входа для всех сообщений
+    // ============================================================
+    // ГЛАВНЫЙ МЕТОД
+    // ============================================================
     async handleMessage(platform, userId, message, payload = null) {
         try {
-            logger.info({ platform, userId, message: message?.substring(0, 50) }, 'Dispatching message');
-
-            // Получаем или создаем пользователя
             const user = await userService.getOrCreateUser(platform, userId, {
                 firstName: message?.from?.first_name || '',
                 lastName: message?.from?.last_name || '',
@@ -53,780 +47,632 @@ class Dispatcher {
 
             // Обычное текстовое сообщение
             return await this.handleText(platform, user, message);
-
         } catch (error) {
             logger.error({ err: error, platform, userId }, 'Dispatcher error');
             throw error;
         }
     }
 
-    // ОБРАБОТКА КОМАНД
-
+    // ============================================================
+    // КОМАНДЫ
+    // ============================================================
     async handleStart(platform, user, message) {
         const maxApi = new MaxAPI();
         const chatId = user.platform_user_id;
-
-        // Проверяем, есть ли deep link
-        const parts = message.split(' ');
-        const payload = parts.length > 1 ? parts[1] : null;
-
-        let text = '👋 **Добро пожаловать в обучающий бот!**\n\n';
-        text += 'Я помогу тебе освоить новые знания. Выбери действие:';
-
+        const text = '👋 **Добро пожаловать в обучающий бот!**\n\nВыберите действие:';
         const buttons = [
-            [
-                { type: 'callback', text: '📚 Мои курсы', payload: 'my_courses' },
-                { type: 'callback', text: '📚 Все курсы', payload: 'all_courses' },
-            ],
-            [
-                { type: 'callback', text: '📊 Прогресс', payload: 'show_progress' },
-                { type: 'callback', text: '❓ Помощь', payload: 'show_help' },
-            ]
+            [{ type: 'callback', text: '📚 Уроки', payload: 'show_lessons' }],
+            [{ type: 'callback', text: '💰 Купить доступ', payload: 'buy_access' }],
+            [{ type: 'callback', text: '❓ Помощь', payload: 'show_help' }]
         ];
-
-        // Если есть deep link с курсом
-        if (payload && payload.startsWith('course_')) {
-            const courseId = payload.replace('course_', '');
-            const course = await courseService.getCourseById(courseId);
-            if (course) {
-                text = `👋 **Добро пожаловать!**\n\n`;
-                text += `Вы перешли по ссылке на курс:\n`;
-                text += `📚 **${course.title}**\n`;
-                text += `\nВыберите действие:`;
-            }
-        }
-
-        await maxApi.sendKeyboard({
-            chatId: chatId,
-            text: text,
-            buttons: buttons,
-            parseMode: 'markdown',
-        });
-
-        // Логируем событие
-        await this.logUserAction(user.id, 'start', { message });
+        await maxApi.sendKeyboard({ chatId, text, buttons, parseMode: 'markdown' });
+        await this.logUserAction(user.id, 'start');
     }
 
     async handleHelp(platform, user, message) {
         const maxApi = new MaxAPI();
         const chatId = user.platform_user_id;
+        const text = `📚 **Помощь**
 
-        const text = `📚 **Помощь по боту**
-
-/start - Начать работу
+/start - Главное меню
 /help - Показать это сообщение
-/courses - Список всех курсов
-/mycourses - Мои курсы
-/progress - Мой прогресс
+/admin - Админ-панель
 
 **Как пользоваться:**
-1. Выберите курс из списка
-2. Изучайте уроки по порядку
-3. Проходите тесты после каждого урока
-4. Следите за своим прогрессом
+1. Изучайте бесплатные уроки
+2. Купите доступ ко всем урокам
+3. Проходите тесты после каждого урока`;
+        await maxApi.sendMessage({ chatId, text, parseMode: 'markdown' });
+    }
 
-**Поддержка:** @support`;
+    // ============================================================
+    // АДМИН-ПАНЕЛЬ (в боте)
+    // ============================================================
+    // Хранилище сессий администраторов (временно, пока не переписали server.js)
+    adminSessions = new Map();
+
+    async handleAdminLogin(platform, user, message) {
+        const maxApi = new MaxAPI();
+        const chatId = user.platform_user_id;
+        const session = this.adminSessions.get(chatId);
+
+        // Если уже авторизован - показываем админку
+        if (session && session.mode === 'admin') {
+            return await this.showAdminDashboard(platform, user);
+        }
+
+        // Запрашиваем пароль
+        this.adminSessions.set(chatId, { mode: 'awaiting_password' });
+        await maxApi.sendMessage({
+            chatId,
+            text: '🔐 **Введите пароль администратора**\n\nОтправьте пароль сообщением.',
+            parseMode: 'markdown'
+        });
+    }
+
+    async handleAdminPassword(platform, user, password) {
+        const maxApi = new MaxAPI();
+        const chatId = user.platform_user_id;
+        const admins = database.readTable('admins');
+        const bcrypt = require('bcryptjs');
+
+        let admin = null;
+        for (const a of admins) {
+            if (await bcrypt.compare(password, a.password_hash)) {
+                admin = a;
+                break;
+            }
+        }
+
+        if (!admin) {
+            this.adminSessions.delete(chatId);
+            await maxApi.sendMessage({
+                chatId,
+                text: '❌ **Неверный пароль!** Попробуйте снова через /admin',
+                parseMode: 'markdown'
+            });
+            return;
+        }
+
+        this.adminSessions.set(chatId, {
+            mode: 'admin',
+            adminId: admin.id,
+            login: admin.login,
+            role: admin.role,
+            context: 'dashboard'
+        });
 
         await maxApi.sendMessage({
-            chatId: chatId,
-            text: text,
-            parseMode: 'markdown',
+            chatId,
+            text: `✅ **Добро пожаловать в админ-панель, ${admin.login}!**`,
+            parseMode: 'markdown'
         });
-
-        await this.logUserAction(user.id, 'help');
+        await this.showAdminDashboard(platform, user);
     }
 
-    async handleCourses(platform, user, message) {
-        await this.showAllCourses(platform, user);
-    }
-
-    async handleMyCourses(platform, user, message) {
-        await this.showMyCourses(platform, user);
-    }
-
-    async handleProgress(platform, user, message) {
-        await this.showProgress(platform, user);
-    }
-
-    // ПОКАЗ КУРСОВ
-
-    async showAllCourses(platform, user) {
+    async showAdminDashboard(platform, user) {
         const maxApi = new MaxAPI();
         const chatId = user.platform_user_id;
-
-        const courses = await courseService.getAllCourses(true);
-
-        if (courses.length === 0) {
-            await maxApi.sendMessage({
-                chatId: chatId,
-                text: '📚 **Курсы**\n\nПока нет доступных курсов. Загляните позже!',
-                parseMode: 'markdown',
-            });
-            return;
+        const session = this.adminSessions.get(chatId);
+        if (!session || session.mode !== 'admin') {
+            return await this.handleAdminLogin(platform, user, '');
         }
 
-        let text = '📚 **Все доступные курсы**\n\n';
-        const buttons = [];
+        const courses = await courseService.getAllCourses(false);
+        const lessons = database.readTable('lessons');
+        const users = database.readTable('users');
 
-        for (let i = 0; i < courses.length; i++) {
-            const course = courses[i];
-            const lessons = await courseService.getCourseLessons(course.id);
-            const freeLessons = lessons.filter(l => l.is_free).length;
-            const paidLessons = lessons.length - freeLessons;
+        const text = `🔐 **Админ-панель**
 
-            text += `${i + 1}. **${course.title}**\n`;
-            text += `   ${course.description || 'Без описания'}\n`;
-            text += `   📖 ${lessons.length} уроков`;
-            if (course.price > 0) {
-                text += ` | 💰 ${course.price} руб.`;
-            } else {
-                text += ` | 🆓 Бесплатно`;
-            }
-            if (freeLessons > 0) {
-                text += ` | 🆓 ${freeLessons} бесплатных`;
-            }
-            text += '\n\n';
+👤 ${session.login} (${session.role})
+📚 Всего курсов: ${courses.length}
+📖 Всего уроков: ${lessons.length}
+👤 Пользователей: ${users.length}
 
-            buttons.push([
-                {
-                    type: 'callback',
-                    text: `📖 ${course.title.substring(0, 25)}`,
-                    payload: `course_${course.id}`
-                }
-            ]);
-        }
-
-        buttons.push([
-            { type: 'callback', text: '❓ Помощь', payload: 'show_help' }
-        ]);
-
-        await maxApi.sendKeyboard({
-            chatId: chatId,
-            text: text + 'Выберите курс для изучения:',
-            buttons: buttons,
-            parseMode: 'markdown',
-        });
-    }
-
-    async showMyCourses(platform, user) {
-        const maxApi = new MaxAPI();
-        const chatId = user.platform_user_id;
-
-        // Получаем курсы, к которым есть доступ
-        const access = await courseService.getUserFullCourseAccess(user.id);
-        const allCourses = await courseService.getAllCourses(true);
-
-        // Бесплатные курсы доступны всем
-        const freeCourses = allCourses.filter(c => c.price === 0);
-        const paidAccessCourses = access.map(a => a.course_id);
-        const availableCourses = allCourses.filter(c => 
-            c.price === 0 || paidAccessCourses.includes(c.id)
-        );
-
-        if (availableCourses.length === 0) {
-            await maxApi.sendMessage({
-                chatId: chatId,
-                text: '📚 **Мои курсы**\n\nУ вас пока нет доступных курсов.\nВыберите курсы из общего списка: /courses',
-                parseMode: 'markdown',
-            });
-            return;
-        }
-
-        let text = '📚 **Мои курсы**\n\n';
-        const buttons = [];
-
-        for (const course of availableCourses) {
-            const lessons = await courseService.getCourseLessons(course.id);
-            const progress = await progressService.getUserProgress(user.id);
-            const completedLessons = progress.filter(p => 
-                p.status === 'completed' && 
-                lessons.some(l => l.id === p.lesson_id)
-            ).length;
-
-            const isPaid = course.price > 0;
-            const hasAccess = course.price === 0 || paidAccessCourses.includes(course.id);
-
-            text += `**${course.title}**\n`;
-            text += `   📖 ${completedLessons}/${lessons.length} уроков пройдено\n`;
-            if (isPaid && !hasAccess) {
-                text += `   🔒 Требуется покупка: ${course.price} руб.\n`;
-            } else if (isPaid) {
-                text += `   ✅ Доступ открыт\n`;
-            } else {
-                text += `   🆓 Бесплатный курс\n`;
-            }
-            text += '\n';
-
-            if (hasAccess || course.price === 0) {
-                buttons.push([
-                    {
-                        type: 'callback',
-                        text: `📖 ${course.title.substring(0, 25)}`,
-                        payload: `course_${course.id}`
-                    }
-                ]);
-            }
-        }
-
-        buttons.push([
-            { type: 'callback', text: '📚 Все курсы', payload: 'all_courses' },
-            { type: 'callback', text: '❓ Помощь', payload: 'show_help' }
-        ]);
-
-        await maxApi.sendKeyboard({
-            chatId: chatId,
-            text: text + 'Выберите курс для продолжения:',
-            buttons: buttons,
-            parseMode: 'markdown',
-        });
-    }
-
-    async showProgress(platform, user) {
-        const maxApi = new MaxAPI();
-        const chatId = user.platform_user_id;
-
-        const summary = await progressService.getProgressSummary(user.id);
-        const recentActivity = await progressService.getLastActivity(user.id);
-
-        let text = '📊 **Мой прогресс**\n\n';
-        text += `📚 Всего уроков: ${summary.totalLessons}\n`;
-        text += `✅ Пройдено: ${summary.completedLessons}\n`;
-        text += `📈 Прогресс: ${summary.totalLessons > 0 ? Math.round(summary.completedLessons / summary.totalLessons * 100) : 0}%\n\n`;
-
-        if (summary.totalFreeLessons > 0) {
-            text += `🆓 Бесплатных уроков: ${summary.totalFreeLessons}\n`;
-            text += `✅ Пройдено бесплатных: ${summary.completedFreeLessons}\n\n`;
-        }
-
-        if (recentActivity) {
-            text += `🕐 Последняя активность: ${new Date(recentActivity).toLocaleDateString('ru-RU')}\n`;
-        }
-
-        // Получаем последние просмотренные уроки
-        const progress = await progressService.getUserProgress(user.id);
-        const recent = progress.slice(0, 5);
-
-        if (recent.length > 0) {
-            text += '\n**Последние уроки:**\n';
-            for (const p of recent) {
-                const status = p.status === 'completed' ? '✅' : '📖';
-                text += `${status} ${p.lesson_title}\n`;
-            }
-        }
+Выберите действие:`;
 
         const buttons = [
-            [
-                { type: 'callback', text: '📚 Мои курсы', payload: 'my_courses' },
-                { type: 'callback', text: '📚 Все курсы', payload: 'all_courses' },
-            ],
-            [
-                { type: 'callback', text: '❓ Помощь', payload: 'show_help' }
-            ]
+            [{ type: 'callback', text: '📖 Создать урок', payload: 'admin_create_lesson' }],
+            [{ type: 'callback', text: '✏️ Редактировать уроки', payload: 'admin_edit_lessons' }],
+            [{ type: 'callback', text: '📊 Статистика', payload: 'admin_stats' }],
+            [{ type: 'callback', text: '🚪 Выйти', payload: 'admin_logout' }]
         ];
-
-        await maxApi.sendKeyboard({
-            chatId: chatId,
-            text: text,
-            buttons: buttons,
-            parseMode: 'markdown',
-        });
+        await maxApi.sendKeyboard({ chatId, text, buttons, parseMode: 'markdown' });
     }
 
-    // ОБРАБОТКА CALLBACK (нажатий кнопок)
-
-    async handleCallback(platform, user, payload) {
+    // Обработка админ-команд в CALLBACK
+    async handleAdminCallback(platform, user, payload) {
         const maxApi = new MaxAPI();
         const chatId = user.platform_user_id;
+        const session = this.adminSessions.get(chatId);
 
-        logger.info({ userId: user.id, payload }, 'Handling callback');
-
-        // Разбираем payload
-        if (payload === 'all_courses') {
-            return await this.showAllCourses(platform, user);
+        if (!session || session.mode !== 'admin') {
+            await this.handleAdminLogin(platform, user, '');
+            return;
         }
 
-        if (payload === 'my_courses') {
-            return await this.showMyCourses(platform, user);
+        // Выход
+        if (payload === 'admin_logout') {
+            this.adminSessions.delete(chatId);
+            await maxApi.sendMessage({ chatId, text: '🚪 Вы вышли из админ-панели.', parseMode: 'markdown' });
+            return;
         }
 
-        if (payload === 'show_progress') {
-            return await this.showProgress(platform, user);
+        // Статистика
+        if (payload === 'admin_stats') {
+            const users = database.readTable('users');
+            const lessons = database.readTable('lessons');
+            const courses = await courseService.getAllCourses(false);
+            const payments = database.readTable('payments');
+            const progress = database.readTable('progress');
+            const courseAccess = database.readTable('user_course_access');
+
+            const text = `📊 **Статистика**
+
+👤 Пользователей: ${users.length}
+📚 Курсов: ${courses.length}
+📖 Уроков: ${lessons.length}
+✅ Пройдено уроков: ${progress.filter(p => p.status === 'completed').length}
+💳 Оплат: ${payments.filter(p => p.status === 'success').length}
+💰 Выручка: ${payments.filter(p => p.status === 'success').reduce((s, p) => s + (p.amount || 0), 0)} ₽
+🔓 Купили доступ: ${courseAccess.length}`;
+
+            const buttons = [[{ type: 'callback', text: '⬅️ Назад', payload: 'admin_back' }]];
+            await maxApi.sendKeyboard({ chatId, text, buttons, parseMode: 'markdown' });
+            return;
         }
 
-        if (payload === 'show_help') {
-            return await this.handleHelp(platform, user, '');
-        }
-
-        if (payload === 'back_to_course') {
-            // Возврат к курсу - нужно сохранить последний курс в сессии пользователя
-            // Пока просто показываем все курсы
-            return await this.showAllCourses(platform, user);
-        }
-
-        if (payload === 'back_to_lessons') {
-            // Возврат к списку уроков
-            // Нужно сохранять контекст - пока просто показываем курсы
-            return await this.showAllCourses(platform, user);
-        }
-
-        // Проверка ответа на тест
-        if (payload.startsWith('test_')) {
-            return await this.handleTestAnswer(platform, user, payload);
-        }
-
-        // Показ курса
-        if (payload.startsWith('course_')) {
-            const courseId = payload.replace('course_', '');
-            return await this.showCourse(platform, user, courseId);
-        }
-
-        // Показ урока
-        if (payload.startsWith('lesson_')) {
-            const lessonId = payload.replace('lesson_', '');
-            return await this.showLesson(platform, user, lessonId);
-        }
-
-        // Покупка курса
-        if (payload.startsWith('buy_')) {
-            const courseId = payload.replace('buy_', '');
-            return await this.buyCourse(platform, user, courseId);
-        }
-
-        // Если ничего не подошло
-        await maxApi.sendMessage({
-            chatId: chatId,
-            text: `❓ Неизвестная команда: ${payload}\n\nПожалуйста, используйте кнопки меню.`,
-            parseMode: 'markdown',
-        });
-    }
-
-    // ПОКАЗ КУРСА
-
-    async showCourse(platform, user, courseId) {
-        const maxApi = new MaxAPI();
-        const chatId = user.platform_user_id;
-
-        const course = await courseService.getCourseById(courseId);
-        if (!course) {
+        // Создание урока
+        if (payload === 'admin_create_lesson') {
+            session.context = 'creating_lesson';
             await maxApi.sendMessage({
-                chatId: chatId,
-                text: '❌ Курс не найден',
-                parseMode: 'markdown',
+                chatId,
+                text: '📝 **Создание урока**\n\nВведите **название** урока:',
+                parseMode: 'markdown'
             });
             return;
         }
 
-        const lessons = await courseService.getCourseLessons(courseId);
-        const hasAccess = await this.checkCourseAccess(user.id, courseId);
-
-        let text = `📚 **${course.title}**\n\n`;
-        text += `${course.description || 'Без описания'}\n\n`;
-        text += `📖 Всего уроков: ${lessons.length}\n`;
-
-        if (course.price > 0) {
-            text += `💰 Стоимость: ${course.price} руб.\n`;
-            text += hasAccess ? '✅ Доступ открыт\n' : '🔒 Требуется покупка\n';
-        } else {
-            text += '🆓 Бесплатный курс\n';
-        }
-        text += '\n';
-
-        // Показываем уроки
-        if (hasAccess || course.price === 0) {
-            text += '**Уроки:**\n';
-            const buttons = [];
-
-            for (const lesson of lessons) {
-                // Проверяем, пройден ли урок
-                const progress = await progressService.getUserProgress(user.id);
-                const lessonProgress = progress.find(p => p.lesson_id === lesson.id);
-                const status = lessonProgress?.status === 'completed' ? '✅' : 
-                              lessonProgress?.status === 'started' ? '📖' : '⬜';
-
-                text += `${status} ${lesson.title}`;
-                if (lesson.is_free) {
-                    text += ' 🆓';
-                }
-                text += '\n';
-
-                // Добавляем кнопку для каждого урока, если есть доступ
-                if (hasAccess || lesson.is_free || course.price === 0) {
-                    buttons.push([
-                        {
-                            type: 'callback',
-                            text: `${status} ${lesson.title.substring(0, 30)}`,
-                            payload: `lesson_${lesson.id}`
-                        }
-                    ]);
-                }
+        // Редактирование уроков - показываем список
+        if (payload === 'admin_edit_lessons') {
+            const lessons = database.readTable('lessons');
+            if (lessons.length === 0) {
+                await maxApi.sendMessage({
+                    chatId,
+                    text: '❌ Нет созданных уроков. Создайте урок через "Создать урок".',
+                    parseMode: 'markdown'
+                });
+                return;
             }
-            text += '\n';
-
-            // Кнопки управления
-            const navButtons = [
-                [
-                    { type: 'callback', text: '📚 Мои курсы', payload: 'my_courses' },
-                    { type: 'callback', text: '📊 Прогресс', payload: 'show_progress' },
-                ],
-                [
-                    { type: 'callback', text: '❓ Помощь', payload: 'show_help' }
-                ]
-            ];
-
-            buttons.push(...navButtons);
-
+            const buttons = lessons.map(l => [
+                { type: 'callback', text: `✏️ ${l.title.substring(0, 30)}`, payload: `admin_edit_lesson_${l.id}` }
+            ]);
+            buttons.push([{ type: 'callback', text: '⬅️ Назад', payload: 'admin_back' }]);
             await maxApi.sendKeyboard({
-                chatId: chatId,
-                text: text,
-                buttons: buttons,
-                parseMode: 'markdown',
+                chatId,
+                text: '📖 **Выберите урок для редактирования:**',
+                buttons,
+                parseMode: 'markdown'
             });
-
-        } else {
-            // Курс платный и доступа нет
-            text += '🔒 **Для доступа к урокам необходимо приобрести курс**\n\n';
-            
-            const buttons = [
-                [
-                    { type: 'callback', text: `💳 Купить за ${course.price} руб.`, payload: `buy_${course.id}` },
-                ],
-                [
-                    { type: 'callback', text: '📚 Все курсы', payload: 'all_courses' },
-                    { type: 'callback', text: '❓ Помощь', payload: 'show_help' },
-                ]
-            ];
-
-            await maxApi.sendKeyboard({
-                chatId: chatId,
-                text: text,
-                buttons: buttons,
-                parseMode: 'markdown',
-            });
+            return;
         }
 
-        await this.logUserAction(user.id, 'view_course', { courseId });
+        // Редактирование конкретного урока
+        if (payload.startsWith('admin_edit_lesson_')) {
+            const lessonId = payload.replace('admin_edit_lesson_', '');
+            session.context = 'editing_lesson';
+            session.lessonId = lessonId;
+            await this.showEditLessonForm(chatId, lessonId, maxApi);
+            return;
+        }
+
+        if (payload === 'admin_back') {
+            await this.showAdminDashboard(platform, user);
+        }
     }
 
-    // ПОКАЗ УРОКА
+    // Форма редактирования урока
+    async showEditLessonForm(chatId, lessonId, maxApi) {
+        const lesson = await lessonService.getLessonWithFiles(lessonId);
+        if (!lesson) {
+            await maxApi.sendMessage({ chatId, text: '❌ Урок не найден', parseMode: 'markdown' });
+            return;
+        }
 
+        const files = await lessonService.getLessonFiles(lessonId);
+        const videoFile = files.find(f => f.type === 'video');
+        const otherFiles = files.filter(f => f.type !== 'video');
+
+        let text = `✏️ **Редактирование урока: ${lesson.title}**
+
+📝 Название: ${lesson.title}
+📄 Описание: ${lesson.description || 'Нет'}
+🎬 Видео: ${videoFile ? '✅ Загружено' : '❌ Нет'}
+📎 Файлы: ${otherFiles.length}
+🆓 ${lesson.is_free ? 'Бесплатный' : 'Платный'}
+
+Отправьте новые данные:`;
+
+        const buttons = [
+            [{ type: 'callback', text: '✏️ Изменить название', payload: `admin_lesson_edit_title_${lessonId}` }],
+            [{ type: 'callback', text: '✏️ Изменить описание', payload: `admin_lesson_edit_desc_${lessonId}` }],
+            [{ type: 'callback', text: '🎬 Загрузить видео', payload: `admin_lesson_upload_video_${lessonId}` }],
+            [{ type: 'callback', text: '📎 Загрузить файл', payload: `admin_lesson_upload_file_${lessonId}` }],
+            [{ type: 'callback', text: '🔄 Переключить доступ', payload: `admin_lesson_toggle_free_${lessonId}` }],
+            [{ type: 'callback', text: '📝 Редактировать тест', payload: `admin_lesson_edit_test_${lessonId}` }],
+            [{ type: 'callback', text: '🗑️ Удалить урок', payload: `admin_lesson_delete_${lessonId}` }],
+            [{ type: 'callback', text: '⬅️ Назад', payload: 'admin_edit_lessons' }]
+        ];
+        await maxApi.sendKeyboard({ chatId, text, buttons, parseMode: 'markdown' });
+    }
+
+    // ============================================================
+    // ПОКАЗ УРОКОВ (только бесплатные, если доступ не куплен)
+    // ============================================================
+    async showLessons(platform, user) {
+        const maxApi = new MaxAPI();
+        const chatId = user.platform_user_id;
+
+        // Проверяем, куплен ли доступ
+        const hasAccess = await courseService.checkUserCourseAccess(user.id, 'course_1'); // Используем ID курса
+
+        let lessons;
+        if (hasAccess) {
+            // Если доступ есть - показываем ВСЕ уроки курса
+            lessons = await courseService.getCourseLessons('course_1');
+        } else {
+            // Иначе - только бесплатные
+            lessons = await courseService.getFreeLessons();
+            // Фильтруем по курсу
+            lessons = lessons.filter(l => l.course_id === 'course_1');
+        }
+
+        if (!lessons || lessons.length === 0) {
+            await maxApi.sendMessage({
+                chatId,
+                text: hasAccess ? '❌ В курсе пока нет уроков.' : '📚 **Бесплатные уроки**\n\nПока нет бесплатных уроков. Купите доступ, чтобы открыть все уроки!',
+                parseMode: 'markdown'
+            });
+            return;
+        }
+
+        let text = hasAccess ? '📚 **Все уроки**' : '📚 **Бесплатные уроки**';
+        const buttons = [];
+        for (const lesson of lessons) {
+            buttons.push([
+                { type: 'callback', text: `📖 ${lesson.title}`, payload: `lesson_${lesson.id}` }
+            ]);
+        }
+        buttons.push([{ type: 'callback', text: '⬅️ Главное меню', payload: 'main_menu' }]);
+
+        await maxApi.sendKeyboard({ chatId, text, buttons, parseMode: 'markdown' });
+    }
+
+    // ============================================================
+    // ПОКАЗ УРОКА (видео, файл, описание, тест)
+    // ============================================================
     async showLesson(platform, user, lessonId) {
         const maxApi = new MaxAPI();
         const chatId = user.platform_user_id;
+        const lesson = await lessonService.getLessonWithFiles(lessonId);
 
-        const lesson = await lessonService.getLessonById(lessonId);
         if (!lesson) {
-            await maxApi.sendMessage({
-                chatId: chatId,
-                text: '❌ Урок не найден',
-                parseMode: 'markdown',
-            });
-            return;
-        }
-
-        // Проверяем доступ к уроку
-        const hasAccess = await this.checkLessonAccess(user.id, lessonId);
-        if (!hasAccess) {
-            await maxApi.sendMessage({
-                chatId: chatId,
-                text: '🔒 Урок недоступен. Приобретите курс для доступа ко всем урокам.',
-                parseMode: 'markdown',
-            });
+            await maxApi.sendMessage({ chatId, text: '❌ Урок не найден', parseMode: 'markdown' });
             return;
         }
 
         // Записываем просмотр
         await lessonService.recordLessonView(user.id, lessonId);
 
-        // Получаем полную информацию об уроке
-        const lessonWithFiles = await lessonService.getLessonWithFiles(lessonId);
-        const test = await lessonService.getLessonTest(lessonId);
+        // 1. Отправляем описание
+        let text = `📖 **${lesson.title}**\n\n${lesson.description || 'Описание отсутствует.'}`;
+        await maxApi.sendMessage({ chatId, text, parseMode: 'markdown' });
 
-        let text = `📖 **${lesson.title}**\n\n`;
-        text += `${lesson.description || ''}\n\n`;
-
-        // Отправляем видео, если есть
-        if (lesson.video_url) {
+        // 2. Отправляем видео (если есть)
+        const videoFile = lesson.files?.find(f => f.type === 'video');
+        if (videoFile) {
             try {
-                // Пытаемся отправить как видео через MAX
-                // Если это ссылка, пробуем загрузить и отправить
-                await maxApi.sendMessage({
-                    chatId: chatId,
-                    text: `🎬 **Видео к уроку**\n\nСсылка: ${lesson.video_url}`,
-                    parseMode: 'markdown',
-                });
-            } catch (error) {
-                logger.error({ err: error, lessonId }, 'Failed to send video');
-                // Отправляем ссылку как запасной вариант
-                await maxApi.sendMessage({
-                    chatId: chatId,
-                    text: `🎬 **Видео к уроку**\n\n${lesson.video_url}`,
-                    parseMode: 'markdown',
-                });
-            }
-        }
-
-        // Отправляем файлы, если есть
-        if (lessonWithFiles.files && lessonWithFiles.files.length > 0) {
-            for (const file of lessonWithFiles.files) {
-                try {
-                    await maxApi.sendMessage({
-                        chatId: chatId,
-                        text: `📎 **Файл:** ${file.filename}\n\nСсылка: ${file.url}`,
-                        parseMode: 'markdown',
-                    });
-                } catch (error) {
-                    logger.error({ err: error, fileId: file.id }, 'Failed to send file');
+                if (videoFile.token) {
+                    await maxApi.sendVideoByToken({ chatId, token: videoFile.token, caption: '🎬 **Видео к уроку**' });
+                } else if (videoFile.path && fs.existsSync(videoFile.path)) {
+                    // Если файл на сервере - загружаем в MAX
+                    const token = await maxApi.uploadFile(videoFile.path, 'video');
+                    await maxApi.sendVideoByToken({ chatId, token, caption: '🎬 **Видео к уроку**' });
                 }
+            } catch (error) {
+                console.error('[LESSON] Failed to send video:', error.message);
+                await maxApi.sendMessage({ chatId, text: '⚠️ Видео недоступно.', parseMode: 'markdown' });
             }
         }
 
-        // Кнопки навигации
-        const buttons = [];
-
-        // Если есть тест, добавляем кнопку "Проверить себя"
-        if (test) {
-            buttons.push([
-                { type: 'callback', text: '✅ Проверить себя', payload: `test_${test.id}` }
-            ]);
+        // 3. Отправляем файлы
+        const otherFiles = lesson.files?.filter(f => f.type !== 'video') || [];
+        for (const file of otherFiles) {
+            try {
+                if (file.token) {
+                    await maxApi.sendFileByToken({ chatId, token: file.token, caption: `📎 ${file.original_name}` });
+                } else if (file.path && fs.existsSync(file.path)) {
+                    const token = await maxApi.uploadFile(file.path, 'file');
+                    await maxApi.sendFileByToken({ chatId, token, caption: `📎 ${file.original_name}` });
+                }
+            } catch (error) {
+                console.error('[LESSON] Failed to send file:', error.message);
+            }
         }
 
-        // Навигация
-        buttons.push([
-            { type: 'callback', text: '📚 Вернуться к курсу', payload: `course_${lesson.course_id}` },
-        ]);
-        buttons.push([
-            { type: 'callback', text: '📚 Мои курсы', payload: 'my_courses' },
-            { type: 'callback', text: '❓ Помощь', payload: 'show_help' },
-        ]);
-
+        // 4. Тест
+        const test = await lessonService.getLessonTest(lessonId);
+        const buttons = [];
+        if (test && test.answers && test.answers.length > 0) {
+            buttons.push([{ type: 'callback', text: '✅ Проверить себя', payload: `test_${test.id}` }]);
+        }
+        buttons.push([{ type: 'callback', text: '📚 Назад к урокам', payload: 'show_lessons' }]);
         await maxApi.sendKeyboard({
-            chatId: chatId,
-            text: text + 'Выберите действие:',
-            buttons: buttons,
-            parseMode: 'markdown',
+            chatId,
+            text: '📝 **Что дальше?**',
+            buttons,
+            parseMode: 'markdown'
         });
-
-        await this.logUserAction(user.id, 'view_lesson', { lessonId });
     }
 
+    // ============================================================
     // ТЕСТЫ
+    // ============================================================
+    async showTest(platform, user, testId) {
+        const maxApi = new MaxAPI();
+        const chatId = user.platform_user_id;
+        const test = await lessonService.getLessonTest(testId);
+
+        if (!test || !test.answers || test.answers.length === 0) {
+            await maxApi.sendMessage({ chatId, text: '❌ Тест не найден', parseMode: 'markdown' });
+            return;
+        }
+
+        const buttons = test.answers.map(a => [
+            { type: 'callback', text: a.answer, payload: `test_answer_${testId}_${a.id}` }
+        ]);
+        buttons.push([{ type: 'callback', text: '📚 Назад к урокам', payload: 'show_lessons' }]);
+
+        await maxApi.sendKeyboard({
+            chatId,
+            text: `📝 **${test.question || 'Проверьте знания'}**\n\nВыберите ответ:`,
+            buttons,
+            parseMode: 'markdown'
+        });
+    }
 
     async handleTestAnswer(platform, user, payload) {
         const maxApi = new MaxAPI();
         const chatId = user.platform_user_id;
-
         const parts = payload.split('_');
-        const testId = parts[1];
-        const answerId = parts.length > 2 ? parts[2] : null;
+        const testId = parts[2];
+        const answerId = parts[3];
 
-        if (!answerId) {
-            // Показываем тест
-            return await this.showTest(platform, user, testId);
-        }
-
-        // Проверяем ответ
         try {
-            const test = await lessonService.getLessonTest(null, testId); // Нужно доработать
             const result = await lessonService.checkTestAnswer(testId, answerId, user.id);
+            const test = await lessonService.getLessonTest(testId);
 
+            let text;
             if (result.correct) {
-                await maxApi.sendMessage({
-                    chatId: chatId,
-                    text: '✅ **Правильно!** Отличная работа!\n\nВы успешно прошли тест.',
-                    parseMode: 'markdown',
-                });
+                text = '✅ **Правильно!** 🎉 Отличная работа!\n\nВозвращаемся к урокам...';
+                await maxApi.sendMessage({ chatId, text, parseMode: 'markdown' });
+                // Возврат к списку уроков
+                await this.showLessons(platform, user);
             } else {
-                await maxApi.sendMessage({
-                    chatId: chatId,
-                    text: '❌ **Неправильно.** Попробуйте еще раз или перечитайте материал урока.',
-                    parseMode: 'markdown',
-                });
+                // Ищем правильный ответ для подсказки
+                const correctAnswer = test?.answers?.find(a => a.is_correct);
+                text = `❌ **Неправильно.**\n\nПравильный ответ: ${correctAnswer ? correctAnswer.answer : 'Неизвестно'}\n\nПопробуйте еще раз.`;
+                const buttons = [[{ type: 'callback', text: '🔄 Попробовать еще раз', payload: `test_${testId}` }]];
+                await maxApi.sendKeyboard({ chatId, text, buttons, parseMode: 'markdown' });
             }
-
-            // Возвращаемся к уроку
-            const lesson = await lessonService.getLessonById(testId);
-            if (lesson) {
-                await this.showLesson(platform, user, lesson.id);
-            }
-
         } catch (error) {
-            logger.error({ err: error, userId: user.id, testId }, 'Test error');
-            await maxApi.sendMessage({
-                chatId: chatId,
-                text: '❌ Ошибка при проверке теста. Попробуйте позже.',
-                parseMode: 'markdown',
-            });
+            console.error('[TEST] Error:', error);
+            await maxApi.sendMessage({ chatId, text: '❌ Ошибка при проверке ответа.', parseMode: 'markdown' });
         }
     }
 
-    async showTest(platform, user, testId) {
+    // ============================================================
+    // ПОКУПКА ДОСТУПА
+    // ============================================================
+    async buyAccess(platform, user) {
         const maxApi = new MaxAPI();
         const chatId = user.platform_user_id;
 
-        const test = await lessonService.getLessonTest(testId);
-        if (!test) {
+        // Проверяем, есть ли уже доступ
+        const hasAccess = await courseService.checkUserCourseAccess(user.id, 'course_1');
+        if (hasAccess) {
             await maxApi.sendMessage({
-                chatId: chatId,
-                text: '❌ Тест не найден',
-                parseMode: 'markdown',
+                chatId,
+                text: '✅ У вас уже есть доступ ко всем урокам!',
+                parseMode: 'markdown'
             });
+            return await this.showLessons(platform, user);
+        }
+
+        // Цена доступа (можно взять из настроек курса)
+        const price = 1000;
+
+        // Создаем платеж (тестовый режим)
+        try {
+            const payment = await paymentService.createPayment(user.id, price);
+            // Имитируем успешную оплату
+            await paymentService.confirmPayment(payment.id, 'test_gateway', { courseId: 'course_1' });
+            // Открываем доступ
+            await courseService.grantCourseAccess(user.id, 'course_1');
+
+            await maxApi.sendMessage({
+                chatId,
+                text: `✅ **Поздравляю!**\n\nВы успешно приобрели доступ ко всем урокам за ${price} ₽.\n\nТеперь вам доступны все уроки.`,
+                parseMode: 'markdown'
+            });
+            await this.showLessons(platform, user);
+        } catch (error) {
+            console.error('[PAYMENT] Error:', error);
+            await maxApi.sendMessage({
+                chatId,
+                text: '❌ Ошибка при оформлении покупки. Попробуйте позже.',
+                parseMode: 'markdown'
+            });
+        }
+    }
+
+    // ============================================================
+    // ОБРАБОТКА CALLBACK
+    // ============================================================
+    async handleCallback(platform, user, payload) {
+        const maxApi = new MaxAPI();
+        const chatId = user.platform_user_id;
+
+        // Проверяем, не является ли это сообщение паролем для админки
+        const adminSession = this.adminSessions.get(chatId);
+        if (adminSession && adminSession.mode === 'awaiting_password') {
+            // Пароль приходит как текст, а не как payload
             return;
         }
 
-        const text = `📝 **${test.question || 'Проверьте свои знания'}**\n\nВыберите правильный ответ:`;
-
-        const buttons = [];
-        for (const answer of test.answers || []) {
-            buttons.push([
-                {
-                    type: 'callback',
-                    text: answer.answer || 'Вариант ответа',
-                    payload: `test_${testId}_${answer.id}`
-                }
-            ]);
+        // Админ-панель
+        if (payload === 'admin_back' || payload.startsWith('admin_')) {
+            return await this.handleAdminCallback(platform, user, payload);
         }
 
-        buttons.push([
-            { type: 'callback', text: '⬅️ Вернуться к уроку', payload: `lesson_${test.lesson_id}` }
-        ]);
+        // Главное меню
+        if (payload === 'main_menu') {
+            return await this.handleStart(platform, user, '');
+        }
 
-        await maxApi.sendKeyboard({
-            chatId: chatId,
-            text: text,
-            buttons: buttons,
-            parseMode: 'markdown',
+        // Показать уроки
+        if (payload === 'show_lessons') {
+            return await this.showLessons(platform, user);
+        }
+
+        // Купить доступ
+        if (payload === 'buy_access') {
+            return await this.buyAccess(platform, user);
+        }
+
+        // Помощь
+        if (payload === 'show_help') {
+            return await this.handleHelp(platform, user, '');
+        }
+
+        // Показать урок
+        if (payload.startsWith('lesson_')) {
+            const lessonId = payload.replace('lesson_', '');
+            return await this.showLesson(platform, user, lessonId);
+        }
+
+        // Показать тест
+        if (payload.startsWith('test_') && !payload.startsWith('test_answer_')) {
+            const testId = payload.replace('test_', '');
+            return await this.showTest(platform, user, testId);
+        }
+
+        // Ответ на тест
+        if (payload.startsWith('test_answer_')) {
+            return await this.handleTestAnswer(platform, user, payload);
+        }
+
+        // Если ничего не подошло
+        await maxApi.sendMessage({
+            chatId,
+            text: `❓ Неизвестная команда. Используйте кнопки меню.`,
+            parseMode: 'markdown'
         });
     }
 
-    // ОБРАБОТКА ТЕКСТОВЫХ СООБЩЕНИЙ
-
+    // ============================================================
+    // ОБРАБОТКА ТЕКСТОВЫХ СООБЩЕНИЙ (для админ-панели)
+    // ============================================================
     async handleText(platform, user, message) {
         const maxApi = new MaxAPI();
         const chatId = user.platform_user_id;
 
-        // Просто отвечаем с меню
-        const text = `📝 Я получил ваше сообщение:\n\n"${message}"\n\nЧто хотите сделать дальше?`;
+        // Проверяем, не ждем ли мы пароль для админки
+        const adminSession = this.adminSessions.get(chatId);
+        if (adminSession && adminSession.mode === 'awaiting_password') {
+            return await this.handleAdminPassword(platform, user, message);
+        }
 
-        const buttons = [
-            [
-                { type: 'callback', text: '📚 Мои курсы', payload: 'my_courses' },
-                { type: 'callback', text: '📚 Все курсы', payload: 'all_courses' },
-            ],
-            [
-                { type: 'callback', text: '📊 Прогресс', payload: 'show_progress' },
-                { type: 'callback', text: '❓ Помощь', payload: 'show_help' },
-            ]
-        ];
+        // Проверяем, не ждем ли мы данные для создания/редактирования урока
+        if (adminSession && adminSession.mode === 'admin') {
+            const context = adminSession.context || '';
 
+            if (context === 'creating_lesson') {
+                // Ждем название урока
+                adminSession.lessonTitle = message;
+                adminSession.context = 'creating_lesson_desc';
+                await maxApi.sendMessage({
+                    chatId,
+                    text: `📝 **Создание урока: "${message}"**\n\nВведите **описание** урока:`,
+                    parseMode: 'markdown'
+                });
+                return;
+            }
+
+            if (context === 'creating_lesson_desc') {
+                // Сохраняем урок
+                const title = adminSession.lessonTitle;
+                const description = message;
+                const lesson = await lessonService.createLesson({
+                    courseId: 'course_1', // ID курса
+                    title: title,
+                    description: description,
+                    orderNumber: 0,
+                    isFree: false // По умолчанию платный
+                });
+                adminSession.context = 'editing_lesson';
+                adminSession.lessonId = lesson.id;
+                await maxApi.sendMessage({
+                    chatId,
+                    text: `✅ **Урок создан!**\n\n📖 ${lesson.title}\n\nТеперь загрузите **видео** и **файлы** (если нужно).\nИли отредактируйте урок через меню.`,
+                    parseMode: 'markdown'
+                });
+                await this.showEditLessonForm(chatId, lesson.id, maxApi);
+                return;
+            }
+
+            // Редактирование названия
+            if (context === 'editing_title') {
+                await lessonService.updateLesson(adminSession.lessonId, { title: message });
+                adminSession.context = 'editing_lesson';
+                await maxApi.sendMessage({ chatId, text: `✅ Название обновлено: "${message}"`, parseMode: 'markdown' });
+                await this.showEditLessonForm(chatId, adminSession.lessonId, maxApi);
+                return;
+            }
+
+            // Редактирование описания
+            if (context === 'editing_desc') {
+                await lessonService.updateLesson(adminSession.lessonId, { description: message });
+                adminSession.context = 'editing_lesson';
+                await maxApi.sendMessage({ chatId, text: `✅ Описание обновлено.`, parseMode: 'markdown' });
+                await this.showEditLessonForm(chatId, adminSession.lessonId, maxApi);
+                return;
+            }
+        }
+
+        // Обычное текстовое сообщение
         await maxApi.sendKeyboard({
-            chatId: chatId,
-            text: text,
-            buttons: buttons,
-            parseMode: 'markdown',
+            chatId,
+            text: '📝 Я получил ваше сообщение.\n\nЧто хотите сделать?',
+            buttons: [
+                [{ type: 'callback', text: '📚 Уроки', payload: 'show_lessons' }],
+                [{ type: 'callback', text: '💰 Купить доступ', payload: 'buy_access' }],
+                [{ type: 'callback', text: '❓ Помощь', payload: 'show_help' }]
+            ],
+            parseMode: 'markdown'
         });
-
-        await this.logUserAction(user.id, 'text_message', { message: message.substring(0, 100) });
     }
 
-    // ПОКУПКА КУРСА
-
-    async buyCourse(platform, user, courseId) {
-        const maxApi = new MaxAPI();
-        const chatId = user.platform_user_id;
-
-        const course = await courseService.getCourseById(courseId);
-        if (!course) {
-            await maxApi.sendMessage({
-                chatId: chatId,
-                text: '❌ Курс не найден',
-                parseMode: 'markdown',
-            });
-            return;
-        }
-
-        // Проверяем, есть ли уже доступ
-        const hasAccess = await this.checkCourseAccess(user.id, courseId);
-        if (hasAccess) {
-            await maxApi.sendMessage({
-                chatId: chatId,
-                text: '✅ У вас уже есть доступ к этому курсу.',
-                parseMode: 'markdown',
-            });
-            return await this.showCourse(platform, user, courseId);
-        }
-
-        // Создаем платеж
-        try {
-            const payment = await paymentService.createPayment(user.id, course.price);
-
-            // В реальном проекте здесь был бы redirect на платежную систему
-            // Пока просто имитируем успешную оплату
-            await paymentService.confirmPayment(payment.id, 'test_gateway', { courseId });
-
-            // Открываем доступ
-            await courseService.grantCourseAccess(user.id, courseId);
-
-            await maxApi.sendMessage({
-                chatId: chatId,
-                text: `✅ **Поздравляю!**\n\nВы успешно приобрели курс **${course.title}** за ${course.price} руб.\n\nТеперь вам доступны все уроки.`,
-                parseMode: 'markdown',
-            });
-
-            // Показываем курс
-            await this.showCourse(platform, user, courseId);
-
-        } catch (error) {
-            logger.error({ err: error, userId: user.id, courseId }, 'Payment error');
-            await maxApi.sendMessage({
-                chatId: chatId,
-                text: '❌ Ошибка при оформлении покупки. Попробуйте позже.',
-                parseMode: 'markdown',
-            });
-        }
-    }
-
+    // ============================================================
     // ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
-
-    async checkCourseAccess(userId, courseId) {
-        const course = await courseService.getCourseById(courseId);
-        if (!course) return false;
-
-        // Бесплатные курсы доступны всем
-        if (course.price === 0) return true;
-
-        // Проверяем доступ
-        const access = await courseService.getUserFullCourseAccess(userId);
-        return access.some(a => a.course_id === courseId);
-    }
-
-    async checkLessonAccess(userId, lessonId) {
-        const lesson = await lessonService.getLessonById(lessonId);
-        if (!lesson) return false;
-
-        // Бесплатные уроки доступны всем
-        if (lesson.is_free) return true;
-
-        // Проверяем доступ к курсу
-        return await this.checkCourseAccess(userId, lesson.course_id);
-    }
-
+    // ============================================================
     async logUserAction(userId, action, data = {}) {
         try {
             const logs = database.readTable('user_actions') || [];
-            logs.push({
-                id: database.generateId(),
-                user_id: userId,
-                action: action,
-                data: JSON.stringify(data),
-                created_at: database.now(),
-            });
-            // Ограничиваем размер логов
-            if (logs.length > 10000) {
-                logs.splice(0, logs.length - 10000);
-            }
+            logs.push({ id: database.generateId(), user_id: userId, action: action, data: JSON.stringify(data), created_at: database.now() });
+            if (logs.length > 10000) logs.splice(0, logs.length - 10000);
             database.writeTable('user_actions', logs);
         } catch (error) {
-            // Не критично, просто логируем ошибку
             logger.warn({ err: error, userId, action }, 'Failed to log user action');
         }
     }
