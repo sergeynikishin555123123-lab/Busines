@@ -1,5 +1,3 @@
-// server.js - ИСПРАВЛЕННАЯ ВЕРСИЯ (сохраняем рабочую логику)
-
 require('dotenv').config();
 
 const express = require('express');
@@ -119,6 +117,7 @@ try {
 
     if (config.server.nodeEnv === 'production') {
         console.warn('[STARTUP] ⚠️ Using MemoryStore for sessions is not recommended for production');
+        console.warn('[STARTUP] ⚠️ Consider using Redis or PostgreSQL for session storage');
     }
 
     app.use(session(sessionConfig));
@@ -134,7 +133,9 @@ try {
         fs.mkdirSync(publicPath, { recursive: true });
         console.log('[STARTUP] Created public directory');
     }
+
     app.use('/static', express.static(publicPath));
+    console.log('[STARTUP] Static: /public');
 
     if (!fs.existsSync(UPLOADS_DIR)) {
         fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -147,12 +148,11 @@ try {
 
 const MaxAPI = require('./platforms/max');
 
-// ============================================================
-// ОБРАБОТЧИКИ СОБЫТИЙ (ОРИГИНАЛЬНЫЕ РАБОЧИЕ)
-// ============================================================
+// ============ ОБРАБОТЧИКИ СОБЫТИЙ (ОПРЕДЕЛЕНЫ ДО ИСПОЛЬЗОВАНИЯ) ============
 
 async function handleBotStarted(update) {
     console.log('[HANDLER] handleBotStarted called');
+    
     try {
         const chatId = update.chat_id || update.message?.recipient?.chat_id;
         const payload = update.payload || '';
@@ -167,7 +167,7 @@ async function handleBotStarted(update) {
         }
 
         const maxApi = new MaxAPI();
-
+        
         try {
             console.log('[HANDLER] Sending welcome keyboard...');
             await maxApi.sendKeyboard({
@@ -191,6 +191,7 @@ async function handleBotStarted(update) {
                 throw error;
             }
         }
+
     } catch (error) {
         console.error('[HANDLER] Error in handleBotStarted:', error);
         logger.error({ err: error, update }, 'Error handling bot_started');
@@ -199,6 +200,7 @@ async function handleBotStarted(update) {
 
 async function handleMessageCreated(update) {
     console.log('[HANDLER] handleMessageCreated called');
+    
     try {
         const chatId = update.chat_id || update.message?.recipient?.chat_id;
         const message = update.message;
@@ -234,8 +236,8 @@ async function handleMessageCreated(update) {
             console.log('[HANDLER] Handling text message');
             await handleTextMessage(chatId, userId, text, maxApi);
         }
-
         console.log('[HANDLER] Message handling complete');
+
     } catch (error) {
         console.error('[HANDLER] Error in handleMessageCreated:', error);
         logger.error({ err: error, update }, 'Error handling message_created');
@@ -244,6 +246,7 @@ async function handleMessageCreated(update) {
 
 async function handleMessageCallback(update) {
     console.log('[HANDLER] handleMessageCallback called');
+    
     try {
         const chatId = update.chat_id || update.message?.recipient?.chat_id;
         const callback = update.callback;
@@ -268,10 +271,10 @@ async function handleMessageCallback(update) {
             await maxApi.sendMessage({
                 chatId: chatId,
                 text: `📚 **Помощь по боту**\n\n` +
-                    `/start - Начать обучение\n` +
-                    `/help - Показать это сообщение\n` +
-                    `/courses - Показать список курсов\n\n` +
-                    `Просто напиши мне сообщение, и я помогу!`,
+                      `/start - Начать обучение\n` +
+                      `/help - Показать это сообщение\n` +
+                      `/courses - Показать список курсов\n\n` +
+                      `Просто напиши мне сообщение, и я помогу!`,
                 parseMode: 'markdown',
             });
         } else if (payload.startsWith('course_')) {
@@ -286,22 +289,20 @@ async function handleMessageCallback(update) {
                 parseMode: 'markdown',
             });
         }
-
         console.log('[HANDLER] Callback handling complete');
+
     } catch (error) {
         console.error('[HANDLER] Error in handleMessageCallback:', error);
         logger.error({ err: error, update }, 'Error handling message_callback');
     }
 }
 
-// ============================================================
-// КОМАНДЫ (ОРИГИНАЛЬНЫЕ РАБОЧИЕ)
-// ============================================================
+// ============ КОМАНДЫ ============
 
 async function handleStartCommand(chatId, userId, text, maxApi) {
     console.log('[COMMAND] handleStartCommand called');
+    
     const payload = text.split(' ')[1] || '';
-
     if (payload) {
         console.log(`[COMMAND] Deep link: ${payload}`);
     }
@@ -328,14 +329,15 @@ async function handleStartCommand(chatId, userId, text, maxApi) {
 
 async function handleHelpCommand(chatId, maxApi) {
     console.log('[COMMAND] handleHelpCommand called');
+    
     try {
         await maxApi.sendMessage({
             chatId: chatId,
             text: `📚 **Помощь по боту**\n\n` +
-                `/start - Начать обучение\n` +
-                `/help - Показать это сообщение\n` +
-                `/courses - Показать список курсов\n\n` +
-                `Просто напиши мне сообщение, и я помогу!`,
+                  `/start - Начать обучение\n` +
+                  `/help - Показать это сообщение\n` +
+                  `/courses - Показать список курсов\n\n` +
+                  `Просто напиши мне сообщение, и я помогу!`,
             parseMode: 'markdown',
         });
         console.log('[COMMAND] Help sent');
@@ -352,10 +354,10 @@ async function handleCoursesCommand(chatId, maxApi) {
 
 async function showCourses(chatId, maxApi) {
     console.log('[COMMAND] showCourses called');
+    
     try {
         const courseService = require('./core/course');
         const courses = await courseService.getAllCourses(true);
-
         console.log(`[COMMAND] Found ${courses.length} courses`);
 
         if (courses.length === 0) {
@@ -372,8 +374,9 @@ async function showCourses(chatId, maxApi) {
 
         courses.forEach((course, index) => {
             text += `${index + 1}. **${course.title}**\n`;
-            text += ` ${course.description || 'Без описания'}\n`;
-            text += ` ${course.price > 0 ? `💰 ${course.price} руб.` : '🆓 Бесплатно'}\n\n`;
+            text += `   ${course.description || 'Без описания'}\n`;
+            text += `   ${course.price > 0 ? `💰 ${course.price} руб.` : '🆓 Бесплатно'}\n\n`;
+            
             buttons.push([
                 {
                     type: 'callback',
@@ -393,8 +396,8 @@ async function showCourses(chatId, maxApi) {
             buttons: buttons,
             parseMode: 'markdown',
         });
-
         console.log('[COMMAND] Courses sent');
+
     } catch (error) {
         console.error('[COMMAND] Error in showCourses:', error);
         throw error;
@@ -403,10 +406,11 @@ async function showCourses(chatId, maxApi) {
 
 async function showCourseDetails(chatId, courseId, maxApi) {
     console.log(`[COMMAND] showCourseDetails: ${courseId}`);
+    
     try {
         const courseService = require('./core/course');
         const course = await courseService.getCourseById(courseId);
-
+        
         if (!course) {
             await maxApi.sendMessage({
                 chatId: chatId,
@@ -417,12 +421,12 @@ async function showCourseDetails(chatId, courseId, maxApi) {
         }
 
         const lessons = await courseService.getCourseLessons(courseId);
-
+        
         let text = `📚 **${course.title}**\n\n`;
         text += `${course.description || 'Без описания'}\n\n`;
         text += `📖 **Уроки:** ${lessons.length}\n`;
         text += `${course.price > 0 ? `💰 ${course.price} руб.` : '🆓 Бесплатно'}\n\n`;
-
+        
         if (lessons.length > 0) {
             text += '**Уроки:**\n';
             lessons.forEach((lesson, index) => {
@@ -443,8 +447,8 @@ async function showCourseDetails(chatId, courseId, maxApi) {
             buttons: buttons,
             parseMode: 'markdown',
         });
-
         console.log('[COMMAND] Course details sent');
+
     } catch (error) {
         console.error('[COMMAND] Error:', error);
         await maxApi.sendMessage({
@@ -457,6 +461,7 @@ async function showCourseDetails(chatId, courseId, maxApi) {
 
 async function handleTextMessage(chatId, userId, text, maxApi) {
     console.log('[COMMAND] handleTextMessage called');
+    
     const buttons = [
         [
             { type: 'callback', text: '📚 Курсы', payload: 'show_courses' },
@@ -478,9 +483,7 @@ async function handleTextMessage(chatId, userId, text, maxApi) {
     }
 }
 
-// ============================================================
-// РОУТЫ
-// ============================================================
+// ============ РОУТЫ ============
 
 app.get('/', (req, res) => {
     res.json({
@@ -507,14 +510,11 @@ app.get('/dashboard', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
 });
 
-// ============================================================
-// MAX WEBHOOK (ОРИГИНАЛЬНЫЙ РАБОЧИЙ)
-// ============================================================
-
+// ============ MAX WEBHOOK ============
 app.post('/webhook/max', async (req, res) => {
     console.log('[WEBHOOK] ========== WEBHOOK RECEIVED ==========');
     console.log('[WEBHOOK] Body:', JSON.stringify(req.body, null, 2));
-
+    
     try {
         const webhookSecret = config.max.webhookSecret;
         if (webhookSecret) {
@@ -532,7 +532,7 @@ app.post('/webhook/max', async (req, res) => {
             try {
                 const update = req.body;
                 console.log('[WEBHOOK] Processing update type:', update.update_type);
-
+                
                 switch (update.update_type) {
                     case 'bot_started':
                         console.log('[WEBHOOK] Handling bot_started');
@@ -561,16 +561,14 @@ app.post('/webhook/max', async (req, res) => {
                 logger.error({ err: error, update: req.body }, 'Error processing webhook');
             }
         });
+
     } catch (error) {
         console.error('[WEBHOOK] Fatal error:', error);
         res.status(500).send('Internal server error');
     }
 });
 
-// ============================================================
-// VK WEBHOOK
-// ============================================================
-
+// VK Webhook
 app.post('/webhook/vk', (req, res) => {
     try {
         const { type } = req.body;
@@ -583,14 +581,6 @@ app.post('/webhook/vk', (req, res) => {
         res.send('ok');
     }
 });
-
-// ============================================================
-// АДМИН-ПАНЕЛЬ
-// ============================================================
-
-// Подключаем админ-панель
-const adminRoutes = require('./admin/admin');
-app.use('/admin', adminRoutes);
 
 // Admin endpoints
 app.post('/admin/register-webhook', async (req, res) => {
@@ -662,22 +652,20 @@ app.get('/admin', (req, res) => {
     res.json({ message: 'Admin API' });
 });
 
-// ============================================================
-// ТЕСТОВЫЙ КУРС
-// ============================================================
+// ============ ТЕСТОВЫЙ КУРС ============
 
 app.post('/admin/test-course', async (req, res) => {
     console.log('[ADMIN] Creating test course...');
     try {
         const courseService = require('./core/course');
         const { title, description, price } = req.body;
-
+        
         const course = await courseService.createCourse({
             title: title || 'Тестовый курс',
             description: description || 'Описание тестового курса',
             price: price || 0
         });
-
+        
         const lessonService = require('./core/lesson');
         await lessonService.createLesson({
             courseId: course.id,
@@ -686,7 +674,7 @@ app.post('/admin/test-course', async (req, res) => {
             orderNumber: 1,
             isFree: true
         });
-
+        
         console.log(`[ADMIN] Test course created: ${course.id}`);
         res.json({ success: true, course });
     } catch (error) {
@@ -695,68 +683,13 @@ app.post('/admin/test-course', async (req, res) => {
     }
 });
 
-// ============================================================
-// API СТАТИСТИКИ ДЛЯ ДАШБОРДА
-// ============================================================
-
-app.get('/admin/api/stats', async (req, res) => {
-    try {
-        const users = database.readTable('users');
-        const courses = await require('./core/course').getAllCourses();
-        const lessons = database.readTable('lessons');
-        const payments = database.readTable('payments');
-        const progress = database.readTable('progress');
-
-        const now = new Date();
-        const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-
-        const weeklyUsers = users.filter(u => new Date(u.created_at) > weekAgo).length;
-        const weeklyPayments = payments.filter(p => 
-            p.status === 'success' && new Date(p.created_at) > weekAgo
-        ).length;
-
-        const totalRevenue = payments
-            .filter(p => p.status === 'success')
-            .reduce((sum, p) => sum + (p.amount || 0), 0);
-
-        const recentUsers = users
-            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-            .slice(0, 10);
-
-        const recentPayments = payments
-            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-            .slice(0, 10)
-            .map(p => {
-                const user = users.find(u => u.id === p.user_id);
-                return { ...p, user_name: user ? `${user.first_name} ${user.last_name}` : 'Неизвестно' };
-            });
-
-        res.json({
-            totalUsers: users.length,
-            totalCourses: courses.length,
-            totalLessons: lessons.length,
-            totalPayments: payments.filter(p => p.status === 'success').length,
-            totalRevenue: totalRevenue,
-            completedLessons: progress.filter(p => p.status === 'completed').length,
-            weeklyUsers: weeklyUsers,
-            weeklyPayments: weeklyPayments,
-            recentUsers: recentUsers,
-            recentPayments: recentPayments,
-            vkConfigured: !!(config.vk && config.vk.token),
-        });
-    } catch (error) {
-        console.error('Stats API error:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// ============================================================
-// 404 и ERROR HANDLER
-// ============================================================
+// ============ 404 ============
 
 app.use((req, res) => {
     res.status(404).json({ error: 'Not found' });
 });
+
+// ============ ERROR HANDLER ============
 
 app.use((err, req, res, next) => {
     console.error('[ERROR]', err.message);
@@ -764,9 +697,7 @@ app.use((err, req, res, next) => {
     res.status(500).json({ error: 'Internal server error' });
 });
 
-// ============================================================
-// ЗАПУСК
-// ============================================================
+// ============ ЗАПУСК ============
 
 const PORT = parseInt(process.env.PORT) || 8080;
 const HOST = '0.0.0.0';
