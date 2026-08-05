@@ -1,11 +1,11 @@
 // core/lesson.js
-// УПРАВЛЕНИЕ УРОКАМИ
+// УПРАВЛЕНИЕ УРОКАМИ - ПОЛНАЯ РАБОЧАЯ ВЕРСИЯ
 
 const database = require('../database');
 const logger = require('../logger');
-const fs = require('fs');           // <-- ДОБАВЛЕНО
-const path = require('path');       // <-- ДОБАВЛЕНО
-const crypto = require('crypto');   // <-- ДОБАВЛЕНО
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
 
 class LessonService {
     
@@ -64,40 +64,29 @@ class LessonService {
                 .map(a => ({
                     id: a.id,
                     answer: a.answer,
-                    is_correct: a.is_correct,
+                    is_correct: a.is_correct === true,
                 })),
         };
     }
 
-   // core/lesson.js - ПРОВЕРКА МЕТОДА getTestById
-
-async getTestById(testId) {
-    try {
+    async getTestById(testId) {
         const tests = database.readTable('tests');
         const answers = database.readTable('test_answers');
 
         const test = tests.find(t => t.id === testId);
         if (!test) return null;
 
-        const testAnswers = answers
-            .filter(a => a.test_id === test.id)
-            .map(a => ({
-                id: a.id,
-                answer: a.answer,
-                is_correct: a.is_correct === true,
-            }));
-
-        console.log(`[LESSON] getTestById: ${testId}, answers: ${testAnswers.length}`);
-
         return {
             ...test,
-            answers: testAnswers,
+            answers: answers
+                .filter(a => a.test_id === test.id)
+                .map(a => ({
+                    id: a.id,
+                    answer: a.answer,
+                    is_correct: a.is_correct === true,
+                })),
         };
-    } catch (error) {
-        console.error('[LESSON] getTestById error:', error);
-        return null;
     }
-}
 
     async checkTestAnswer(testId, answerId, userId) {
         const answers = database.readTable('test_answers');
@@ -308,19 +297,13 @@ async getTestById(testId) {
                 fileType = 'video';
             } else if (fileData.mimetype && fileData.mimetype.startsWith('image/')) {
                 fileType = 'image';
+            } else if (fileData.mimetype === 'video' || fileData.mimetype === 'file' || fileData.mimetype === 'image') {
+                fileType = fileData.mimetype;
             }
 
-            let duration = null;
-            if (fileType === 'video' && fileData.path && fs.existsSync(fileData.path)) {
-                try {
-                    const { execSync } = require('child_process');
-                    const result = execSync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${fileData.path}"`, {
-                        timeout: 10000
-                    });
-                    duration = parseFloat(result.toString().trim());
-                } catch (e) {
-                    console.warn('[LESSON] Could not get video duration:', e.message);
-                }
+            // Если есть токен - это уже загруженный в MAX файл
+            if (fileData.token && fileData.is_max_uploaded) {
+                console.log(`[LESSON] File already in MAX with token: ${fileData.token.substring(0, 20)}...`);
             }
 
             const file = {
@@ -331,10 +314,12 @@ async getTestById(testId) {
                 original_name: fileData.originalname || fileData.filename,
                 size: fileData.size || 0,
                 mime_type: fileData.mimetype || 'application/octet-stream',
-                path: fileData.path || fileData.url,
+                path: fileData.path || fileData.url || fileData.token,
                 url: fileData.url,
+                token: fileData.token || null,
+                is_max_uploaded: fileData.is_max_uploaded || false,
                 hash: fileHash,
-                duration: duration,
+                duration: null,
                 created_at: database.now(),
             };
 
@@ -366,7 +351,7 @@ async getTestById(testId) {
             const file = files.find(f => f.id === fileId);
 
             if (file) {
-                if (file.path && fs.existsSync(file.path)) {
+                if (file.path && fs.existsSync(file.path) && !file.is_max_uploaded) {
                     try {
                         fs.unlinkSync(file.path);
                         console.log(`[LESSON] Deleted file: ${file.path}`);
@@ -402,21 +387,20 @@ async getTestById(testId) {
         };
     }
 
-   // core/lesson.js - ИСПРАВЛЕННЫЙ createTest
+    // ============================================================
+    // УПРАВЛЕНИЕ ТЕСТАМИ
+    // ============================================================
 
-async createTest(lessonId, testData) {
-    try {
+    async createTest(lessonId, testData) {
         let tests = database.readTable('tests');
         let answers = database.readTable('test_answers');
 
-        // Удаляем старый тест если есть
         const existingTest = tests.find(t => t.lesson_id === lessonId);
         if (existingTest) {
             answers = answers.filter(a => a.test_id !== existingTest.id);
             tests = tests.filter(t => t.id !== existingTest.id);
         }
 
-        // Создаем новый тест
         const test = {
             id: database.generateId(),
             lesson_id: lessonId,
@@ -424,7 +408,6 @@ async createTest(lessonId, testData) {
         };
         tests.push(test);
 
-        // Добавляем ответы
         let addedCount = 0;
         for (const answer of testData.answers || []) {
             if (answer.text && answer.text.trim()) {
@@ -440,20 +423,13 @@ async createTest(lessonId, testData) {
 
         database.writeTable('tests', tests);
         database.writeTable('test_answers', answers);
+        logger.info(`Test created for lesson: ${lessonId}, answers: ${addedCount}`);
         
-        console.log(`[LESSON] Test created for lesson: ${lessonId}, answers: ${addedCount}`);
-        logger.info({ lessonId, testId: test.id, answers: addedCount }, 'Test created');
-
-        // Возвращаем тест с ответами
         return {
             ...test,
             answers: answers.filter(a => a.test_id === test.id),
         };
-    } catch (error) {
-        console.error('[LESSON] createTest error:', error);
-        throw error;
     }
-}
 
     async updateTest(testId, testData) {
         let tests = database.readTable('tests');
