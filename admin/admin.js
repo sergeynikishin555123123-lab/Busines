@@ -1,28 +1,22 @@
-// admin/admin.js
-// ПОЛНАЯ АДМИН-ПАНЕЛЬ
+// admin/admin.js - В НАЧАЛЕ ФАЙЛА ДОБАВЬ ЭТИ ИМПОРТЫ
 
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const path = require('path');
-const fs = require('fs');    
+const fs = require('fs');  // <-- ЭТОТ ИМПОРТ ОТСУТСТВОВАЛ
 const multer = require('multer');
 
 const database = require('../database');
 const logger = require('../logger');
-const courseService = require('../core/course'); 
+const courseService = require('../core/course');
 const lessonService = require('../core/lesson');
 const userService = require('../core/user');
 const progressService = require('../core/progress');
 const paymentService = require('../core/payment');
+const AdminController = require('./controller');
 
-// ============================================================
-// МУЛЬТЕР ДЛЯ ЗАГРУЗКИ ФАЙЛОВ
-// ============================================================
-
-// ============================================================
-// НАСТРОЙКА MULTER ДЛЯ ЗАГРУЗКИ ФАЙЛОВ
-// ============================================================
+console.log('[ADMIN] Loading admin panel...');
 
 const UPLOADS_DIR = process.env.UPLOADS_DIR || '/tmp/uploads';
 
