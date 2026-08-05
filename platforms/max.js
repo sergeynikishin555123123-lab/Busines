@@ -1,5 +1,5 @@
 // platforms/max.js
-// КЛИЕНТ MAX API
+// КЛИЕНТ MAX API - ПОЛНАЯ ВЕРСИЯ
 
 const axios = require('axios');
 const FormData = require('form-data');
@@ -150,7 +150,7 @@ class MaxAPI {
     }
 
     // ============================================================
-    // ЗАГРУЗКА ФАЙЛА В MAX
+    // ============== ЗАГРУЗКА ФАЙЛА В MAX ========================
     // ============================================================
     async uploadFile(filePath, fileType = 'file') {
         try {
@@ -167,6 +167,7 @@ class MaxAPI {
             formData.append('file', fs.createReadStream(filePath));
             formData.append('type', fileType);
 
+            // Важно: используем правильный эндпоинт для загрузки
             const response = await this.client.post('/uploads', formData, {
                 headers: {
                     ...formData.getHeaders(),
@@ -187,6 +188,39 @@ class MaxAPI {
                 console.error('[MAX] Response data:', error.response.data);
             }
             logger.error({ err: error, filePath }, 'Failed to upload file to MAX');
+            throw error;
+        }
+    }
+
+    // ============================================================
+    // ============== НОВЫЙ МЕТОД: ЗАГРУЗКА ФАЙЛА ИЗ URL =========
+    // ============================================================
+    async uploadFileFromUrl(fileUrl, fileType = 'file') {
+        try {
+            console.log(`[MAX] Downloading file from URL: ${fileUrl}, type: ${fileType}`);
+
+            // Скачиваем файл
+            const response = await axios.get(fileUrl, {
+                responseType: 'arraybuffer',
+                timeout: 300000,
+            });
+
+            // Сохраняем временно
+            const tempPath = `/tmp/upload-${Date.now()}.tmp`;
+            fs.writeFileSync(tempPath, Buffer.from(response.data));
+
+            // Загружаем в MAX
+            const token = await this.uploadFile(tempPath, fileType);
+
+            // Удаляем временный файл
+            fs.unlinkSync(tempPath);
+
+            console.log(`[MAX] ✅ File uploaded from URL, token: ${token}`);
+            return token;
+
+        } catch (error) {
+            console.error(`[MAX] ❌ Failed to upload file from URL: ${fileUrl}`, error.message);
+            logger.error({ err: error, fileUrl }, 'Failed to upload file from URL');
             throw error;
         }
     }
@@ -248,10 +282,10 @@ class MaxAPI {
     }
 
     // ============================================================
-    // ============= НОВЫЕ МЕТОДЫ - ОТПРАВКА ПО ТОКЕНУ =============
+    // ============== ОТПРАВКА ПО ТОКЕНУ (БЕЗ ПОВТОРНОЙ ЗАГРУЗКИ) =
     // ============================================================
 
-    // ОТПРАВКА ВИДЕО ПО ТОКЕНУ (без повторной загрузки)
+    // ОТПРАВКА ВИДЕО ПО ТОКЕНУ
     async sendVideoByToken({ chatId, token, caption = '', parseMode = 'markdown' }) {
         try {
             console.log(`[MAX] Sending video by token to ${chatId}...`);
@@ -275,7 +309,7 @@ class MaxAPI {
         }
     }
 
-    // ОТПРАВКА ФАЙЛА ПО ТОКЕНУ (без повторной загрузки)
+    // ОТПРАВКА ФАЙЛА ПО ТОКЕНУ
     async sendFileByToken({ chatId, token, caption = '', parseMode = 'markdown' }) {
         try {
             console.log(`[MAX] Sending file by token to ${chatId}...`);
@@ -319,6 +353,36 @@ class MaxAPI {
         } catch (error) {
             console.error(`[MAX] ❌ Failed to send image by token to ${chatId}:`, error.message);
             logger.error({ err: error, chatId, token }, 'Failed to send image by token');
+            throw error;
+        }
+    }
+
+    // ============================================================
+    // ============== РАБОТА С ВЛОЖЕНИЯМИ В СООБЩЕНИЯХ ===========
+    // ============================================================
+
+    // ПОЛУЧЕНИЕ ИНФОРМАЦИИ О ФАЙЛЕ ПО ТОКЕНУ
+    async getFileInfo(token) {
+        try {
+            console.log(`[MAX] Getting file info for token: ${token.substring(0, 20)}...`);
+            
+            const response = await this.client.get(`/uploads/${token}`);
+            return response.data;
+        } catch (error) {
+            console.error('[MAX] Failed to get file info:', error.message);
+            return null;
+        }
+    }
+
+    // УДАЛЕНИЕ ФАЙЛА ПО ТОКЕНУ
+    async deleteFile(token) {
+        try {
+            console.log(`[MAX] Deleting file: ${token.substring(0, 20)}...`);
+            
+            const response = await this.client.delete(`/uploads/${token}`);
+            return response.data;
+        } catch (error) {
+            console.error('[MAX] Failed to delete file:', error.message);
             throw error;
         }
     }
@@ -391,6 +455,52 @@ class MaxAPI {
         } catch (error) {
             logger.error({ err: error }, 'Failed to get bot info');
             throw error;
+        }
+    }
+
+    // ============================================================
+    // ============== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ =====================
+    // ============================================================
+
+    // ПРОВЕРКА ТОКЕНА
+    async validateToken(token) {
+        try {
+            const info = await this.getFileInfo(token);
+            return info && info.id;
+        } catch (error) {
+            return false;
+        }
+    }
+
+    // ПОЛУЧЕНИЕ СТАТИСТИКИ БОТА
+    async getBotStats() {
+        try {
+            const response = await this.client.get('/me/stats');
+            return response.data;
+        } catch (error) {
+            console.error('[MAX] Failed to get bot stats:', error.message);
+            return null;
+        }
+    }
+
+    // ОТПРАВКА УВЕДОМЛЕНИЯ О НАБОРЕ ТЕКСТА
+    async sendTyping(chatId) {
+        try {
+            await this.client.post('/messages/typing', { chat_id: chatId });
+        } catch (error) {
+            console.error('[MAX] Failed to send typing:', error.message);
+        }
+    }
+
+    // ОТМЕТКА СООБЩЕНИЯ КАК ПРОЧИТАННОГО
+    async markAsRead(chatId, messageId) {
+        try {
+            await this.client.post('/messages/read', {
+                chat_id: chatId,
+                message_id: messageId
+            });
+        } catch (error) {
+            console.error('[MAX] Failed to mark as read:', error.message);
         }
     }
 }
