@@ -1,4 +1,4 @@
-// server.js - ИСХОДНАЯ ВЕРСИЯ + НОВЫЕ КНОПКИ И ОБРАБОТКА ВЛОЖЕНИЙ
+// server.js - ИСПРАВЛЕННАЯ ВЕРСИЯ (используем userId вместо chatId)
 require('dotenv').config();
 
 const express = require('express');
@@ -270,18 +270,19 @@ const progressService = require('./core/progress');
 const adminSessions = new Map();
 
 // ============================================================
-// ОБРАБОТЧИКИ СОБЫТИЙ MAX (СОХРАНЯЕМ ИСХОДНУЮ СТРУКТУРУ)
+// ОБРАБОТЧИКИ СОБЫТИЙ MAX
 // ============================================================
 
 async function handleBotStarted(update) {
     console.log('[HANDLER] handleBotStarted called');
     try {
-        const chatId = update.chat_id || update.message?.recipient?.chat_id;
-        if (!chatId) return;
+        // ВАЖНО: используем user_id из update.user
+        const userId = update.user?.user_id || update.chat_id;
+        if (!userId) return;
 
         const maxApi = new MaxAPI();
         await maxApi.sendKeyboard({
-            chatId: chatId,
+            chatId: userId, // <-- ИСПОЛЬЗУЕМ USER_ID
             text: `👋 **Привет! Я обучающий бот!**\n\nВыбери действие:`,
             buttons: [
                 [{ type: 'callback', text: '📚 Уроки', payload: 'show_lessons' }],
@@ -296,58 +297,64 @@ async function handleBotStarted(update) {
 }
 
 // ============================================================
-// ОБРАБОТКА СООБЩЕНИЙ - СОХРАНЯЕМ ИСХОДНУЮ СТРУКТУРУ
+// ОБРАБОТКА СООБЩЕНИЙ
 // ============================================================
 
 async function handleMessageCreated(update) {
     console.log('[HANDLER] handleMessageCreated called');
     try {
-        const chatId = update.chat_id || update.message?.recipient?.chat_id;
         const message = update.message;
-        const text = message?.body?.text || message?.text || '';
         const userId = message?.sender?.user_id || update.user?.user_id;
+        const chatIdFromUpdate = update.chat_id || message?.recipient?.chat_id;
+        const text = message?.body?.text || message?.text || '';
         const attachments = message?.attachments || [];
 
-        console.log(`[HANDLER] chatId: ${chatId}, userId: ${userId}, text: "${text}", attachments: ${attachments.length}`);
+        // ВАЖНО: используем userId для отправки сообщений
+        const recipientId = userId || chatIdFromUpdate;
 
-        if (!chatId) return;
+        console.log(`[HANDLER] userId: ${userId}, chatId: ${chatIdFromUpdate}, text: "${text}", attachments: ${attachments.length}`);
+
+        if (!recipientId) {
+            console.log('[HANDLER] No recipient found');
+            return;
+        }
 
         const maxApi = new MaxAPI();
 
         // ============================================================
-        // ОБРАБОТКА ВЛОЖЕНИЙ ОТ АДМИНИСТРАТОРА (НОВОЕ)
+        // ОБРАБОТКА ВЛОЖЕНИЙ ОТ АДМИНИСТРАТОРА
         // ============================================================
         if (attachments.length > 0) {
-            const session = adminSessions.get(chatId);
+            const session = adminSessions.get(recipientId);
             if (session && session.mode === 'admin') {
-                await handleAdminAttachment(chatId, attachments, maxApi);
+                await handleAdminAttachment(recipientId, attachments, maxApi);
                 return;
             }
         }
 
         // Админ-режим: ожидание пароля
-        const adminSession = adminSessions.get(chatId);
+        const adminSession = adminSessions.get(recipientId);
         if (adminSession && adminSession.mode === 'awaiting_password') {
-            await handleAdminPassword(chatId, text, maxApi);
+            await handleAdminPassword(recipientId, text, maxApi);
             return;
         }
 
         if (adminSession && adminSession.mode === 'admin') {
-            await handleAdminCommand(chatId, text, maxApi);
+            await handleAdminCommand(recipientId, text, maxApi);
             return;
         }
 
         // Обычные команды
         if (text.startsWith('/start')) {
-            await handleStartCommand(chatId, userId, text, maxApi);
+            await handleStartCommand(recipientId, userId, text, maxApi);
         } else if (text.startsWith('/help')) {
-            await handleHelpCommand(chatId, maxApi);
+            await handleHelpCommand(recipientId, maxApi);
         } else if (text.startsWith('/courses')) {
-            await handleCoursesCommand(chatId, maxApi);
+            await handleCoursesCommand(recipientId, maxApi);
         } else if (text.startsWith('/admin')) {
-            await showAdminLogin(chatId, maxApi);
+            await showAdminLogin(recipientId, maxApi);
         } else {
-            await handleTextMessage(chatId, userId, text, maxApi);
+            await handleTextMessage(recipientId, userId, text, maxApi);
         }
     } catch (error) {
         console.error('[HANDLER] Error in handleMessageCreated:', error);
@@ -356,20 +363,26 @@ async function handleMessageCreated(update) {
 }
 
 // ============================================================
-// ОБРАБОТКА CALLBACK - СОХРАНЯЕМ ИСХОДНУЮ СТРУКТУРУ
+// ОБРАБОТКА CALLBACK
 // ============================================================
 
 async function handleMessageCallback(update) {
     console.log('[HANDLER] handleMessageCallback called');
     try {
-        const chatId = update.chat_id || update.message?.recipient?.chat_id;
         const callback = update.callback;
         const payload = callback?.payload || '';
-        const userId = update.user?.user_id || update.user?.id || update.message?.sender?.user_id;
+        const userId = update.user?.user_id || update.message?.sender?.user_id;
+        const chatIdFromUpdate = update.chat_id || update.message?.recipient?.chat_id;
 
-        console.log(`[HANDLER] Callback: chatId=${chatId}, payload=${payload}`);
+        // ВАЖНО: используем userId для отправки сообщений
+        const recipientId = userId || chatIdFromUpdate;
 
-        if (!chatId) return;
+        console.log(`[HANDLER] Callback: userId=${userId}, recipientId=${recipientId}, payload=${payload}`);
+
+        if (!recipientId) {
+            console.log('[HANDLER] No recipient found');
+            return;
+        }
 
         const maxApi = new MaxAPI();
 
@@ -377,71 +390,71 @@ async function handleMessageCallback(update) {
         // АДМИН-ПАНЕЛЬ CALLBACK
         // ============================================================
         if (payload === 'admin_panel') {
-            await showAdminLogin(chatId, maxApi);
+            await showAdminLogin(recipientId, maxApi);
             return;
         }
 
         if (payload === 'admin_login') {
-            adminSessions.set(chatId, { mode: 'awaiting_password' });
+            adminSessions.set(recipientId, { mode: 'awaiting_password' });
             await maxApi.sendMessage({
-                chatId: chatId,
+                chatId: recipientId,
                 text: `🔐 **Введите пароль администратора**\n\nОтправьте пароль сообщением.`,
                 parseMode: 'markdown',
             });
             return;
         }
 
-        const adminSession = adminSessions.get(chatId);
+        const adminSession = adminSessions.get(recipientId);
         if (adminSession && adminSession.mode === 'admin') {
-            await handleAdminCallback(chatId, payload, maxApi);
+            await handleAdminCallback(recipientId, payload, maxApi);
             return;
         }
 
         // ============================================================
-        // НОВЫЕ КНОПКИ (ДОБАВЛЯЕМ)
+        // НОВЫЕ КНОПКИ
         // ============================================================
         if (payload === 'show_lessons') {
-            await showLessons(chatId, maxApi);
+            await showLessons(recipientId, maxApi);
             return;
         }
         
         if (payload === 'buy_access') {
-            await buyAccess(chatId, maxApi);
+            await buyAccess(recipientId, maxApi);
             return;
         }
         
         if (payload === 'show_help') {
-            await showHelp(chatId, maxApi);
+            await showHelp(recipientId, maxApi);
             return;
         }
         
         if (payload === 'main_menu') {
-            await handleStartCommand(chatId, null, '', maxApi);
+            await handleStartCommand(recipientId, userId, '', maxApi);
             return;
         }
 
         // ============================================================
-        // СТАРЫЕ КНОПКИ (СОХРАНЯЕМ ДЛЯ СОВМЕСТИМОСТИ)
+        // СТАРЫЕ КНОПКИ
         // ============================================================
         if (payload === 'show_courses') {
-            await showCourses(chatId, maxApi);
+            await showCourses(recipientId, maxApi);
         } else if (payload.startsWith('course_')) {
             const courseId = payload.replace('course_', '');
-            await showCourseDetails(chatId, courseId, maxApi);
+            await showCourseDetails(recipientId, courseId, maxApi);
         } else if (payload.startsWith('lesson_')) {
             const lessonId = payload.replace('lesson_', '');
-            await sendLessonToUser(chatId, lessonId, maxApi);
+            await sendLessonToUser(recipientId, lessonId, maxApi);
         } else if (payload.startsWith('test_')) {
             const testId = payload.replace('test_', '');
-            await showTest(chatId, testId, maxApi);
+            await showTest(recipientId, testId, maxApi);
         } else if (payload.startsWith('test_answer_')) {
             const parts = payload.split('_');
             const testId = parts[2];
             const answerId = parts[3];
-            await handleTestAnswer(chatId, testId, answerId, maxApi);
+            await handleTestAnswer(recipientId, testId, answerId, maxApi);
         } else {
             await maxApi.sendMessage({
-                chatId: chatId,
+                chatId: recipientId,
                 text: `✅ Вы выбрали: ${payload}`,
                 parseMode: 'markdown',
             });
@@ -458,7 +471,6 @@ async function handleMessageCallback(update) {
 
 async function showLessons(chatId, maxApi) {
     try {
-        // Получаем все уроки
         const lessons = database.readTable('lessons');
         
         if (lessons.length === 0) {
@@ -470,7 +482,6 @@ async function showLessons(chatId, maxApi) {
             return;
         }
 
-        // Показываем только бесплатные уроки (is_free = true)
         const freeLessons = lessons.filter(l => l.is_free === true);
         
         if (freeLessons.length === 0) {
@@ -538,7 +549,7 @@ async function buyAccess(chatId, maxApi) {
 }
 
 // ============================================================
-// АДМИН-ПАНЕЛЬ (СОХРАНЯЕМ ИСХОДНУЮ СТРУКТУРУ)
+// АДМИН-ПАНЕЛЬ
 // ============================================================
 
 async function showAdminLogin(chatId, maxApi) {
@@ -644,7 +655,7 @@ async function showAdminDashboard(chatId, maxApi) {
 }
 
 // ============================================================
-// УПРАВЛЕНИЕ КУРСАМИ (СОХРАНЯЕМ ИСХОДНУЮ СТРУКТУРУ)
+// УПРАВЛЕНИЕ КУРСАМИ
 // ============================================================
 
 async function handleAdminCourses(chatId, maxApi) {
@@ -765,7 +776,7 @@ async function showAdminCourseDetail(chatId, courseId, maxApi) {
 }
 
 // ============================================================
-// УПРАВЛЕНИЕ УРОКАМИ (СОХРАНЯЕМ ИСХОДНУЮ СТРУКТУРУ)
+// УПРАВЛЕНИЕ УРОКАМИ
 // ============================================================
 
 async function handleAdminLessonCreate(chatId, courseId, maxApi) {
@@ -883,7 +894,7 @@ async function showAdminLessonDetail(chatId, lessonId, maxApi) {
 }
 
 // ============================================================
-// ОБРАБОТКА ВЛОЖЕНИЙ ОТ АДМИНА (НОВОЕ)
+// ОБРАБОТКА ВЛОЖЕНИЙ ОТ АДМИНА
 // ============================================================
 
 async function handleAdminAttachment(chatId, attachments, maxApi) {
@@ -954,7 +965,7 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
 }
 
 // ============================================================
-// ЗАГРУЗКА ВИДЕО И ФАЙЛОВ (запрос от админа)
+// ЗАГРУЗКА ВИДЕО И ФАЙЛОВ
 // ============================================================
 
 async function handleAdminUploadVideo(chatId, lessonId, maxApi) {
@@ -1044,7 +1055,6 @@ async function handleAdminCallback(chatId, payload, maxApi) {
             return;
         }
 
-        // Выход
         if (payload === 'admin_logout') {
             adminSessions.delete(chatId);
             await maxApi.sendMessage({ chatId: chatId, text: `🚪 Вы вышли из админ-панели.`, parseMode: 'markdown' });
@@ -1056,7 +1066,6 @@ async function handleAdminCallback(chatId, payload, maxApi) {
             return;
         }
 
-        // Курсы
         if (payload === 'admin_courses') {
             await handleAdminCourses(chatId, maxApi);
             return;
@@ -1108,7 +1117,6 @@ async function handleAdminCallback(chatId, payload, maxApi) {
             return;
         }
 
-        // Уроки
         if (payload.startsWith('admin_lesson_create_')) {
             const courseId = payload.replace('admin_lesson_create_', '');
             await handleAdminLessonCreate(chatId, courseId, maxApi);
@@ -1165,7 +1173,6 @@ async function handleAdminCallback(chatId, payload, maxApi) {
             return;
         }
 
-        // Статистика
         if (payload === 'admin_stats') {
             const users = database.readTable('users');
             const lessons = database.readTable('lessons');
@@ -1299,7 +1306,7 @@ async function sendLessonToUser(chatId, lessonId, maxApi) {
 }
 
 // ============================================================
-// ОСТАЛЬНЫЕ ФУНКЦИИ (КОМАНДЫ, ТЕСТЫ) - СОХРАНЯЕМ ИСХОДНУЮ СТРУКТУРУ
+// ОСТАЛЬНЫЕ ФУНКЦИИ
 // ============================================================
 
 async function handleStartCommand(chatId, userId, text, maxApi) {
@@ -1494,7 +1501,7 @@ async function handleTestAnswer(chatId, testId, answerId, maxApi) {
 }
 
 // ============================================================
-// РОУТЫ (СОХРАНЯЕМ ИСХОДНУЮ СТРУКТУРУ)
+// РОУТЫ
 // ============================================================
 
 app.get('/', (req, res) => {
@@ -1574,7 +1581,7 @@ app.get('/admin/logs', (req, res) => {
 });
 
 // ============================================================
-// WEBHOOK MAX (СОХРАНЯЕМ ИСХОДНУЮ СТРУКТУРУ)
+// WEBHOOK MAX
 // ============================================================
 
 app.post('/webhook/max', async (req, res) => {
