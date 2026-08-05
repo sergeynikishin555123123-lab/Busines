@@ -6,7 +6,7 @@ const path = require('path');
 const helmet = require('helmet');
 const cors = require('cors');
 const fs = require('fs');
-     
+        
 console.log('[STARTUP] Starting application...');
 console.log('[STARTUP] NODE_ENV:', process.env.NODE_ENV);
 console.log('[STARTUP] PORT:', process.env.PORT);
