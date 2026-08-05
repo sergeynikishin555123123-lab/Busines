@@ -1,4 +1,4 @@
-// server.js - ПОЛНАЯ ВЕРСИЯ С АДМИН-ПАНЕЛЬЮ В БОТЕ MAX
+// server.js - ПОЛНАЯ РАБОЧАЯ ВЕРСИЯ
 
 require('dotenv').config();
 
@@ -16,8 +16,6 @@ const axios = require('axios');
 console.log('[STARTUP] Starting application...');
 console.log('[STARTUP] NODE_ENV:', process.env.NODE_ENV);
 console.log('[STARTUP] PORT:', process.env.PORT);
-console.log('[STARTUP] PWD:', process.cwd());
-console.log('[STARTUP] UID:', process.getuid?.() || 'unknown');
 
 const DATA_DIR = process.env.DATA_DIR || '/tmp/data';
 const LOG_DIR = process.env.LOG_DIR || '/tmp/logs';
@@ -303,7 +301,7 @@ async function handleBotStarted(update) {
 }
 
 // ============================================================
-// ОБРАБОТКА СООБЩЕНИЙ С ВЛОЖЕНИЯМИ
+// ОБРАБОТКА СООБЩЕНИЙ
 // ============================================================
 
 async function handleMessageCreated(update) {
@@ -321,9 +319,7 @@ async function handleMessageCreated(update) {
 
         const maxApi = new MaxAPI();
 
-        // ============================================================
-        // ОБРАБОТКА ВЛОЖЕНИЙ ОТ АДМИНИСТРАТОРА
-        // ============================================================
+        // Обработка вложений от администратора
         if (attachments.length > 0) {
             const session = adminSessions.get(chatId);
             if (session && session.mode === 'admin') {
@@ -380,9 +376,7 @@ async function handleMessageCallback(update) {
 
         const maxApi = new MaxAPI();
 
-        // ============================================================
         // АДМИН-ПАНЕЛЬ CALLBACK
-        // ============================================================
         if (payload === 'admin_panel') {
             await showAdminLogin(chatId, maxApi);
             return;
@@ -516,16 +510,20 @@ async function showAdminDashboard(chatId, maxApi) {
 
         const courses = await courseService.getAllCourses(false);
         const lessons = database.readTable('lessons');
+        const users = database.readTable('users');
 
         const text = `🔐 **Админ-панель**\n\n` +
                     `👤 ${session.login} (${session.role})\n` +
                     `📚 Всего курсов: ${courses.length}\n` +
-                    `📖 Всего уроков: ${lessons.length}\n\n` +
+                    `📖 Всего уроков: ${lessons.length}\n` +
+                    `👥 Пользователей: ${users.length}\n\n` +
                     `Выберите действие:`;
 
         const buttons = [
             [{ type: 'callback', text: '📚 Управление курсами', payload: 'admin_courses' }],
             [{ type: 'callback', text: '📖 Управление уроками', payload: 'admin_lessons' }],
+            [{ type: 'callback', text: '📝 Управление тестами', payload: 'admin_tests' }],
+            [{ type: 'callback', text: '👥 Пользователи', payload: 'admin_users' }],
             [{ type: 'callback', text: '📊 Статистика', payload: 'admin_stats' }],
             [{ type: 'callback', text: '🚪 Выйти', payload: 'admin_logout' }]
         ];
@@ -634,14 +632,15 @@ async function showAdminCourseDetail(chatId, courseId, maxApi) {
         if (lessons.length > 0) {
             text += '**Уроки:**\n';
             for (const lesson of lessons) {
-                const hasVideo = lesson.video_url || lesson.video_token;
-                const icon = hasVideo ? '🎬' : '📝';
-                text += `${icon} ${lesson.title}\n`;
+                const hasTest = await lessonService.getLessonTest(lesson.id);
+                const testIcon = hasTest ? '✅' : '❌';
+                text += `📝 ${lesson.title} ${testIcon}\n`;
             }
             text += '\n';
         }
 
         const buttons = [
+            [{ type: 'callback', text: '✏️ Редактировать курс', payload: `admin_course_edit_${courseId}` }],
             [{ type: 'callback', text: '📖 Добавить урок', payload: `admin_lesson_create_${courseId}` }],
             [
                 { type: 'callback', text: course.is_active !== false ? '⛔ Деактивировать' : '✅ Активировать',
@@ -663,9 +662,159 @@ async function showAdminCourseDetail(chatId, courseId, maxApi) {
     }
 }
 
+async function handleAdminCourseEdit(chatId, courseId, maxApi) {
+    try {
+        const course = await courseService.getCourseById(courseId);
+        if (!course) {
+            await maxApi.sendMessage({ chatId: chatId, text: '❌ Курс не найден', parseMode: 'markdown' });
+            return;
+        }
+
+        const session = adminSessions.get(chatId);
+        if (session) {
+            session.context = 'editing_course';
+            session.courseId = courseId;
+        }
+
+        await maxApi.sendMessage({
+            chatId: chatId,
+            text: `✏️ **Редактирование курса: ${course.title}**\n\n` +
+                  `Введите новое название (или оставьте пустым для пропуска):\n\n` +
+                  `Текущее название: ${course.title}`,
+            parseMode: 'markdown',
+        });
+    } catch (error) {
+        console.error('[ADMIN] Error editing course:', error);
+    }
+}
+
+async function handleAdminCourseEditStep2(chatId, title, maxApi) {
+    try {
+        const session = adminSessions.get(chatId);
+        if (!session || !session.courseId) {
+            await maxApi.sendMessage({ chatId: chatId, text: '❌ Сессия потеряна', parseMode: 'markdown' });
+            return;
+        }
+
+        const course = await courseService.getCourseById(session.courseId);
+        if (title && title.trim()) {
+            await courseService.updateCourse(session.courseId, { title: title.trim() });
+        }
+
+        session.context = 'editing_course_description';
+        await maxApi.sendMessage({
+            chatId: chatId,
+            text: `✏️ **Редактирование курса**\n\n` +
+                  `Введите новое описание (или оставьте пустым для пропуска):\n\n` +
+                  `Текущее описание: ${course?.description || 'Нет'}`,
+            parseMode: 'markdown',
+        });
+    } catch (error) {
+        console.error('[ADMIN] Error in course edit step 2:', error);
+    }
+}
+
+async function handleAdminCourseEditStep3(chatId, description, maxApi) {
+    try {
+        const session = adminSessions.get(chatId);
+        if (!session || !session.courseId) {
+            await maxApi.sendMessage({ chatId: chatId, text: '❌ Сессия потеряна', parseMode: 'markdown' });
+            return;
+        }
+
+        if (description && description.trim()) {
+            await courseService.updateCourse(session.courseId, { description: description.trim() });
+        }
+
+        session.context = 'editing_course_price';
+        await maxApi.sendMessage({
+            chatId: chatId,
+            text: `✏️ **Редактирование курса**\n\n` +
+                  `Введите новую цену (в рублях, 0 - бесплатно):\n\n` +
+                  `Текущая цена: ${(await courseService.getCourseById(session.courseId))?.price || 0}`,
+            parseMode: 'markdown',
+        });
+    } catch (error) {
+        console.error('[ADMIN] Error in course edit step 3:', error);
+    }
+}
+
+async function handleAdminCourseEditStep4(chatId, price, maxApi) {
+    try {
+        const session = adminSessions.get(chatId);
+        if (!session || !session.courseId) {
+            await maxApi.sendMessage({ chatId: chatId, text: '❌ Сессия потеряна', parseMode: 'markdown' });
+            return;
+        }
+
+        const priceNum = parseFloat(price);
+        if (!isNaN(priceNum)) {
+            await courseService.updateCourse(session.courseId, { price: priceNum });
+        }
+
+        session.context = 'dashboard';
+        await maxApi.sendMessage({
+            chatId: chatId,
+            text: `✅ **Курс обновлён!**`,
+            parseMode: 'markdown',
+        });
+
+        await showAdminCourseDetail(chatId, session.courseId, maxApi);
+
+    } catch (error) {
+        console.error('[ADMIN] Error in course edit step 4:', error);
+    }
+}
+
 // ============================================================
 // УПРАВЛЕНИЕ УРОКАМИ
 // ============================================================
+
+async function handleAdminLessons(chatId, maxApi) {
+    try {
+        const lessons = database.readTable('lessons');
+        const courses = await courseService.getAllCourses(false);
+
+        if (lessons.length === 0) {
+            await maxApi.sendMessage({
+                chatId: chatId,
+                text: '📖 **Уроков пока нет**\n\nСоздайте урок через управление курсами.',
+                parseMode: 'markdown',
+            });
+            await showAdminDashboard(chatId, maxApi);
+            return;
+        }
+
+        let text = '📖 **Все уроки**\n\n';
+        const buttons = [];
+
+        for (const lesson of lessons) {
+            const course = courses.find(c => c.id === lesson.course_id);
+            const courseTitle = course ? course.title : 'Без курса';
+            const hasTest = await lessonService.getLessonTest(lesson.id);
+            const testIcon = hasTest ? '✅' : '❌';
+            
+            text += `📝 ${lesson.title}\n`;
+            text += `   📚 ${courseTitle} ${testIcon}\n\n`;
+            
+            buttons.push([
+                { type: 'callback', text: `✏️ ${lesson.title.substring(0, 20)}`, payload: `admin_lesson_edit_${lesson.id}` }
+            ]);
+        }
+
+        buttons.push([{ type: 'callback', text: '⬅️ Назад', payload: 'admin_back' }]);
+
+        await maxApi.sendKeyboard({
+            chatId: chatId,
+            text: text,
+            buttons: buttons,
+            parseMode: 'markdown',
+        });
+
+    } catch (error) {
+        console.error('[ADMIN] Error showing lessons:', error);
+    }
+}
 
 async function handleAdminLessonCreate(chatId, courseId, maxApi) {
     try {
@@ -724,7 +873,7 @@ async function handleAdminLessonCreateStep3(chatId, description, maxApi) {
 
         await maxApi.sendMessage({
             chatId: chatId,
-            text: `✅ **Урок создан!**\n\n📖 ${lesson.title}\n\nТеперь загрузите видео или файл.`,
+            text: `✅ **Урок создан!**\n\n📖 ${lesson.title}\n\nТеперь загрузите видео или файл, или создайте тест.`,
             parseMode: 'markdown',
         });
 
@@ -749,20 +898,26 @@ async function showAdminLessonDetail(chatId, lessonId, maxApi) {
 
         const hasVideo = lesson.files?.find(f => f.type === 'video');
         const hasFile = lesson.files?.find(f => f.type === 'file');
+        const test = await lessonService.getLessonTest(lessonId);
 
         let text = `📖 **${lesson.title}**\n\n`;
         text += `${lesson.description || 'Нет описания'}\n\n`;
         text += `🎬 Видео: ${hasVideo ? '✅ Загружено' : '❌ Нет'}\n`;
         text += `📎 Файл: ${hasFile ? '✅ Загружен' : '❌ Нет'}\n`;
+        text += `📝 Тест: ${test ? '✅ Есть' : '❌ Нет'}\n`;
         text += `🆓 ${lesson.is_free ? 'Бесплатный' : 'Платный'}\n\n`;
 
         if (hasVideo) {
-            text += `🔑 Токен: ${hasVideo.token ? hasVideo.token.substring(0, 20) + '...' : 'Нет'}\n`;
+            const videoFile = lesson.files.find(f => f.type === 'video');
+            text += `🔑 Токен видео: ${videoFile?.token ? videoFile.token.substring(0, 20) + '...' : 'Нет'}\n`;
         }
 
         const buttons = [
+            [{ type: 'callback', text: '✏️ Редактировать урок', payload: `admin_lesson_edit_form_${lessonId}` }],
             [{ type: 'callback', text: '🎬 Загрузить видео', payload: `admin_lesson_video_${lessonId}` }],
             [{ type: 'callback', text: '📎 Загрузить файл', payload: `admin_lesson_file_${lessonId}` }],
+            [{ type: 'callback', text: test ? '✏️ Редактировать тест' : '📝 Создать тест', 
+                payload: test ? `admin_test_edit_${test.id}` : `admin_test_create_${lessonId}` }],
             [
                 { type: 'callback', text: '🗑️ Удалить урок', payload: `admin_lesson_delete_${lessonId}` }
             ],
@@ -778,6 +933,511 @@ async function showAdminLessonDetail(chatId, lessonId, maxApi) {
 
     } catch (error) {
         console.error('[ADMIN] Error showing lesson detail:', error);
+    }
+}
+
+// ============================================================
+// РЕДАКТИРОВАНИЕ УРОКА
+// ============================================================
+
+async function handleAdminLessonEdit(chatId, lessonId, maxApi) {
+    try {
+        const lesson = await lessonService.getLessonById(lessonId);
+        if (!lesson) {
+            await maxApi.sendMessage({ chatId: chatId, text: '❌ Урок не найден', parseMode: 'markdown' });
+            return;
+        }
+
+        const session = adminSessions.get(chatId);
+        if (session) {
+            session.context = 'editing_lesson_title';
+            session.lessonId = lessonId;
+        }
+
+        await maxApi.sendMessage({
+            chatId: chatId,
+            text: `✏️ **Редактирование урока: ${lesson.title}**\n\n` +
+                  `Введите новое название (или оставьте пустым для пропуска):\n\n` +
+                  `Текущее название: ${lesson.title}`,
+            parseMode: 'markdown',
+        });
+    } catch (error) {
+        console.error('[ADMIN] Error editing lesson:', error);
+    }
+}
+
+async function handleAdminLessonEditStep2(chatId, title, maxApi) {
+    try {
+        const session = adminSessions.get(chatId);
+        if (!session || !session.lessonId) {
+            await maxApi.sendMessage({ chatId: chatId, text: '❌ Сессия потеряна', parseMode: 'markdown' });
+            return;
+        }
+
+        if (title && title.trim()) {
+            await lessonService.updateLesson(session.lessonId, { title: title.trim() });
+        }
+
+        session.context = 'editing_lesson_description';
+        const lesson = await lessonService.getLessonById(session.lessonId);
+        
+        await maxApi.sendMessage({
+            chatId: chatId,
+            text: `✏️ **Редактирование урока**\n\n` +
+                  `Введите новое описание (или оставьте пустым для пропуска):\n\n` +
+                  `Текущее описание: ${lesson?.description || 'Нет'}`,
+            parseMode: 'markdown',
+        });
+    } catch (error) {
+        console.error('[ADMIN] Error in lesson edit step 2:', error);
+    }
+}
+
+async function handleAdminLessonEditStep3(chatId, description, maxApi) {
+    try {
+        const session = adminSessions.get(chatId);
+        if (!session || !session.lessonId) {
+            await maxApi.sendMessage({ chatId: chatId, text: '❌ Сессия потеряна', parseMode: 'markdown' });
+            return;
+        }
+
+        if (description && description.trim()) {
+            await lessonService.updateLesson(session.lessonId, { description: description.trim() });
+        }
+
+        session.context = 'editing_lesson_free';
+        const lesson = await lessonService.getLessonById(session.lessonId);
+        
+        await maxApi.sendKeyboard({
+            chatId: chatId,
+            text: `✏️ **Редактирование урока**\n\n` +
+                  `Сделать урок бесплатным?\n\n` +
+                  `Текущий статус: ${lesson?.is_free ? '🆓 Бесплатный' : '🔒 Платный'}`,
+            buttons: [
+                [{ type: 'callback', text: '🆓 Да, бесплатный', payload: `admin_lesson_free_yes_${session.lessonId}` }],
+                [{ type: 'callback', text: '🔒 Нет, платный', payload: `admin_lesson_free_no_${session.lessonId}` }],
+                [{ type: 'callback', text: '⬅️ Отмена', payload: `admin_lesson_edit_${session.lessonId}` }]
+            ],
+            parseMode: 'markdown',
+        });
+    } catch (error) {
+        console.error('[ADMIN] Error in lesson edit step 3:', error);
+    }
+}
+
+async function handleAdminLessonFreeToggle(chatId, lessonId, isFree, maxApi) {
+    try {
+        await lessonService.updateLesson(lessonId, { isFree: isFree === 'yes' });
+        
+        const session = adminSessions.get(chatId);
+        if (session) session.context = 'editing_lesson';
+        
+        await maxApi.sendMessage({
+            chatId: chatId,
+            text: `✅ **Урок обновлён!**`,
+            parseMode: 'markdown',
+        });
+        
+        await showAdminLessonDetail(chatId, lessonId, maxApi);
+    } catch (error) {
+        console.error('[ADMIN] Error toggling free status:', error);
+    }
+}
+
+// ============================================================
+// УПРАВЛЕНИЕ ТЕСТАМИ
+// ============================================================
+
+async function handleAdminTests(chatId, maxApi) {
+    try {
+        const tests = database.readTable('tests');
+        const lessons = database.readTable('lessons');
+
+        if (tests.length === 0) {
+            await maxApi.sendMessage({
+                chatId: chatId,
+                text: '📝 **Тестов пока нет**\n\nСоздайте тест через управление уроками.',
+                parseMode: 'markdown',
+            });
+            await showAdminDashboard(chatId, maxApi);
+            return;
+        }
+
+        let text = '📝 **Все тесты**\n\n';
+        const buttons = [];
+
+        for (const test of tests) {
+            const lesson = lessons.find(l => l.id === test.lesson_id);
+            const lessonTitle = lesson ? lesson.title : 'Без урока';
+            const answers = database.readTable('test_answers').filter(a => a.test_id === test.id);
+            
+            text += `📝 ${test.question || 'Без вопроса'}\n`;
+            text += `   📖 ${lessonTitle}\n`;
+            text += `   ✅ Ответов: ${answers.length}\n\n`;
+            
+            buttons.push([
+                { type: 'callback', text: `✏️ ${(test.question || 'Тест').substring(0, 20)}`, payload: `admin_test_edit_${test.id}` }
+            ]);
+        }
+
+        buttons.push([{ type: 'callback', text: '⬅️ Назад', payload: 'admin_back' }]);
+
+        await maxApi.sendKeyboard({
+            chatId: chatId,
+            text: text,
+            buttons: buttons,
+            parseMode: 'markdown',
+        });
+
+    } catch (error) {
+        console.error('[ADMIN] Error showing tests:', error);
+    }
+}
+
+async function handleAdminTestCreate(chatId, lessonId, maxApi) {
+    try {
+        const session = adminSessions.get(chatId);
+        if (session) {
+            session.context = 'creating_test_question';
+            session.lessonId = lessonId;
+            session.testAnswers = [];
+        }
+        
+        await maxApi.sendMessage({
+            chatId: chatId,
+            text: `📝 **Создание теста**\n\nВведите вопрос для теста:`,
+            parseMode: 'markdown',
+        });
+    } catch (error) {
+        console.error('[ADMIN] Error creating test:', error);
+    }
+}
+
+async function handleAdminTestCreateStep2(chatId, question, maxApi) {
+    try {
+        const session = adminSessions.get(chatId);
+        if (!session || !session.lessonId) {
+            await maxApi.sendMessage({ chatId: chatId, text: '❌ Сессия потеряна', parseMode: 'markdown' });
+            return;
+        }
+
+        session.testQuestion = question;
+        session.context = 'creating_test_answers';
+        session.testAnswers = [];
+
+        await maxApi.sendMessage({
+            chatId: chatId,
+            text: `📝 **Тест: "${question}"**\n\n` +
+                  `Добавьте вариант ответа (отправьте текст ответа).\n` +
+                  `Когда добавите все варианты, отправьте команду /done\n` +
+                  `Чтобы отметить правильный ответ, добавьте в конце * (звёздочку).\n\n` +
+                  `Пример: "Москва*" - ответ будет правильным.`,
+            parseMode: 'markdown',
+        });
+    } catch (error) {
+        console.error('[ADMIN] Error in test create step 2:', error);
+    }
+}
+
+async function handleAdminTestAddAnswer(chatId, text, maxApi) {
+    try {
+        const session = adminSessions.get(chatId);
+        if (!session || session.context !== 'creating_test_answers') {
+            console.log('[ADMIN] Not in test creation mode');
+            return false;
+        }
+
+        if (!session.testAnswers) {
+            session.testAnswers = [];
+        }
+
+        if (text === '/done') {
+            if (!session.testAnswers || session.testAnswers.length < 2) {
+                await maxApi.sendMessage({
+                    chatId: chatId,
+                    text: `❌ **Нужно минимум 2 варианта ответа!**\n\nДобавьте ещё варианты.`,
+                    parseMode: 'markdown',
+                });
+                return true;
+            }
+
+            const hasCorrect = session.testAnswers.some(a => a.isCorrect);
+            if (!hasCorrect) {
+                await maxApi.sendMessage({
+                    chatId: chatId,
+                    text: `❌ **Добавьте хотя бы один правильный ответ!**\n\nДобавьте * (звёздочку) в конце правильного ответа.`,
+                    parseMode: 'markdown',
+                });
+                return true;
+            }
+
+            const test = await lessonService.createTest(session.lessonId, {
+                question: session.testQuestion || 'Проверьте свои знания',
+                answers: session.testAnswers,
+            });
+
+            console.log(`[ADMIN] Test created: ${test.id}, answers: ${test.answers.length}`);
+
+            session.context = 'editing_lesson';
+            session.testAnswers = [];
+
+            await maxApi.sendMessage({
+                chatId: chatId,
+                text: `✅ **Тест создан!**\n\nВопрос: ${session.testQuestion}\nОтветов: ${test.answers.length}`,
+                parseMode: 'markdown',
+            });
+
+            await showAdminLessonDetail(chatId, session.lessonId, maxApi);
+            return true;
+        }
+
+        const isCorrect = text.endsWith('*');
+        const answerText = isCorrect ? text.slice(0, -1).trim() : text.trim();
+
+        if (!answerText) {
+            await maxApi.sendMessage({
+                chatId: chatId,
+                text: `❌ **Пустой ответ!**\n\nВведите текст ответа.`,
+                parseMode: 'markdown',
+            });
+            return true;
+        }
+
+        session.testAnswers.push({
+            text: answerText,
+            isCorrect: isCorrect,
+        });
+
+        const correctCount = session.testAnswers.filter(a => a.isCorrect).length;
+        await maxApi.sendMessage({
+            chatId: chatId,
+            text: `✅ **Добавлен ответ:** ${answerText} ${isCorrect ? '⭐ (правильный)' : ''}\n\n` +
+                  `Всего ответов: ${session.testAnswers.length}\n` +
+                  `Правильных: ${correctCount}\n\n` +
+                  `Добавьте ещё ответ или отправьте /done для завершения.`,
+            parseMode: 'markdown',
+        });
+
+        return true;
+
+    } catch (error) {
+        console.error('[ADMIN] Error adding test answer:', error);
+        await maxApi.sendMessage({
+            chatId: chatId,
+            text: `❌ Ошибка при добавлении ответа: ${error.message}`,
+            parseMode: 'markdown',
+        });
+        return false;
+    }
+}
+
+async function handleAdminTestEdit(chatId, testId, maxApi) {
+    try {
+        const test = await lessonService.getTestById(testId);
+        if (!test) {
+            await maxApi.sendMessage({ chatId: chatId, text: '❌ Тест не найден', parseMode: 'markdown' });
+            return;
+        }
+
+        const session = adminSessions.get(chatId);
+        if (session) {
+            session.context = 'editing_test';
+            session.testId = testId;
+        }
+
+        let text = `✏️ **Редактирование теста**\n\n`;
+        text += `Вопрос: ${test.question}\n\n`;
+        text += `**Варианты ответов:**\n`;
+        for (const answer of test.answers) {
+            text += `${answer.is_correct ? '⭐' : '•'} ${answer.answer}\n`;
+        }
+        text += `\nЧто хотите изменить?`;
+
+        const buttons = [
+            [{ type: 'callback', text: '✏️ Изменить вопрос', payload: `admin_test_edit_question_${testId}` }],
+            [{ type: 'callback', text: '➕ Добавить ответ', payload: `admin_test_add_answer_${testId}` }],
+            [{ type: 'callback', text: '🗑️ Удалить тест', payload: `admin_test_delete_${testId}` }],
+            [{ type: 'callback', text: '⬅️ Назад к уроку', payload: `admin_lesson_edit_${test.lesson_id}` }]
+        ];
+
+        await maxApi.sendKeyboard({
+            chatId: chatId,
+            text: text,
+            buttons: buttons,
+            parseMode: 'markdown',
+        });
+
+    } catch (error) {
+        console.error('[ADMIN] Error editing test:', error);
+    }
+}
+
+async function handleAdminTestEditQuestion(chatId, testId, maxApi) {
+    try {
+        const session = adminSessions.get(chatId);
+        if (session) {
+            session.context = 'editing_test_question';
+            session.testId = testId;
+        }
+
+        const test = await lessonService.getTestById(testId);
+        await maxApi.sendMessage({
+            chatId: chatId,
+            text: `✏️ **Изменить вопрос**\n\nТекущий вопрос: ${test?.question || 'Нет'}\n\nВведите новый вопрос:`,
+            parseMode: 'markdown',
+        });
+    } catch (error) {
+        console.error('[ADMIN] Error editing test question:', error);
+    }
+}
+
+async function handleAdminTestEditQuestionStep2(chatId, question, maxApi) {
+    try {
+        const session = adminSessions.get(chatId);
+        if (!session || !session.testId) {
+            await maxApi.sendMessage({ chatId: chatId, text: '❌ Сессия потеряна', parseMode: 'markdown' });
+            return;
+        }
+
+        await lessonService.updateTest(session.testId, { question: question.trim() });
+
+        session.context = 'editing_lesson';
+        await maxApi.sendMessage({
+            chatId: chatId,
+            text: `✅ **Вопрос обновлён!**`,
+            parseMode: 'markdown',
+        });
+
+        await handleAdminTestEdit(chatId, session.testId, maxApi);
+    } catch (error) {
+        console.error('[ADMIN] Error updating test question:', error);
+    }
+}
+
+// ============================================================
+// УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ
+// ============================================================
+
+async function handleAdminUsers(chatId, maxApi) {
+    try {
+        const users = database.readTable('users');
+
+        if (users.length === 0) {
+            await maxApi.sendMessage({
+                chatId: chatId,
+                text: '👥 **Пользователей пока нет**',
+                parseMode: 'markdown',
+            });
+            await showAdminDashboard(chatId, maxApi);
+            return;
+        }
+
+        let text = '👥 **Пользователи**\n\n';
+        const buttons = [];
+
+        const sortedUsers = users.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+        const recentUsers = sortedUsers.slice(0, 10);
+
+        for (const user of recentUsers) {
+            text += `👤 ${user.first_name || 'Пользователь'} ${user.last_name || ''}\n`;
+            text += `   📱 ${user.platform || 'unknown'}: ${user.platform_user_id || 'N/A'}\n\n`;
+            
+            buttons.push([
+                { type: 'callback', text: `👤 ${(user.first_name || 'User').substring(0, 15)}`, payload: `admin_user_${user.id}` }
+            ]);
+        }
+
+        buttons.push([{ type: 'callback', text: '⬅️ Назад', payload: 'admin_back' }]);
+
+        await maxApi.sendKeyboard({
+            chatId: chatId,
+            text: text + `Всего пользователей: ${users.length}\n\nВыберите пользователя:`,
+            buttons: buttons,
+            parseMode: 'markdown',
+        });
+
+    } catch (error) {
+        console.error('[ADMIN] Error showing users:', error);
+    }
+}
+
+async function handleAdminUserDetail(chatId, userId, maxApi) {
+    try {
+        const user = await userService.getUserById(userId);
+        if (!user) {
+            await maxApi.sendMessage({ chatId: chatId, text: '❌ Пользователь не найден', parseMode: 'markdown' });
+            return;
+        }
+
+        const progress = database.readTable('progress').filter(p => p.user_id === userId);
+        const completed = progress.filter(p => p.status === 'completed').length;
+
+        let text = `👤 **${user.first_name || 'Пользователь'} ${user.last_name || ''}**\n\n`;
+        text += `📱 ${user.platform}: ${user.platform_user_id}\n`;
+        text += `📖 Всего уроков: ${progress.length}\n`;
+        text += `✅ Пройдено: ${completed}\n`;
+        text += `📅 Создан: ${new Date(user.created_at).toLocaleString()}\n\n`;
+
+        const buttons = [
+            [{ type: 'callback', text: '⬅️ Назад', payload: 'admin_users' }]
+        ];
+
+        await maxApi.sendKeyboard({
+            chatId: chatId,
+            text: text,
+            buttons: buttons,
+            parseMode: 'markdown',
+        });
+
+    } catch (error) {
+        console.error('[ADMIN] Error showing user detail:', error);
+    }
+}
+
+// ============================================================
+// ЗАГРУЗКА ВИДЕО И ФАЙЛОВ
+// ============================================================
+
+async function handleAdminUploadVideo(chatId, lessonId, maxApi) {
+    try {
+        const session = adminSessions.get(chatId);
+        if (session) {
+            session.context = 'uploading_video';
+            session.lessonId = lessonId;
+        }
+
+        await maxApi.sendMessage({
+            chatId: chatId,
+            text: `🎬 **Загрузка видео**\n\nОтправьте видео файлом в этот чат.\n\n` +
+                  `Поддерживаются: MP4, WebM, MOV\n` +
+                  `Максимальный размер: 250MB\n\n` +
+                  `❗ Видео будет автоматически загружено в MAX.`,
+            parseMode: 'markdown',
+        });
+
+    } catch (error) {
+        console.error('[ADMIN] Error uploading video:', error);
+    }
+}
+
+async function handleAdminUploadFile(chatId, lessonId, maxApi) {
+    try {
+        const session = adminSessions.get(chatId);
+        if (session) {
+            session.context = 'uploading_file';
+            session.lessonId = lessonId;
+        }
+
+        await maxApi.sendMessage({
+            chatId: chatId,
+            text: `📎 **Загрузка файла**\n\nОтправьте файл в этот чат.\n\n` +
+                  `Поддерживаются: PDF, DOCX, ZIP, изображения\n` +
+                  `Максимальный размер: 250MB`,
+            parseMode: 'markdown',
+        });
+
+    } catch (error) {
+        console.error('[ADMIN] Error uploading file:', error);
     }
 }
 
@@ -807,11 +1467,12 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
 
         for (const attachment of attachments) {
             console.log(`[ADMIN] Attachment type: ${attachment.type}`);
+            console.log(`[ADMIN] Attachment payload:`, JSON.stringify(attachment.payload, null, 2));
 
-            // Если файл уже в MAX - сохраняем токен
+            // Если есть токен - используем его
             if (attachment.payload && attachment.payload.token) {
                 const token = attachment.payload.token;
-                const fileType = attachment.type || 'file';
+                const fileType = context === 'uploading_video' ? 'video' : 'file';
                 const fileName = attachment.payload.filename || 'file';
 
                 console.log(`[ADMIN] File already in MAX: ${fileName}, token: ${token.substring(0, 20)}...`);
@@ -835,14 +1496,49 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
                     parseMode: 'markdown',
                 });
 
+                session.context = 'editing_lesson';
                 await showAdminLessonDetail(chatId, lessonId, maxApi);
                 return;
             }
 
-            // Если файл пришел как ссылка
+            // Если есть file_id - используем его как токен
+            if (attachment.payload && attachment.payload.file_id) {
+                const token = attachment.payload.file_id;
+                const fileType = context === 'uploading_video' ? 'video' : 'file';
+                const fileName = attachment.payload.filename || 'file';
+
+                console.log(`[ADMIN] File ID from MAX: ${token}`);
+
+                const fileData = {
+                    filename: `${token}-${Date.now()}`,
+                    originalname: fileName,
+                    size: attachment.payload.size || 0,
+                    mimetype: fileType,
+                    path: token,
+                    url: token,
+                    token: token,
+                    is_max_uploaded: true,
+                };
+
+                await lessonService.addLessonFile(lessonId, fileData);
+
+                await maxApi.sendMessage({
+                    chatId: chatId,
+                    text: `✅ **Файл загружен!**\n\n📎 ${fileName}\n🔑 Токен: ${token.substring(0, 20)}...`,
+                    parseMode: 'markdown',
+                });
+
+                session.context = 'editing_lesson';
+                await showAdminLessonDetail(chatId, lessonId, maxApi);
+                return;
+            }
+
+            // Если есть URL - скачиваем и загружаем через MAX API
             if (attachment.payload && attachment.payload.url) {
                 const fileUrl = attachment.payload.url;
                 const fileName = attachment.payload.filename || 'file';
+
+                console.log(`[ADMIN] Downloading file from URL: ${fileUrl}`);
 
                 try {
                     const response = await axios.get(fileUrl, {
@@ -853,14 +1549,16 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
                     const tempPath = path.join(UPLOADS_DIR, 'temp', `${Date.now()}-${fileName}`);
                     fs.writeFileSync(tempPath, Buffer.from(response.data));
 
-                    const token = await maxApi.uploadFile(tempPath, 'file');
+                    const fileType = context === 'uploading_video' ? 'video' : 'file';
+                    const token = await maxApi.uploadFileWithRetry(tempPath, fileType);
+
                     fs.unlinkSync(tempPath);
 
                     const fileData = {
                         filename: `${token}-${Date.now()}`,
                         originalname: fileName,
                         size: response.data.length,
-                        mimetype: 'file',
+                        mimetype: fileType,
                         path: token,
                         url: token,
                         token: token,
@@ -875,6 +1573,7 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
                         parseMode: 'markdown',
                     });
 
+                    session.context = 'editing_lesson';
                     await showAdminLessonDetail(chatId, lessonId, maxApi);
                     return;
 
@@ -907,54 +1606,6 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
 }
 
 // ============================================================
-// ЗАГРУЗКА ВИДЕО И ФАЙЛОВ (запрос от админа)
-// ============================================================
-
-async function handleAdminUploadVideo(chatId, lessonId, maxApi) {
-    try {
-        const session = adminSessions.get(chatId);
-        if (session) {
-            session.context = 'uploading_video';
-            session.lessonId = lessonId;
-        }
-
-        await maxApi.sendMessage({
-            chatId: chatId,
-            text: `🎬 **Загрузка видео**\n\nОтправьте видео файлом в этот чат.\n\n` +
-                  `Поддерживаются: MP4, WebM, MOV\n` +
-                  `Максимальный размер: 250MB\n` +
-                  `Максимальная длительность: 30 минут\n\n` +
-                  `❗ Видео будет автоматически загружено в MAX.`,
-            parseMode: 'markdown',
-        });
-
-    } catch (error) {
-        console.error('[ADMIN] Error uploading video:', error);
-    }
-}
-
-async function handleAdminUploadFile(chatId, lessonId, maxApi) {
-    try {
-        const session = adminSessions.get(chatId);
-        if (session) {
-            session.context = 'uploading_file';
-            session.lessonId = lessonId;
-        }
-
-        await maxApi.sendMessage({
-            chatId: chatId,
-            text: `📎 **Загрузка файла**\n\nОтправьте файл в этот чат.\n\n` +
-                  `Поддерживаются: PDF, DOCX, ZIP, изображения\n` +
-                  `Максимальный размер: 250MB`,
-            parseMode: 'markdown',
-        });
-
-    } catch (error) {
-        console.error('[ADMIN] Error uploading file:', error);
-    }
-}
-
-// ============================================================
 // АДМИН-КОМАНДЫ
 // ============================================================
 
@@ -970,13 +1621,48 @@ async function handleAdminCommand(chatId, text, maxApi) {
             return;
         }
 
+        if (session.context === 'editing_course') {
+            await handleAdminCourseEditStep2(chatId, text, maxApi);
+            return;
+        }
+        if (session.context === 'editing_course_description') {
+            await handleAdminCourseEditStep3(chatId, text, maxApi);
+            return;
+        }
+        if (session.context === 'editing_course_price') {
+            await handleAdminCourseEditStep4(chatId, text, maxApi);
+            return;
+        }
+
         if (session.context === 'creating_lesson') {
             await handleAdminLessonCreateStep2(chatId, text, maxApi);
             return;
         }
-
         if (session.context === 'creating_lesson_description') {
             await handleAdminLessonCreateStep3(chatId, text, maxApi);
+            return;
+        }
+
+        if (session.context === 'editing_lesson_title') {
+            await handleAdminLessonEditStep2(chatId, text, maxApi);
+            return;
+        }
+        if (session.context === 'editing_lesson_description') {
+            await handleAdminLessonEditStep3(chatId, text, maxApi);
+            return;
+        }
+
+        if (session.context === 'creating_test_question') {
+            await handleAdminTestCreateStep2(chatId, text, maxApi);
+            return;
+        }
+        if (session.context === 'creating_test_answers') {
+            const handled = await handleAdminTestAddAnswer(chatId, text, maxApi);
+            if (handled) return;
+        }
+
+        if (session.context === 'editing_test_question') {
+            await handleAdminTestEditQuestionStep2(chatId, text, maxApi);
             return;
         }
 
@@ -1022,6 +1708,12 @@ async function handleAdminCallback(chatId, payload, maxApi) {
             return;
         }
 
+        if (payload.startsWith('admin_course_edit_')) {
+            const courseId = payload.replace('admin_course_edit_', '');
+            await handleAdminCourseEdit(chatId, courseId, maxApi);
+            return;
+        }
+
         if (payload.startsWith('admin_course_')) {
             const courseId = payload.replace('admin_course_', '');
             if (courseId !== 'create' && courseId !== 'back') {
@@ -1064,6 +1756,11 @@ async function handleAdminCallback(chatId, payload, maxApi) {
         }
 
         // Уроки
+        if (payload === 'admin_lessons') {
+            await handleAdminLessons(chatId, maxApi);
+            return;
+        }
+
         if (payload.startsWith('admin_lesson_create_')) {
             const courseId = payload.replace('admin_lesson_create_', '');
             await handleAdminLessonCreate(chatId, courseId, maxApi);
@@ -1079,6 +1776,26 @@ async function handleAdminCallback(chatId, payload, maxApi) {
         if (payload.startsWith('admin_lesson_file_')) {
             const lessonId = payload.replace('admin_lesson_file_', '');
             await handleAdminUploadFile(chatId, lessonId, maxApi);
+            return;
+        }
+
+        if (payload.startsWith('admin_lesson_edit_form_')) {
+            const lessonId = payload.replace('admin_lesson_edit_form_', '');
+            await handleAdminLessonEdit(chatId, lessonId, maxApi);
+            return;
+        }
+
+        if (payload.startsWith('admin_lesson_edit_')) {
+            const lessonId = payload.replace('admin_lesson_edit_', '');
+            await showAdminLessonDetail(chatId, lessonId, maxApi);
+            return;
+        }
+
+        if (payload.startsWith('admin_lesson_free_')) {
+            const parts = payload.split('_');
+            const isFree = parts[3];
+            const lessonId = parts[4];
+            await handleAdminLessonFreeToggle(chatId, lessonId, isFree, maxApi);
             return;
         }
 
@@ -1114,9 +1831,70 @@ async function handleAdminCallback(chatId, payload, maxApi) {
             return;
         }
 
-        if (payload.startsWith('admin_lesson_edit_')) {
-            const lessonId = payload.replace('admin_lesson_edit_', '');
-            await showAdminLessonDetail(chatId, lessonId, maxApi);
+        // Тесты
+        if (payload === 'admin_tests') {
+            await handleAdminTests(chatId, maxApi);
+            return;
+        }
+
+        if (payload.startsWith('admin_test_create_')) {
+            const lessonId = payload.replace('admin_test_create_', '');
+            await handleAdminTestCreate(chatId, lessonId, maxApi);
+            return;
+        }
+
+        if (payload.startsWith('admin_test_edit_')) {
+            const testId = payload.replace('admin_test_edit_', '');
+            await handleAdminTestEdit(chatId, testId, maxApi);
+            return;
+        }
+
+        if (payload.startsWith('admin_test_edit_question_')) {
+            const testId = payload.replace('admin_test_edit_question_', '');
+            await handleAdminTestEditQuestion(chatId, testId, maxApi);
+            return;
+        }
+
+        if (payload.startsWith('admin_test_delete_')) {
+            const testId = payload.replace('admin_test_delete_', '');
+            const test = await lessonService.getTestById(testId);
+            const lessonId = test ? test.lesson_id : null;
+            
+            await maxApi.sendKeyboard({
+                chatId: chatId,
+                text: `⚠️ **Удалить тест?**`,
+                buttons: [
+                    [{ type: 'callback', text: '✅ Да', payload: `admin_test_delete_confirm_${testId}` }],
+                    [{ type: 'callback', text: '❌ Нет', payload: `admin_test_edit_${testId}` }]
+                ],
+                parseMode: 'markdown',
+            });
+            return;
+        }
+
+        if (payload.startsWith('admin_test_delete_confirm_')) {
+            const testId = payload.replace('admin_test_delete_confirm_', '');
+            const test = await lessonService.getTestById(testId);
+            const lessonId = test ? test.lesson_id : null;
+            await lessonService.deleteTest(testId);
+            await maxApi.sendMessage({ chatId: chatId, text: `🗑️ Тест удалён.`, parseMode: 'markdown' });
+            if (lessonId) {
+                await showAdminLessonDetail(chatId, lessonId, maxApi);
+            } else {
+                await handleAdminTests(chatId, maxApi);
+            }
+            return;
+        }
+
+        // Пользователи
+        if (payload === 'admin_users') {
+            await handleAdminUsers(chatId, maxApi);
+            return;
+        }
+
+        if (payload.startsWith('admin_user_')) {
+            const userId = payload.replace('admin_user_', '');
+            await handleAdminUserDetail(chatId, userId, maxApi);
             return;
         }
 
@@ -1167,44 +1945,49 @@ async function sendLessonToUser(chatId, lessonId, maxApi) {
         
         const lesson = await lessonService.getLessonWithFiles(lessonId);
         if (!lesson) {
-            await maxApi.sendMessage({ chatId: chatId, text: '❌ Урок не найден', parseMode: 'markdown' });
+            await maxApi.sendMessage({
+                chatId: chatId,
+                text: '❌ Урок не найден',
+                parseMode: 'markdown',
+            });
             return;
         }
 
-        console.log(`[LESSON] Lesson: ${lesson.title}, Files: ${lesson.files ? lesson.files.length : 0}`);
+        console.log(`[LESSON] Lesson: ${lesson.title}`);
+        console.log(`[LESSON] Files: ${lesson.files ? lesson.files.length : 0}`);
 
-        // 1. Отправляем видео
         const videoFile = lesson.files?.find(f => f.type === 'video');
+        const otherFiles = lesson.files?.filter(f => f.type !== 'video') || [];
+
+        // Отправляем видео
+        let videoSent = false;
+        
         if (videoFile) {
             try {
                 if (videoFile.token) {
+                    console.log(`[LESSON] Sending video by token: ${videoFile.token.substring(0, 20)}...`);
                     await maxApi.sendVideoByToken({
                         chatId: chatId,
                         token: videoFile.token,
                         caption: `🎬 **${lesson.title}**\n\n${lesson.description || ''}`,
                         parseMode: 'markdown',
                     });
+                    videoSent = true;
                     console.log(`[LESSON] ✅ Video sent by token`);
-                } else if (videoFile.path && fs.existsSync(videoFile.path)) {
-                    await maxApi.sendVideo({
-                        chatId: chatId,
-                        videoPath: videoFile.path,
-                        caption: `🎬 **${lesson.title}**\n\n${lesson.description || ''}`,
-                        parseMode: 'markdown',
-                    });
-                    console.log(`[LESSON] ✅ Video sent by path`);
-                } else {
-                    throw new Error('Video not available');
                 }
             } catch (error) {
                 console.error('[LESSON] Failed to send video:', error.message);
                 await maxApi.sendMessage({
                     chatId: chatId,
-                    text: `📖 **${lesson.title}**\n\n${lesson.description || ''}\n\n⚠️ Видео недоступно.`,
+                    text: `📖 **${lesson.title}**\n\n${lesson.description || ''}\n\n⚠️ Видео временно недоступно.`,
                     parseMode: 'markdown',
                 });
+                videoSent = true;
             }
-        } else {
+        }
+
+        // Если нет видео - отправляем описание
+        if (!videoFile && !videoSent) {
             await maxApi.sendMessage({
                 chatId: chatId,
                 text: `📖 **${lesson.title}**\n\n${lesson.description || 'Нет описания'}`,
@@ -1212,11 +1995,11 @@ async function sendLessonToUser(chatId, lessonId, maxApi) {
             });
         }
 
-        // 2. Отправляем файлы
-        const otherFiles = lesson.files?.filter(f => f.type !== 'video') || [];
+        // Отправляем файлы
         for (const file of otherFiles) {
             try {
                 if (file.token) {
+                    console.log(`[LESSON] Sending file by token: ${file.original_name}`);
                     await maxApi.sendFileByToken({
                         chatId: chatId,
                         token: file.token,
@@ -1224,58 +2007,72 @@ async function sendLessonToUser(chatId, lessonId, maxApi) {
                         parseMode: 'markdown',
                     });
                     console.log(`[LESSON] ✅ File sent by token: ${file.original_name}`);
-                } else if (file.path && fs.existsSync(file.path)) {
-                    await maxApi.sendFile({
-                        chatId: chatId,
-                        filePath: file.path,
-                        caption: `📎 **${file.original_name}**`,
-                        parseMode: 'markdown',
-                    });
-                    console.log(`[LESSON] ✅ File sent by path: ${file.original_name}`);
                 }
             } catch (error) {
-                console.error('[LESSON] Failed to send file:', error.message);
+                console.error(`[LESSON] Failed to send file ${file.original_name}:`, error.message);
+                await maxApi.sendMessage({
+                    chatId: chatId,
+                    text: `📎 **${file.original_name}**\n\nНе удалось отправить файл.`,
+                    parseMode: 'markdown',
+                });
             }
         }
 
-        // 3. Тест
+        // Тест
         const test = await lessonService.getLessonTest(lessonId);
+        
         if (test && test.answers && test.answers.length > 0) {
+            const buttons = [
+                [
+                    { type: 'callback', text: '✅ Проверить себя', payload: `test_${test.id}` },
+                ],
+                [
+                    { type: 'callback', text: '📚 Назад к курсу', payload: `course_${lesson.course_id}` },
+                ]
+            ];
+
             await maxApi.sendKeyboard({
                 chatId: chatId,
                 text: `📝 **Готов проверить знания?**\n\nПройти тест по уроку "${lesson.title}"`,
-                buttons: [
-                    [{ type: 'callback', text: '✅ Проверить себя', payload: `test_${test.id}` }],
-                    [{ type: 'callback', text: '📚 Назад к курсу', payload: `course_${lesson.course_id}` }]
-                ],
+                buttons: buttons,
                 parseMode: 'markdown',
             });
         } else {
+            const buttons = [
+                [
+                    { type: 'callback', text: '📚 Назад к курсу', payload: `course_${lesson.course_id}` },
+                ]
+            ];
+
             await maxApi.sendKeyboard({
                 chatId: chatId,
                 text: `✅ Урок завершён!\n\nВы изучили "${lesson.title}"`,
-                buttons: [
-                    [{ type: 'callback', text: '📚 Назад к курсу', payload: `course_${lesson.course_id}` }]
-                ],
+                buttons: buttons,
                 parseMode: 'markdown',
             });
         }
 
+        await lessonService.recordLessonView(chatId, lessonId);
         console.log(`[LESSON] ✅ Lesson ${lessonId} sent to ${chatId}`);
 
     } catch (error) {
         console.error('[LESSON] Error sending lesson:', error);
         logger.error({ err: error, chatId, lessonId }, 'Failed to send lesson');
-        await maxApi.sendMessage({
-            chatId: chatId,
-            text: '❌ Ошибка при загрузке урока.',
-            parseMode: 'markdown',
-        });
+        
+        try {
+            await maxApi.sendMessage({
+                chatId: chatId,
+                text: '❌ Ошибка при загрузке урока. Попробуйте позже.',
+                parseMode: 'markdown',
+            });
+        } catch (e) {
+            console.error('[LESSON] Failed to send error message:', e);
+        }
     }
 }
 
 // ============================================================
-// ОСТАЛЬНЫЕ ФУНКЦИИ (КОМАНДЫ, ТЕСТЫ)
+// ОСТАЛЬНЫЕ ФУНКЦИИ
 // ============================================================
 
 async function handleStartCommand(chatId, userId, text, maxApi) {
@@ -1372,11 +2169,9 @@ async function showCourseDetails(chatId, courseId, maxApi) {
         if (lessons.length > 0) {
             text += '**Уроки:**\n';
             lessons.forEach((lesson, index) => {
-                const hasContent = lesson.video_url || lesson.video_token;
-                const icon = hasContent ? '📖' : '📝';
-                text += `${index + 1}. ${icon} ${lesson.title} ${lesson.is_free ? '🆓' : '🔒'}\n`;
+                text += `${index + 1}. 📝 ${lesson.title} ${lesson.is_free ? '🆓' : '🔒'}\n`;
                 buttons.push([
-                    { type: 'callback', text: `${icon} ${lesson.title.substring(0, 25)}`, payload: `lesson_${lesson.id}` }
+                    { type: 'callback', text: `📝 ${lesson.title.substring(0, 25)}`, payload: `lesson_${lesson.id}` }
                 ]);
             });
             text += '\n';
@@ -1414,19 +2209,46 @@ async function showHelp(chatId, maxApi) {
 
 async function showTest(chatId, testId, maxApi) {
     try {
-        const test = await lessonService.getLessonTest(testId);
-        if (!test || !test.answers || test.answers.length === 0) {
-            await maxApi.sendMessage({ chatId: chatId, text: '❌ Тест не найден', parseMode: 'markdown' });
+        console.log(`[TEST] Showing test: ${testId}`);
+        
+        const test = await lessonService.getTestById(testId);
+        
+        if (!test) {
+            console.log(`[TEST] Test not found: ${testId}`);
+            await maxApi.sendMessage({ 
+                chatId: chatId, 
+                text: '❌ Тест не найден', 
+                parseMode: 'markdown' 
+            });
             return;
         }
+
+        if (!test.answers || test.answers.length === 0) {
+            await maxApi.sendMessage({ 
+                chatId: chatId, 
+                text: '❌ В тесте нет вопросов', 
+                parseMode: 'markdown' 
+            });
+            return;
+        }
+
+        console.log(`[TEST] Test: ${test.question}, answers: ${test.answers.length}`);
 
         const buttons = [];
         for (const answer of test.answers) {
             buttons.push([
-                { type: 'callback', text: answer.answer || 'Вариант', payload: `test_answer_${testId}_${answer.id}` }
+                { 
+                    type: 'callback', 
+                    text: answer.answer || 'Вариант', 
+                    payload: `test_answer_${test.id}_${answer.id}` 
+                }
             ]);
         }
-        buttons.push([{ type: 'callback', text: '📚 Назад к уроку', payload: `lesson_${test.lesson_id}` }]);
+        buttons.push([{ 
+            type: 'callback', 
+            text: '📚 Назад к уроку', 
+            payload: `lesson_${test.lesson_id}` 
+        }]);
 
         await maxApi.sendKeyboard({
             chatId: chatId,
@@ -1437,13 +2259,18 @@ async function showTest(chatId, testId, maxApi) {
 
     } catch (error) {
         console.error('[TEST] Error showing test:', error);
+        await maxApi.sendMessage({
+            chatId: chatId,
+            text: '❌ Ошибка при загрузке теста',
+            parseMode: 'markdown',
+        });
     }
 }
 
 async function handleTestAnswer(chatId, testId, answerId, maxApi) {
     try {
         const result = await lessonService.checkTestAnswer(testId, answerId, chatId);
-        const test = await lessonService.getLessonTest(testId);
+        const test = await lessonService.getTestById(testId);
         const selectedAnswer = test?.answers?.find(a => a.id === answerId);
 
         let text = result.correct
