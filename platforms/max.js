@@ -149,47 +149,74 @@ class MaxAPI {
         return this.sendMessage({ chatId, text, parseMode, attachments: [attachment] });
     }
 
-    // ============================================================
-    // ЗАГРУЗКА ФАЙЛА В MAX
-    // ============================================================
-    async uploadFile(filePath, fileType = 'file') {
-        try {
-            console.log(`[MAX] Uploading file: ${filePath}, type: ${fileType}`);
+   // platforms/max.js - исправленный метод uploadFile
 
-            if (!fs.existsSync(filePath)) {
-                throw new Error(`File not found: ${filePath}`);
-            }
-
-            const fileStats = fs.statSync(filePath);
-            console.log(`[MAX] File size: ${fileStats.size} bytes`);
-
-            const formData = new FormData();
-            formData.append('file', fs.createReadStream(filePath));
-            formData.append('type', fileType);
-
-            const response = await this.client.post('/uploads', formData, {
-                headers: {
-                    ...formData.getHeaders(),
-                    'Authorization': config.max.token,
-                },
-                maxContentLength: Infinity,
-                maxBodyLength: Infinity,
-            });
-
-            console.log(`[MAX] ✅ File uploaded, token: ${response.data.token}`);
-            logger.info({ filePath, token: response.data.token, type: fileType }, 'File uploaded successfully');
-            return response.data.token;
-
-        } catch (error) {
-            console.error(`[MAX] ❌ Failed to upload file: ${filePath}`, error.message);
-            if (error.response) {
-                console.error('[MAX] Response status:', error.response.status);
-                console.error('[MAX] Response data:', error.response.data);
-            }
-            logger.error({ err: error, filePath }, 'Failed to upload file to MAX');
-            throw error;
+async uploadFile(filePath, fileType = 'file') {
+    try {
+        console.log(`[MAX] Uploading file: ${filePath}, type: ${fileType}`);
+        
+        if (!fs.existsSync(filePath)) {
+            throw new Error(`File not found: ${filePath}`);
         }
+
+        const fileStats = fs.statSync(filePath);
+        console.log(`[MAX] File size: ${fileStats.size} bytes`);
+
+        // ШАГ 1: Получаем URL для загрузки через /uploads?type={type}
+        // ПРАВИЛЬНЫЙ URL с параметром type
+        console.log(`[MAX] Step 1: Getting upload URL for type: ${fileType}`);
+        const uploadResponse = await this.client.post(`/uploads?type=${fileType}`);
+        
+        // В ответе приходит { url: "...", token: "..." } 
+        // Для видео/аудио token приходит сразу, для остальных - после загрузки
+        const uploadUrl = uploadResponse.data.url;
+        const initialToken = uploadResponse.data.token || null;
+        
+        console.log(`[MAX] Got upload URL: ${uploadUrl}`);
+        if (initialToken) {
+            console.log(`[MAX] Initial token received: ${initialToken.substring(0, 20)}...`);
+        }
+
+        // ШАГ 2: Загружаем файл по полученному URL с полем data
+        console.log(`[MAX] Step 2: Uploading file to: ${uploadUrl}`);
+        
+        const formData = new FormData();
+        formData.append('data', fs.createReadStream(filePath));
+
+        // Для загрузки используем axios напрямую (не через client, т.к. URL другой)
+        const uploadResult = await axios.post(uploadUrl, formData, {
+            headers: {
+                ...formData.getHeaders(),
+                'Authorization': config.max.token,
+            },
+            maxContentLength: Infinity,
+            maxBodyLength: Infinity,
+            timeout: 600000,
+        });
+
+        // ШАГ 3: Получаем токен из ответа
+        // Для video/audio token уже был в первом ответе, для file/image - приходит сейчас
+        let token = uploadResult.data.token || initialToken;
+        
+        if (!token) {
+            throw new Error('No token received from upload');
+        }
+
+        console.log(`[MAX] ✅ File uploaded, token: ${token.substring(0, 20)}...`);
+        logger.info({ filePath, token: token, type: fileType }, 'File uploaded successfully');
+
+        return token;
+
+    } catch (error) {
+        console.error(`[MAX] ❌ Failed to upload file: ${filePath}`, error.message);
+        if (error.response) {
+            console.error('[MAX] Response status:', error.response.status);
+            console.error('[MAX] Response data:', error.response.data);
+        }
+        logger.error({ err: error, filePath }, 'Failed to upload file to MAX');
+        throw error;
     }
+}
 
     // ============================================================
     // ОТПРАВКА ВИДЕО (через загрузку файла)
