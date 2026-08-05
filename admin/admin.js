@@ -1,11 +1,9 @@
-// admin/admin.js - В НАЧАЛЕ ФАЙЛА ДОБАВЬ ЭТИ ИМПОРТЫ
-
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const path = require('path');
-const fs = require('fs');  // <-- ЭТОТ ИМПОРТ ОТСУТСТВОВАЛ
-const multer = require('multer');
+const fs = require('fs');           // <-- ДОБАВЛЕНО
+const multer = require('multer');   // <-- ДОБАВЛЕНО
 
 const database = require('../database');
 const logger = require('../logger');
@@ -17,6 +15,10 @@ const paymentService = require('../core/payment');
 const AdminController = require('./controller');
 
 console.log('[ADMIN] Loading admin panel...');
+
+// ============================================================
+// НАСТРОЙКА MULTER
+// ============================================================
 
 const UPLOADS_DIR = process.env.UPLOADS_DIR || '/tmp/uploads';
 
@@ -46,7 +48,6 @@ const storage = multer.diskStorage({
         const random = Math.round(Math.random() * 1E9);
         const ext = path.extname(file.originalname);
         const name = path.basename(file.originalname, ext);
-        // Убираем спецсимволы из имени
         const cleanName = name.replace(/[^a-zA-Zа-яА-Я0-9]/g, '_');
         cb(null, `${cleanName}-${timestamp}-${random}${ext}`);
     }
@@ -55,13 +56,11 @@ const storage = multer.diskStorage({
 const upload = multer({
     storage: storage,
     limits: {
-        fileSize: 250 * 1024 * 1024, // 250MB
+        fileSize: 250 * 1024 * 1024,
     },
     fileFilter: (req, file, cb) => {
         const allowedTypes = [
-            // Видео
             'video/mp4', 'video/webm', 'video/quicktime', 'video/x-msvideo', 'video/avi',
-            // Документы
             'application/pdf', 'application/msword',
             'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
             'application/vnd.ms-excel',
@@ -69,9 +68,7 @@ const upload = multer({
             'application/vnd.ms-powerpoint',
             'application/vnd.openxmlformats-officedocument.presentationml.presentation',
             'application/zip', 'application/x-zip-compressed', 'application/x-rar-compressed',
-            // Изображения
             'image/jpeg', 'image/png', 'image/gif', 'image/webp',
-            // Текст
             'text/plain', 'text/markdown',
         ];
         if (allowedTypes.includes(file.mimetype)) {
@@ -1490,42 +1487,73 @@ router.post('/lessons/create', upload.fields([
     { name: 'lessonFile', maxCount: 1 }
 ]), async (req, res) => {
     try {
-        const { courseId, title, description, orderNumber, isFree, videoUrl } = req.body;
+        console.log('[ADMIN] ===== CREATE LESSON =====');
+        console.log('[ADMIN] Body:', req.body);
+        console.log('[ADMIN] Files:', req.files ? Object.keys(req.files) : 'none');
 
-        let videoUrlFinal = videoUrl || '';
+        const { courseId, title, description, orderNumber, isFree } = req.body;
 
-        // Обработка загруженного видео
-        if (req.files && req.files.videoFile && req.files.videoFile[0]) {
-            const file = req.files.videoFile[0];
-            videoUrlFinal = `/uploads/admin/${file.filename}`;
+        if (!courseId) {
+            throw new Error('courseId is required');
         }
 
+        // 1. Создаем урок
         const lesson = await lessonService.createLesson({
-            courseId,
-            title,
-            description,
+            courseId: courseId,
+            title: title || 'Без названия',
+            description: description || '',
             orderNumber: parseInt(orderNumber) || 0,
             isFree: isFree === 'on',
-            videoUrl: videoUrlFinal,
         });
 
-        // Обработка файла урока
-        if (req.files && req.files.lessonFile && req.files.lessonFile[0]) {
-            const file = req.files.lessonFile[0];
-            await lessonService.addLessonFile(lesson.id, {
-                filename: file.originalname,
-                url: `/uploads/admin/${file.filename}`,
-                type: file.mimetype,
+        console.log(`[ADMIN] Lesson created: ${lesson.id}`);
+
+        // 2. Сохраняем видео
+        if (req.files && req.files.videoFile && req.files.videoFile[0]) {
+            const file = req.files.videoFile[0];
+            console.log(`[ADMIN] Saving video: ${file.originalname} (${file.size} bytes)`);
+            
+            const fileData = {
+                filename: file.filename,
+                originalname: file.originalname,
                 size: file.size,
-            });
+                mimetype: file.mimetype,
+                path: file.path,
+                url: `/uploads/videos/${file.filename}`,
+            };
+            
+            const saved = await lessonService.addLessonFile(lesson.id, fileData);
+            console.log(`[ADMIN] Video saved: ${saved.id}`);
         }
 
+        // 3. Сохраняем файл
+        if (req.files && req.files.lessonFile && req.files.lessonFile[0]) {
+            const file = req.files.lessonFile[0];
+            console.log(`[ADMIN] Saving file: ${file.originalname} (${file.size} bytes)`);
+            
+            const fileData = {
+                filename: file.filename,
+                originalname: file.originalname,
+                size: file.size,
+                mimetype: file.mimetype,
+                path: file.path,
+                url: `/uploads/files/${file.filename}`,
+            };
+            
+            const saved = await lessonService.addLessonFile(lesson.id, fileData);
+            console.log(`[ADMIN] File saved: ${saved.id}`);
+        }
+
+        console.log(`[ADMIN] Lesson created successfully: ${lesson.id}`);
         res.redirect('/admin/lessons?courseId=' + courseId);
+
     } catch (error) {
+        console.error('[ADMIN] Create lesson error:', error);
         logger.error({ err: error }, 'Create lesson error');
         res.redirect('/admin/lessons?error=' + encodeURIComponent(error.message));
     }
 });
+
 
 router.get('/lessons/edit/:id', async (req, res) => {
     try {
