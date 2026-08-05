@@ -781,9 +781,7 @@ async function showAdminLessonDetail(chatId, lessonId, maxApi) {
     }
 }
 
-// ============================================================
-// ОБРАБОТКА ВЛОЖЕНИЙ ОТ АДМИНА
-// ============================================================
+// server.js - исправленный handleAdminAttachment
 
 async function handleAdminAttachment(chatId, attachments, maxApi) {
     try {
@@ -808,7 +806,7 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
         for (const attachment of attachments) {
             console.log(`[ADMIN] Attachment type: ${attachment.type}`);
 
-            // Если файл уже в MAX - сохраняем токен
+            // Если файл уже в MAX с токеном
             if (attachment.payload && attachment.payload.token) {
                 const token = attachment.payload.token;
                 const fileType = attachment.type || 'file';
@@ -816,15 +814,24 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
 
                 console.log(`[ADMIN] File already in MAX: ${fileName}, token: ${token.substring(0, 20)}...`);
 
+                // Определяем правильный тип для сохранения
+                let mediaType = 'file';
+                if (fileType === 'video' || fileType.startsWith('video/')) {
+                    mediaType = 'video';
+                } else if (fileType === 'image' || fileType.startsWith('image/')) {
+                    mediaType = 'image';
+                }
+
                 const fileData = {
-                    filename: `${token}-${Date.now()}`,
+                    filename: fileName,
                     originalname: fileName,
                     size: attachment.payload.size || 0,
                     mimetype: fileType,
-                    path: token,
-                    url: token,
+                    path: token, // сохраняем токен как путь
+                    url: null,
                     token: token,
                     is_max_uploaded: true,
+                    type: mediaType,
                 };
 
                 await lessonService.addLessonFile(lessonId, fileData);
@@ -839,12 +846,15 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
                 return;
             }
 
-            // Если файл пришел как ссылка
+            // Если файл пришел как ссылка - загружаем в MAX
             if (attachment.payload && attachment.payload.url) {
                 const fileUrl = attachment.payload.url;
                 const fileName = attachment.payload.filename || 'file';
+                const fileType = attachment.type || 'file';
 
                 try {
+                    console.log(`[ADMIN] Downloading file from URL: ${fileUrl}`);
+                    
                     const response = await axios.get(fileUrl, {
                         responseType: 'arraybuffer',
                         timeout: 300000,
@@ -853,25 +863,36 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
                     const tempPath = path.join(UPLOADS_DIR, 'temp', `${Date.now()}-${fileName}`);
                     fs.writeFileSync(tempPath, Buffer.from(response.data));
 
-                    const token = await maxApi.uploadFile(tempPath, 'file');
+                    // Определяем тип для MAX
+                    let maxType = 'file';
+                    if (fileType === 'video' || fileType.startsWith('video/')) {
+                        maxType = 'video';
+                    } else if (fileType === 'image' || fileType.startsWith('image/')) {
+                        maxType = 'image';
+                    }
+
+                    console.log(`[ADMIN] Uploading to MAX as type: ${maxType}`);
+                    const token = await maxApi.uploadFile(tempPath, maxType);
+
                     fs.unlinkSync(tempPath);
 
                     const fileData = {
-                        filename: `${token}-${Date.now()}`,
+                        filename: fileName,
                         originalname: fileName,
                         size: response.data.length,
-                        mimetype: 'file',
+                        mimetype: fileType,
                         path: token,
-                        url: token,
+                        url: null,
                         token: token,
                         is_max_uploaded: true,
+                        type: maxType,
                     };
 
                     await lessonService.addLessonFile(lessonId, fileData);
 
                     await maxApi.sendMessage({
                         chatId: chatId,
-                        text: `✅ **Файл загружен!**\n\n📎 ${fileName}\n🔑 Токен: ${token.substring(0, 20)}...`,
+                        text: `✅ **Файл загружен в MAX!**\n\n📎 ${fileName}\n🔑 Токен: ${token.substring(0, 20)}...`,
                         parseMode: 'markdown',
                     });
 
@@ -879,13 +900,59 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
                     return;
 
                 } catch (error) {
-                    console.error('[ADMIN] Error downloading file:', error.message);
+                    console.error('[ADMIN] Error downloading/uploading file:', error.message);
                     await maxApi.sendMessage({
                         chatId: chatId,
                         text: `❌ Ошибка загрузки файла: ${error.message}`,
                         parseMode: 'markdown',
                     });
                     return;
+                }
+            }
+
+            // Если это загруженный файл через multer (из веб-админки)
+            if (attachment.payload && attachment.payload.path) {
+                const filePath = attachment.payload.path;
+                const fileName = attachment.payload.filename || 'file';
+                const fileType = attachment.payload.mimetype || 'file';
+
+                try {
+                    console.log(`[ADMIN] Uploading local file to MAX: ${filePath}`);
+                    
+                    let maxType = 'file';
+                    if (fileType === 'video' || fileType.startsWith('video/')) {
+                        maxType = 'video';
+                    } else if (fileType === 'image' || fileType.startsWith('image/')) {
+                        maxType = 'image';
+                    }
+
+                    const token = await maxApi.uploadFile(filePath, maxType);
+
+                    const fileData = {
+                        filename: fileName,
+                        originalname: fileName,
+                        size: attachment.payload.size || 0,
+                        mimetype: fileType,
+                        path: token,
+                        url: null,
+                        token: token,
+                        is_max_uploaded: true,
+                        type: maxType,
+                    };
+
+                    await lessonService.addLessonFile(lessonId, fileData);
+
+                    await maxApi.sendMessage({
+                        chatId: chatId,
+                        text: `✅ **Файл загружен в MAX!**\n\n📎 ${fileName}\n🔑 Токен: ${token.substring(0, 20)}...`,
+                        parseMode: 'markdown',
+                    });
+
+                    await showAdminLessonDetail(chatId, lessonId, maxApi);
+                    return;
+
+                } catch (error) {
+                    console.error('[ADMIN] Error uploading local file:', error.message);
                 }
             }
         }
@@ -905,7 +972,6 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
         });
     }
 }
-
 // ============================================================
 // ЗАГРУЗКА ВИДЕО И ФАЙЛОВ (запрос от админа)
 // ============================================================
@@ -1157,9 +1223,7 @@ async function handleAdminCallback(chatId, payload, maxApi) {
     }
 }
 
-// ============================================================
-// ОТПРАВКА УРОКА ПОЛЬЗОВАТЕЛЮ
-// ============================================================
+// server.js - исправленный sendLessonToUser
 
 async function sendLessonToUser(chatId, lessonId, maxApi) {
     try {
@@ -1173,11 +1237,13 @@ async function sendLessonToUser(chatId, lessonId, maxApi) {
 
         console.log(`[LESSON] Lesson: ${lesson.title}, Files: ${lesson.files ? lesson.files.length : 0}`);
 
-        // 1. Отправляем видео
+        // 1. Отправляем видео (если есть токен - используем его)
         const videoFile = lesson.files?.find(f => f.type === 'video');
+        
         if (videoFile) {
             try {
                 if (videoFile.token) {
+                    // Отправляем видео по токену (уже загружено в MAX)
                     await maxApi.sendVideoByToken({
                         chatId: chatId,
                         token: videoFile.token,
@@ -1186,13 +1252,30 @@ async function sendLessonToUser(chatId, lessonId, maxApi) {
                     });
                     console.log(`[LESSON] ✅ Video sent by token`);
                 } else if (videoFile.path && fs.existsSync(videoFile.path)) {
-                    await maxApi.sendVideo({
+                    // Если это локальный файл - загружаем и отправляем
+                    console.log(`[LESSON] Uploading local video to MAX...`);
+                    const token = await maxApi.uploadFile(videoFile.path, 'video');
+                    
+                    // Сохраняем токен в БД
+                    await lessonService.addLessonFile(lessonId, {
+                        filename: videoFile.filename,
+                        originalname: videoFile.original_name || videoFile.filename,
+                        size: videoFile.size || 0,
+                        mimetype: videoFile.mime_type || 'video/mp4',
+                        path: token,
+                        url: null,
+                        token: token,
+                        is_max_uploaded: true,
+                        type: 'video',
+                    });
+
+                    await maxApi.sendVideoByToken({
                         chatId: chatId,
-                        videoPath: videoFile.path,
+                        token: token,
                         caption: `🎬 **${lesson.title}**\n\n${lesson.description || ''}`,
                         parseMode: 'markdown',
                     });
-                    console.log(`[LESSON] ✅ Video sent by path`);
+                    console.log(`[LESSON] ✅ Video uploaded and sent`);
                 } else {
                     throw new Error('Video not available');
                 }
@@ -1205,6 +1288,7 @@ async function sendLessonToUser(chatId, lessonId, maxApi) {
                 });
             }
         } else {
+            // Если видео нет - отправляем только текст
             await maxApi.sendMessage({
                 chatId: chatId,
                 text: `📖 **${lesson.title}**\n\n${lesson.description || 'Нет описания'}`,
@@ -1212,26 +1296,45 @@ async function sendLessonToUser(chatId, lessonId, maxApi) {
             });
         }
 
-        // 2. Отправляем файлы
+        // 2. Отправляем остальные файлы
         const otherFiles = lesson.files?.filter(f => f.type !== 'video') || [];
+        
         for (const file of otherFiles) {
             try {
                 if (file.token) {
+                    // Отправляем по токену
                     await maxApi.sendFileByToken({
                         chatId: chatId,
                         token: file.token,
-                        caption: `📎 **${file.original_name}**`,
+                        caption: `📎 **${file.original_name || file.filename}**`,
                         parseMode: 'markdown',
                     });
-                    console.log(`[LESSON] ✅ File sent by token: ${file.original_name}`);
+                    console.log(`[LESSON] ✅ File sent by token: ${file.original_name || file.filename}`);
                 } else if (file.path && fs.existsSync(file.path)) {
-                    await maxApi.sendFile({
+                    // Загружаем локальный файл
+                    console.log(`[LESSON] Uploading local file to MAX: ${file.filename}`);
+                    const token = await maxApi.uploadFile(file.path, 'file');
+                    
+                    // Сохраняем токен
+                    await lessonService.addLessonFile(lessonId, {
+                        filename: file.filename,
+                        originalname: file.original_name || file.filename,
+                        size: file.size || 0,
+                        mimetype: file.mime_type || 'application/octet-stream',
+                        path: token,
+                        url: null,
+                        token: token,
+                        is_max_uploaded: true,
+                        type: 'file',
+                    });
+
+                    await maxApi.sendFileByToken({
                         chatId: chatId,
-                        filePath: file.path,
-                        caption: `📎 **${file.original_name}**`,
+                        token: token,
+                        caption: `📎 **${file.original_name || file.filename}**`,
                         parseMode: 'markdown',
                     });
-                    console.log(`[LESSON] ✅ File sent by path: ${file.original_name}`);
+                    console.log(`[LESSON] ✅ File uploaded and sent: ${file.filename}`);
                 }
             } catch (error) {
                 console.error('[LESSON] Failed to send file:', error.message);
