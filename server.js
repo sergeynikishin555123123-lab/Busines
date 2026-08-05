@@ -176,46 +176,31 @@ app.get('/dashboard', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
 });
 
-// ============ MAX WEBHOOK С ПОЛНЫМ ЛОГИРОВАНИЕМ ============
+// ============ MAX WEBHOOK ============
 app.post('/webhook/max', async (req, res) => {
     console.log('[WEBHOOK] ========== WEBHOOK RECEIVED ==========');
-    console.log('[WEBHOOK] Headers:', JSON.stringify(req.headers, null, 2));
     console.log('[WEBHOOK] Body:', JSON.stringify(req.body, null, 2));
     
     try {
         const webhookSecret = config.max.webhookSecret;
-        console.log('[WEBHOOK] Expected secret:', webhookSecret);
-        
         if (webhookSecret) {
             const received = req.headers['x-max-bot-api-secret'];
-            console.log('[WEBHOOK] Received secret:', received);
             if (!received || received !== webhookSecret) {
                 console.warn('[WEBHOOK] Invalid secret!');
-                logger.warn('MAX webhook: Invalid secret');
                 return res.status(401).send('Unauthorized');
             }
-            console.log('[WEBHOOK] Secret validation OK');
         }
 
         // Отправляем 200 OK сразу
         res.status(200).send('ok');
-        console.log('[WEBHOOK] Sent 200 OK response');
+        console.log('[WEBHOOK] Sent 200 OK');
 
         // Обрабатываем событие асинхронно
         setImmediate(async () => {
             try {
                 const update = req.body;
-                console.log('[WEBHOOK] Processing update:', update.update_type);
-                console.log('[WEBHOOK] Full update:', JSON.stringify(update, null, 2));
+                console.log('[WEBHOOK] Processing update type:', update.update_type);
                 
-                logger.info({
-                    update_type: update.update_type,
-                    chat_id: update.chat_id,
-                    has_callback: !!update.callback,
-                    has_message: !!update.message,
-                    full_update: update
-                }, 'MAX webhook received');
-
                 switch (update.update_type) {
                     case 'bot_started':
                         console.log('[WEBHOOK] Handling bot_started');
@@ -231,28 +216,22 @@ app.post('/webhook/max', async (req, res) => {
                         break;
                     case 'bot_added':
                         console.log(`[WEBHOOK] Bot added to chat: ${update.chat_id}`);
-                        logger.info(`Bot added to chat: ${update.chat_id}`);
                         break;
                     case 'bot_removed':
                         console.log(`[WEBHOOK] Bot removed from chat: ${update.chat_id}`);
-                        logger.info(`Bot removed from chat: ${update.chat_id}`);
                         break;
                     default:
                         console.log(`[WEBHOOK] Unhandled update type: ${update.update_type}`);
-                        logger.info(`Unhandled update type: ${update.update_type}`);
                 }
                 console.log('[WEBHOOK] Processing complete');
             } catch (error) {
-                console.error('[WEBHOOK] Error processing webhook:', error);
-                console.error('[WEBHOOK] Error stack:', error.stack);
+                console.error('[WEBHOOK] Error processing:', error);
                 logger.error({ err: error, update: req.body }, 'Error processing webhook');
             }
         });
 
     } catch (error) {
         console.error('[WEBHOOK] Fatal error:', error);
-        console.error('[WEBHOOK] Error stack:', error.stack);
-        logger.error('MAX webhook error:', error.message);
         res.status(500).send('Internal server error');
     }
 });
@@ -298,7 +277,18 @@ app.get('/admin/webhook-info', async (req, res) => {
 app.delete('/admin/webhook', async (req, res) => {
     try {
         const maxApi = new MaxAPI();
-        await maxApi.deleteWebhook();
+        const url = req.query.url;
+        if (url) {
+            await maxApi.deleteWebhook(url);
+        } else {
+            // Если URL не указан, удаляем все подписки
+            const info = await maxApi.getWebhookInfo();
+            if (info && info.subscriptions) {
+                for (const sub of info.subscriptions) {
+                    await maxApi.deleteWebhook(sub.url);
+                }
+            }
+        }
         res.json({ success: true });
     } catch (error) {
         logger.error({ err: error }, 'Failed to delete webhook');
@@ -331,26 +321,29 @@ app.get('/admin', (req, res) => {
     res.json({ message: 'Admin API' });
 });
 
-// ============ ОБРАБОТЧИКИ СОБЫТИЙ С ЛОГИРОВАНИЕМ ============
+// ============ ОБРАБОТЧИКИ СОБЫТИЙ ============
 
 async function handleBotStarted(update) {
     console.log('[HANDLER] handleBotStarted called');
-    console.log('[HANDLER] Update:', JSON.stringify(update, null, 2));
     
     try {
         const chatId = update.chat_id;
-        const userId = update.user?.user_id || update.user?.id;
         const payload = update.payload || '';
+        const userId = update.user?.user_id || update.user?.id;
 
         console.log(`[HANDLER] Bot started: chatId=${chatId}, userId=${userId}, payload=${payload}`);
         logger.info({ chatId, userId, payload }, 'Bot started');
 
-        const maxApi = new MaxAPI();
-        console.log('[HANDLER] MaxAPI instance created');
+        if (!chatId) {
+            console.log('[HANDLER] No chatId, ignoring');
+            return;
+        }
 
+        const maxApi = new MaxAPI();
+        
         try {
-            console.log('[HANDLER] Sending keyboard...');
-            const result = await maxApi.sendKeyboard({
+            console.log('[HANDLER] Sending welcome keyboard...');
+            await maxApi.sendKeyboard({
                 chatId: chatId,
                 text: `👋 **Привет! Добро пожаловать в обучающий бот!**\n\nЯ помогу тебе учиться. Выбери действие:`,
                 buttons: [
@@ -361,14 +354,12 @@ async function handleBotStarted(update) {
                 ],
                 parseMode: 'markdown',
             });
-            console.log('[HANDLER] Keyboard sent successfully');
+            console.log('[HANDLER] Welcome message sent');
             logger.info(`Welcome message sent to ${chatId}`);
         } catch (error) {
-            console.error('[HANDLER] Error sending keyboard:', error);
-            console.error('[HANDLER] Error response:', error.response?.data);
+            console.error('[HANDLER] Error sending welcome:', error.message);
             if (error.response?.data?.code === 'dialog.not.found') {
-                console.log(`[HANDLER] Dialog not found for ${chatId}, waiting for user to initiate`);
-                logger.info(`Dialog not found for ${chatId}, waiting for user to initiate`);
+                console.log(`[HANDLER] Dialog not found for ${chatId}, waiting for user`);
             } else {
                 throw error;
             }
@@ -376,24 +367,26 @@ async function handleBotStarted(update) {
 
     } catch (error) {
         console.error('[HANDLER] Error in handleBotStarted:', error);
-        console.error('[HANDLER] Error stack:', error.stack);
         logger.error({ err: error, update }, 'Error handling bot_started');
     }
 }
 
 async function handleMessageCreated(update) {
     console.log('[HANDLER] handleMessageCreated called');
-    console.log('[HANDLER] Update:', JSON.stringify(update, null, 2));
     
     try {
+        // ПРАВИЛЬНОЕ извлечение данных из update
         const chatId = update.chat_id;
-        // ПРАВИЛЬНОЕ извлечение текста из message.body
         const message = update.message;
-        const text = message?.body?.text || message?.text || '';  // <-- ИСПРАВЛЕНО
-        const userId = update.message?.sender?.user_id || update.user?.user_id;
+        const text = message?.body?.text || message?.text || '';
+        const userId = message?.sender?.user_id || update.user?.user_id;
 
-        console.log(`[HANDLER] Extracted text: "${text}"`);
-        console.log(`[HANDLER] chatId: ${chatId}, userId: ${userId}`);
+        console.log(`[HANDLER] chatId: ${chatId}, userId: ${userId}, text: "${text}"`);
+
+        if (!chatId) {
+            console.log('[HANDLER] No chatId, ignoring');
+            return;
+        }
 
         if (!text) {
             console.log('[HANDLER] Empty message, ignoring');
@@ -421,26 +414,29 @@ async function handleMessageCreated(update) {
 
     } catch (error) {
         console.error('[HANDLER] Error in handleMessageCreated:', error);
-        console.error('[HANDLER] Error stack:', error.stack);
         logger.error({ err: error, update }, 'Error handling message_created');
     }
 }
+
 async function handleMessageCallback(update) {
     console.log('[HANDLER] handleMessageCallback called');
-    console.log('[HANDLER] Update:', JSON.stringify(update, null, 2));
     
     try {
         const chatId = update.chat_id;
         const callback = update.callback;
         const payload = callback?.payload || '';
-        const userId = update.user?.user_id;
+        const userId = update.user?.user_id || update.user?.id;
 
-        console.log(`[HANDLER] Callback received: chatId=${chatId}, userId=${userId}, payload=${payload}`);
+        console.log(`[HANDLER] Callback: chatId=${chatId}, payload=${payload}`);
         logger.info({ chatId, userId, payload }, 'Callback received');
+
+        if (!chatId) {
+            console.log('[HANDLER] No chatId, ignoring');
+            return;
+        }
 
         const maxApi = new MaxAPI();
 
-        // Обработка callback-кнопок
         if (payload === 'show_courses') {
             console.log('[HANDLER] Showing courses');
             await showCourses(chatId, maxApi);
@@ -457,7 +453,7 @@ async function handleMessageCallback(update) {
             });
         } else if (payload.startsWith('course_')) {
             const courseId = payload.replace('course_', '');
-            console.log(`[HANDLER] Showing course details: ${courseId}`);
+            console.log(`[HANDLER] Showing course: ${courseId}`);
             await showCourseDetails(chatId, courseId, maxApi);
         } else {
             console.log(`[HANDLER] Unknown payload: ${payload}`);
@@ -471,24 +467,23 @@ async function handleMessageCallback(update) {
 
     } catch (error) {
         console.error('[HANDLER] Error in handleMessageCallback:', error);
-        console.error('[HANDLER] Error stack:', error.stack);
         logger.error({ err: error, update }, 'Error handling message_callback');
     }
 }
 
-// ============ КОМАНДЫ С ЛОГИРОВАНИЕМ ============
+// ============ КОМАНДЫ ============
 
 async function handleStartCommand(chatId, userId, text, maxApi) {
     console.log('[COMMAND] handleStartCommand called');
+    
     const payload = text.split(' ')[1] || '';
     if (payload) {
-        console.log(`[COMMAND] Deep link payload: ${payload}`);
-        logger.info({ chatId, payload }, 'Deep link payload received');
+        console.log(`[COMMAND] Deep link: ${payload}`);
     }
 
     try {
         console.log('[COMMAND] Sending start keyboard...');
-        const result = await maxApi.sendKeyboard({
+        await maxApi.sendKeyboard({
             chatId: chatId,
             text: `👋 **Добро пожаловать в обучающий бот!**\n\nЯ помогу тебе освоить новые знания. Выбери действие:`,
             buttons: [
@@ -501,18 +496,14 @@ async function handleStartCommand(chatId, userId, text, maxApi) {
         });
         console.log('[COMMAND] Start keyboard sent');
     } catch (error) {
-        console.error('[COMMAND] Error sending start keyboard:', error);
-        if (error.response?.data?.code === 'dialog.not.found') {
-            console.log(`[COMMAND] Dialog not found for ${chatId}, user needs to start dialog first`);
-            logger.info(`Dialog not found for ${chatId}, user needs to start dialog first`);
-        } else {
-            throw error;
-        }
+        console.error('[COMMAND] Error:', error.message);
+        throw error;
     }
 }
 
 async function handleHelpCommand(chatId, maxApi) {
     console.log('[COMMAND] handleHelpCommand called');
+    
     try {
         await maxApi.sendMessage({
             chatId: chatId,
@@ -525,12 +516,8 @@ async function handleHelpCommand(chatId, maxApi) {
         });
         console.log('[COMMAND] Help sent');
     } catch (error) {
-        console.error('[COMMAND] Error sending help:', error);
-        if (error.response?.data?.code === 'dialog.not.found') {
-            logger.info(`Dialog not found for ${chatId}`);
-        } else {
-            throw error;
-        }
+        console.error('[COMMAND] Error:', error.message);
+        throw error;
     }
 }
 
@@ -541,14 +528,13 @@ async function handleCoursesCommand(chatId, maxApi) {
 
 async function showCourses(chatId, maxApi) {
     console.log('[COMMAND] showCourses called');
+    
     try {
         const courseService = require('./core/course');
-        console.log('[COMMAND] Getting courses...');
         const courses = await courseService.getAllCourses(true);
         console.log(`[COMMAND] Found ${courses.length} courses`);
 
         if (courses.length === 0) {
-            console.log('[COMMAND] No courses found');
             await maxApi.sendMessage({
                 chatId: chatId,
                 text: '📚 **Курсы**\n\nПока нет доступных курсов. Загляните позже!',
@@ -561,7 +547,6 @@ async function showCourses(chatId, maxApi) {
         const buttons = [];
 
         courses.forEach((course, index) => {
-            console.log(`[COMMAND] Adding course: ${course.title}`);
             text += `${index + 1}. **${course.title}**\n`;
             text += `   ${course.description || 'Без описания'}\n`;
             text += `   ${course.price > 0 ? `💰 ${course.price} руб.` : '🆓 Бесплатно'}\n\n`;
@@ -579,7 +564,6 @@ async function showCourses(chatId, maxApi) {
             { type: 'callback', text: '❓ Помощь', payload: 'show_help' }
         ]);
 
-        console.log('[COMMAND] Sending courses keyboard...');
         await maxApi.sendKeyboard({
             chatId: chatId,
             text: text + 'Выберите курс:',
@@ -590,22 +574,18 @@ async function showCourses(chatId, maxApi) {
 
     } catch (error) {
         console.error('[COMMAND] Error in showCourses:', error);
-        if (error.response?.data?.code === 'dialog.not.found') {
-            logger.info(`Dialog not found for ${chatId}`);
-        } else {
-            throw error;
-        }
+        throw error;
     }
 }
 
 async function showCourseDetails(chatId, courseId, maxApi) {
-    console.log(`[COMMAND] showCourseDetails called for course ${courseId}`);
+    console.log(`[COMMAND] showCourseDetails: ${courseId}`);
+    
     try {
         const courseService = require('./core/course');
         const course = await courseService.getCourseById(courseId);
         
         if (!course) {
-            console.log(`[COMMAND] Course not found: ${courseId}`);
             await maxApi.sendMessage({
                 chatId: chatId,
                 text: '❌ Курс не найден',
@@ -614,9 +594,7 @@ async function showCourseDetails(chatId, courseId, maxApi) {
             return;
         }
 
-        console.log(`[COMMAND] Found course: ${course.title}`);
         const lessons = await courseService.getCourseLessons(courseId);
-        console.log(`[COMMAND] Found ${lessons.length} lessons`);
         
         let text = `📚 **${course.title}**\n\n`;
         text += `${course.description || 'Без описания'}\n\n`;
@@ -637,7 +615,6 @@ async function showCourseDetails(chatId, courseId, maxApi) {
             ]
         ];
 
-        console.log('[COMMAND] Sending course details...');
         await maxApi.sendKeyboard({
             chatId: chatId,
             text: text,
@@ -647,8 +624,7 @@ async function showCourseDetails(chatId, courseId, maxApi) {
         console.log('[COMMAND] Course details sent');
 
     } catch (error) {
-        console.error('[COMMAND] Error in showCourseDetails:', error);
-        logger.error({ err: error, courseId }, 'Error showing course details');
+        console.error('[COMMAND] Error:', error);
         await maxApi.sendMessage({
             chatId: chatId,
             text: '❌ Ошибка при загрузке курса',
@@ -659,6 +635,7 @@ async function showCourseDetails(chatId, courseId, maxApi) {
 
 async function handleTextMessage(chatId, userId, text, maxApi) {
     console.log('[COMMAND] handleTextMessage called');
+    
     const buttons = [
         [
             { type: 'callback', text: '📚 Курсы', payload: 'show_courses' },
@@ -667,7 +644,6 @@ async function handleTextMessage(chatId, userId, text, maxApi) {
     ];
 
     try {
-        console.log('[COMMAND] Sending text response...');
         await maxApi.sendKeyboard({
             chatId: chatId,
             text: `📝 Я получил твое сообщение:\n\n"${text}"\n\nЧто хочешь сделать дальше?`,
@@ -676,12 +652,8 @@ async function handleTextMessage(chatId, userId, text, maxApi) {
         });
         console.log('[COMMAND] Text response sent');
     } catch (error) {
-        console.error('[COMMAND] Error sending text response:', error);
-        if (error.response?.data?.code === 'dialog.not.found') {
-            logger.info(`Dialog not found for ${chatId}`);
-        } else {
-            throw error;
-        }
+        console.error('[COMMAND] Error:', error.message);
+        throw error;
     }
 }
 
@@ -698,9 +670,7 @@ app.post('/admin/test-course', async (req, res) => {
             description: description || 'Описание тестового курса',
             price: price || 0
         });
-        console.log(`[ADMIN] Test course created: ${course.id}`);
         
-        // Добавляем тестовый урок
         const lessonService = require('./core/lesson');
         await lessonService.createLesson({
             courseId: course.id,
@@ -709,12 +679,11 @@ app.post('/admin/test-course', async (req, res) => {
             orderNumber: 1,
             isFree: true
         });
-        console.log('[ADMIN] Test lesson created');
         
+        console.log(`[ADMIN] Test course created: ${course.id}`);
         res.json({ success: true, course });
     } catch (error) {
-        console.error('[ADMIN] Error creating test course:', error);
-        logger.error({ err: error }, 'Failed to create test course');
+        console.error('[ADMIN] Error:', error);
         res.status(500).json({ error: error.message });
     }
 });
@@ -751,48 +720,22 @@ const server = app.listen(PORT, HOST, () => {
 
 server.on('error', (error) => {
     console.error('[STARTUP] Server error:', error.message);
-    if (error.code === 'EADDRINUSE') {
-        console.error(`[STARTUP] Port ${PORT} is already in use`);
-    }
     process.exit(1);
 });
 
 const shutdown = (signal) => {
     console.log(`[SHUTDOWN] Received ${signal}`);
-    console.log('[SHUTDOWN] Closing server...');
-    
     server.close(() => {
         console.log('[SHUTDOWN] Server closed');
-        if (database && database.closePool) {
-            database.closePool().then(() => {
-                console.log('[SHUTDOWN] Database connections closed');
-                process.exit(0);
-            }).catch((err) => {
-                console.error('[SHUTDOWN] Error closing database:', err);
-                process.exit(1);
-            });
-        } else {
-            process.exit(0);
-        }
+        process.exit(0);
     });
-
     setTimeout(() => {
-        console.error('[SHUTDOWN] Forced shutdown after timeout');
+        console.error('[SHUTDOWN] Forced shutdown');
         process.exit(1);
     }, 10000);
 };
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
-
-process.on('uncaughtException', (error) => {
-    console.error('[FATAL] Uncaught Exception:', error);
-    console.error('[FATAL] Stack:', error.stack);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('[FATAL] Unhandled Rejection at:', promise);
-    console.error('[FATAL] Reason:', reason);
-});
 
 console.log('[STARTUP] ✅ Ready');
