@@ -345,14 +345,17 @@ async function initPostgreSQLTables() {
     }
 }
 
+// В server.js замените блок инициализации database на:
+
 // ============================================================
-// ДАТАБАЗА (JSON + PostgreSQL гибрид)
+// ДАТАБАЗА (с PostgreSQL)
 // ============================================================
 
 let database;
 try {
     process.env.DATA_DIR = DATA_DIR;
     database = require('./database');
+    // Передаем PostgreSQL клиент
     database.setPGClient(pgClient, pgConnected);
     console.log('[STARTUP] Database loaded');
 } catch (error) {
