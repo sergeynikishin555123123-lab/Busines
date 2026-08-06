@@ -272,6 +272,7 @@ const courseService = require('./core/course');
 const lessonService = require('./core/lesson');
 const userService = require('./core/user');
 const progressService = require('./core/progress');
+const paymentService = require('./core/payment');
 
 // Хранилище сессий админ-панели
 const adminSessions = new Map();
@@ -366,6 +367,24 @@ async function handleMessageCreated(update) {
 
         if (!chatId) return;
 
+        // ============================================================
+        // РЕГИСТРАЦИЯ ПОЛЬЗОВАТЕЛЯ
+        // ============================================================
+        if (userId) {
+            try {
+                await userService.registerUser({
+                    platform_user_id: String(userId),
+                    platform: 'max',
+                    first_name: message?.sender?.first_name || 'Пользователь',
+                    last_name: message?.sender?.last_name || '',
+                    username: message?.sender?.username || '',
+                    chat_id: String(chatId),
+                });
+            } catch (regError) {
+                console.warn('[USER] Registration error:', regError.message);
+            }
+        }
+
         const maxApi = new MaxAPI();
 
         // Обработка вложений от администратора
@@ -405,24 +424,11 @@ async function handleMessageCreated(update) {
         console.error('[HANDLER] Error in handleMessageCreated:', error);
         logger.error({ err: error, update }, 'Error handling message_created');
     }
-     const userId = message?.sender?.user_id || update.user?.user_id;
-    const chatId = update.chat_id || message?.recipient?.chat_id;
-    
-    // Регистрируем пользователя
-    if (userId) {
-        await userService.registerUser({
-            platform_user_id: String(userId),
-            platform: 'max',
-            first_name: message?.sender?.first_name || 'Пользователь',
-            last_name: message?.sender?.last_name || '',
-            username: message?.sender?.username || '',
-            chat_id: String(chatId),
-        });
-    }
 }
 
-// server.js - ИСПРАВЛЕННЫЙ ФРАГМЕНТ
-// Найдите функцию handleMessageCallback и замените блок обработки callback'ов
+// ============================================================
+// ОБРАБОТКА CALLBACK
+// ============================================================
 
 async function handleMessageCallback(update) {
     console.log('[HANDLER] handleMessageCallback called');
@@ -472,15 +478,15 @@ async function handleMessageCallback(update) {
             await handleBuyAccess(chatId, maxApi);
         } else if (payload === 'payment_confirmed') {
             await handlePaymentConfirmed(chatId, maxApi);
+        } else if (payload.startsWith('payment_check_')) {
+            const paymentId = payload.replace('payment_check_', '');
+            await handlePaymentCheck(chatId, paymentId, maxApi);
         } else if (payload.startsWith('course_')) {
             const courseId = payload.replace('course_', '');
             await showCourseDetails(chatId, courseId, maxApi);
         } else if (payload.startsWith('lesson_')) {
             const lessonId = payload.replace('lesson_', '');
             await sendLessonToUser(chatId, lessonId, maxApi);
-            else if (payload.startsWith('payment_check_')) {
-    const paymentId = payload.replace('payment_check_', '');
-    await handlePaymentCheck(chatId, paymentId, maxApi);
         } else if (payload.startsWith('test_') && !payload.startsWith('test_answer_')) {
             // Показ теста
             const testId = payload.replace('test_', '');
@@ -488,7 +494,6 @@ async function handleMessageCallback(update) {
             await showTest(chatId, testId, maxApi);
         } else if (payload.startsWith('test_answer_')) {
             // ИСПРАВЛЕННЫЙ ПАРСИНГ ДЛЯ ОТВЕТОВ НА ТЕСТ
-            // payload: test_answer_b720c6b3-53db-4679-8f63-e40964189f57_322a8bd8-c78a-4540-acf5-046636129851
             const withoutPrefix = payload.replace('test_answer_', '');
             const underscoreIndex = withoutPrefix.lastIndexOf('_');
             const testId = withoutPrefix.substring(0, underscoreIndex);
@@ -779,9 +784,6 @@ async function showCourseDetails(chatId, courseId, maxApi) {
 // ПОКУПКА ДОСТУПА
 // ============================================================
 
-// server.js - ДОБАВЛЕНИЕ ОБРАБОТЧИКОВ ОПЛАТЫ
-
-// В функцию handleBuyAccess добавьте:
 async function handleBuyAccess(chatId, maxApi) {
     try {
         const user = await userService.getUserByPlatformId(chatId);
@@ -871,7 +873,6 @@ async function handlePaymentCheck(chatId, paymentId, maxApi) {
         });
     }
 }
-
 
 async function handlePaymentConfirmed(chatId, maxApi) {
     try {
@@ -1127,7 +1128,9 @@ async function sendLessonToUser(chatId, lessonId, maxApi) {
     }
 }
 
-// server.js - ИСПРАВЛЕННЫЕ ФУНКЦИИ showTest и handleTestAnswer
+// ============================================================
+// ФУНКЦИИ ДЛЯ ТЕСТОВ
+// ============================================================
 
 async function showTest(chatId, testId, maxApi) {
     try {
@@ -1227,6 +1230,7 @@ async function handleTestAnswer(chatId, testId, answerId, maxApi) {
         });
     }
 }
+
 // ============================================================
 // ПОМОЩЬ
 // ============================================================
