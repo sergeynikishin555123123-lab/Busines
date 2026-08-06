@@ -1,4 +1,4 @@
-// core/payment.js - ПОЛНАЯ СИСТЕМА ОПЛАТЫ
+// core/payment.js - ИСПРАВЛЕННАЯ ВЕРСИЯ
 
 const database = require('../database');
 const logger = require('../logger');
@@ -9,12 +9,26 @@ const axios = require('axios');
 class PaymentService {
     
     // ============================================================
+    // ВСПОМОГАТЕЛЬНЫЙ МЕТОД - ГАРАНТИРУЕТ МАССИВ
+    // ============================================================
+    
+    async _ensureArray(tableName) {
+        let data = await database.readTable(tableName);
+        if (!Array.isArray(data)) {
+            console.log(`[PAYMENT] ${tableName} is not an array, reinitializing...`);
+            data = [];
+            await database.writeTable(tableName, data);
+        }
+        return data;
+    }
+
+    // ============================================================
     // СОЗДАНИЕ ПЛАТЕЖА
     // ============================================================
 
     async createPayment(userId, amount, currency = 'RUB', gateway = null) {
         try {
-            const payments = database.readTable('payments');
+            let payments = await this._ensureArray('payments');
             const paymentGateway = gateway || config.payment?.defaultGateway || 'manual';
             
             const payment = {
@@ -32,9 +46,8 @@ class PaymentService {
             };
 
             payments.push(payment);
-            database.writeTable('payments', payments);
+            await database.writeTable('payments', payments);
 
-            // Если нужна интеграция с платежным шлюзом
             let paymentUrl = null;
             if (paymentGateway !== 'manual') {
                 try {
@@ -43,11 +56,10 @@ class PaymentService {
                         paymentUrl = gatewayResult.payment_url;
                         payment.gateway_payment_id = gatewayResult.gateway_payment_id;
                         payment.gateway_payment_url = gatewayResult.payment_url;
-                        database.writeTable('payments', payments);
+                        await database.writeTable('payments', payments);
                     }
                 } catch (gatewayError) {
                     logger.error('Gateway payment initiation failed:', gatewayError.message);
-                    // Продолжаем с ручным режимом
                 }
             }
 
@@ -69,12 +81,9 @@ class PaymentService {
     async initiateGatewayPayment(payment, userId) {
         try {
             const gateway = payment.payment_gateway;
+            const users = await database.readTable('users');
+            const user = Array.isArray(users) ? users.find(u => String(u.id) === String(userId)) : null;
             
-            // Получаем информацию о пользователе
-            const users = database.readTable('users');
-            const user = users.find(u => String(u.id) === String(userId));
-            
-            // Пример интеграции с разными платежными системами
             switch (gateway) {
                 case 'yookassa':
                     return await this.initiateYooKassa(payment, user);
@@ -82,7 +91,6 @@ class PaymentService {
                     return await this.initiateStripe(payment, user);
                 case 'robokassa':
                     return await this.initiateRobokassa(payment, user);
-                case 'manual':
                 default:
                     return {
                         gateway_payment_id: `manual_${payment.id}`,
@@ -98,20 +106,12 @@ class PaymentService {
         }
     }
 
-    // ============================================================
-    // ИНТЕГРАЦИЯ С YOOKASSA
-    // ============================================================
-
     async initiateYooKassa(payment, user) {
         try {
             const yookassaConfig = config.payment?.yookassa || {};
             
             if (!yookassaConfig.shopId || !yookassaConfig.secretKey) {
-                logger.warn('YooKassa not configured, using manual mode');
-                return {
-                    gateway_payment_id: `manual_${payment.id}`,
-                    payment_url: null,
-                };
+                return { gateway_payment_id: `manual_${payment.id}`, payment_url: null };
             }
 
             const auth = Buffer.from(`${yookassaConfig.shopId}:${yookassaConfig.secretKey}`).toString('base64');
@@ -133,21 +133,6 @@ class PaymentService {
                         payment_id: payment.id,
                         user_id: payment.user_id,
                     },
-                    receipt: user ? {
-                        customer: {
-                            email: user.email || undefined,
-                            phone: user.phone || undefined,
-                        },
-                        items: [{
-                            description: 'Доступ к курсу',
-                            amount: {
-                                value: payment.amount.toFixed(2),
-                                currency: payment.currency || 'RUB',
-                            },
-                            vat_code: 1,
-                            quantity: '1.00',
-                        }],
-                    } : undefined,
                 },
                 {
                     headers: {
@@ -166,33 +151,19 @@ class PaymentService {
                 };
             }
 
-            return {
-                gateway_payment_id: `manual_${payment.id}`,
-                payment_url: null,
-            };
+            return { gateway_payment_id: `manual_${payment.id}`, payment_url: null };
         } catch (error) {
             logger.error('YooKassa initiation error:', error.response?.data || error.message);
-            return {
-                gateway_payment_id: `manual_${payment.id}`,
-                payment_url: null,
-            };
+            return { gateway_payment_id: `manual_${payment.id}`, payment_url: null };
         }
     }
-
-    // ============================================================
-    // ИНТЕГРАЦИЯ С STRIPE
-    // ============================================================
 
     async initiateStripe(payment, user) {
         try {
             const stripeConfig = config.payment?.stripe || {};
             
             if (!stripeConfig.secretKey) {
-                logger.warn('Stripe not configured, using manual mode');
-                return {
-                    gateway_payment_id: `manual_${payment.id}`,
-                    payment_url: null,
-                };
+                return { gateway_payment_id: `manual_${payment.id}`, payment_url: null };
             }
 
             const response = await axios.post(
@@ -233,33 +204,19 @@ class PaymentService {
                 };
             }
 
-            return {
-                gateway_payment_id: `manual_${payment.id}`,
-                payment_url: null,
-            };
+            return { gateway_payment_id: `manual_${payment.id}`, payment_url: null };
         } catch (error) {
             logger.error('Stripe initiation error:', error.response?.data || error.message);
-            return {
-                gateway_payment_id: `manual_${payment.id}`,
-                payment_url: null,
-            };
+            return { gateway_payment_id: `manual_${payment.id}`, payment_url: null };
         }
     }
-
-    // ============================================================
-    // ИНТЕГРАЦИЯ С ROBOKASSA
-    // ============================================================
 
     async initiateRobokassa(payment, user) {
         try {
             const robokassaConfig = config.payment?.robokassa || {};
             
             if (!robokassaConfig.merchantLogin || !robokassaConfig.password1) {
-                logger.warn('Robokassa not configured, using manual mode');
-                return {
-                    gateway_payment_id: `manual_${payment.id}`,
-                    payment_url: null,
-                };
+                return { gateway_payment_id: `manual_${payment.id}`, payment_url: null };
             }
 
             const signature = crypto
@@ -281,10 +238,7 @@ class PaymentService {
             };
         } catch (error) {
             logger.error('Robokassa initiation error:', error.message);
-            return {
-                gateway_payment_id: `manual_${payment.id}`,
-                payment_url: null,
-            };
+            return { gateway_payment_id: `manual_${payment.id}`, payment_url: null };
         }
     }
 
@@ -294,7 +248,7 @@ class PaymentService {
 
     async confirmPayment(paymentId, gatewayPaymentId = null, metaData = {}) {
         try {
-            const payments = database.readTable('payments');
+            let payments = await this._ensureArray('payments');
             const index = payments.findIndex(p => p.id === paymentId);
 
             if (index === -1) {
@@ -312,9 +266,8 @@ class PaymentService {
             payments[index].meta_data = JSON.stringify({ ...existingMeta, ...metaData });
             payments[index].updated_at = database.now();
 
-            database.writeTable('payments', payments);
+            await database.writeTable('payments', payments);
 
-            // Предоставляем доступ к курсам
             if (payments[index].user_id) {
                 await this.grantAccessToCourses(payments[index].user_id, payments[index].amount);
             }
@@ -333,8 +286,8 @@ class PaymentService {
 
     async grantAccessToCourses(userId, amount) {
         try {
-            const courses = database.readTable('courses');
-            const access = database.readTable('user_course_access');
+            let courses = await this._ensureArray('courses');
+            let access = await this._ensureArray('user_course_access');
             
             const paidCourses = courses.filter(c => 
                 c.price > 0 && 
@@ -360,7 +313,7 @@ class PaymentService {
             }
 
             if (grantedCount > 0) {
-                database.writeTable('user_course_access', access);
+                await database.writeTable('user_course_access', access);
                 logger.info(`Access granted for user ${userId} to ${grantedCount} courses`);
             }
 
@@ -377,7 +330,7 @@ class PaymentService {
 
     async failPayment(paymentId, reason = null) {
         try {
-            const payments = database.readTable('payments');
+            let payments = await this._ensureArray('payments');
             const index = payments.findIndex(p => p.id === paymentId);
 
             if (index === -1) return null;
@@ -387,7 +340,7 @@ class PaymentService {
             payments[index].meta_data = JSON.stringify({ ...existingMeta, fail_reason: reason });
             payments[index].updated_at = database.now();
 
-            database.writeTable('payments', payments);
+            await database.writeTable('payments', payments);
             logger.info(`Payment failed: ${paymentId}, reason: ${reason}`);
             return payments[index];
         } catch (error) {
@@ -401,24 +354,24 @@ class PaymentService {
     // ============================================================
 
     async getPaymentById(paymentId) {
-        const payments = database.readTable('payments');
+        const payments = await this._ensureArray('payments');
         return payments.find(p => p.id === paymentId) || null;
     }
 
     async getPaymentByGatewayId(gatewayPaymentId) {
-        const payments = database.readTable('payments');
+        const payments = await this._ensureArray('payments');
         return payments.find(p => p.gateway_payment_id === gatewayPaymentId) || null;
     }
 
     async getUserPayments(userId) {
-        const payments = database.readTable('payments');
+        const payments = await this._ensureArray('payments');
         return payments
             .filter(p => String(p.user_id) === String(userId))
             .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
     }
 
     async getUserSuccessfulPayments(userId) {
-        const payments = database.readTable('payments');
+        const payments = await this._ensureArray('payments');
         return payments
             .filter(p => String(p.user_id) === String(userId) && p.status === 'success')
             .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
@@ -430,17 +383,17 @@ class PaymentService {
     }
 
     async getAllPayments(page = 1, limit = 50, status = null) {
-        let payments = database.readTable('payments');
+        let payments = await this._ensureArray('payments');
         
         if (status) {
             payments = payments.filter(p => p.status === status);
         }
 
-        const users = database.readTable('users');
+        const users = await this._ensureArray('users');
         
         const enriched = payments
             .map(p => {
-                const user = users.find(u => String(u.id) === String(p.user_id));
+                const user = Array.isArray(users) ? users.find(u => String(u.id) === String(p.user_id)) : null;
                 return {
                     ...p,
                     meta_data: p.meta_data ? JSON.parse(p.meta_data) : {},
@@ -523,7 +476,7 @@ class PaymentService {
     }
 
     // ============================================================
-    // ПАРСИНГ WEBHOOK ОТ РАЗНЫХ ШЛЮЗОВ
+    // ПАРСИНГ WEBHOOK
     // ============================================================
 
     parseYooKassaWebhook(data) {
@@ -563,7 +516,6 @@ class PaymentService {
         try {
             const invId = data.InvId || data.InvoiceID;
             const outSum = data.OutSum || data.Sum;
-            const signatureValue = data.SignatureValue || data.Signature;
             
             return {
                 paymentId: invId,
@@ -588,12 +540,10 @@ class PaymentService {
                 return { status: 'not_found', payment: null };
             }
 
-            // Если платеж уже завершен
             if (payment.status === 'success' || payment.status === 'failed') {
                 return { status: payment.status, payment };
             }
 
-            // Проверка статуса в платежном шлюзе
             if (payment.payment_gateway !== 'manual') {
                 try {
                     const gatewayStatus = await this.checkGatewayStatus(payment);
@@ -709,7 +659,7 @@ class PaymentService {
 
     async getPaymentStats(startDate = null, endDate = null) {
         try {
-            let payments = database.readTable('payments');
+            let payments = await this._ensureArray('payments');
             
             if (startDate) {
                 payments = payments.filter(p => p.created_at >= startDate);
