@@ -93,25 +93,33 @@ async getLessonTest(lessonId) {
     }
 }
 
-    async getTestById(testId) {
+   // core/lesson.js - ДОБАВЬТЕ ЭТОТ МЕТОД
+
+async getTestById(testId) {
+    try {
         const tests = database.readTable('tests');
         const answers = database.readTable('test_answers');
 
-        const test = tests.find(t => t.id === testId);
+        const test = tests.find(t => String(t.id) === String(testId));
         if (!test) return null;
+
+        const testAnswers = answers
+            .filter(a => String(a.test_id) === String(test.id))
+            .map(a => ({
+                id: a.id,
+                answer: a.answer,
+                is_correct: a.is_correct === true,
+            }));
 
         return {
             ...test,
-            answers: answers
-                .filter(a => a.test_id === test.id)
-                .map(a => ({
-                    id: a.id,
-                    answer: a.answer,
-                    is_correct: a.is_correct === true,
-                })),
+            answers: testAnswers,
         };
+    } catch (error) {
+        console.error('[TEST] Error getting test by id:', error);
+        return null;
     }
-
+}
     async checkTestAnswer(testId, answerId, userId) {
         const answers = database.readTable('test_answers');
         const tests = database.readTable('tests');
