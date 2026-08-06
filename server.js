@@ -282,6 +282,133 @@ const adminSessions = new Map();
 
 async function checkUserHasPaidAccess(userId) {
     try {
+        if (!userId) return false;
+        
+        const userIdStr = String(userId);
+        const access = database.readTable('user_course_access');
+        const paidCourses = await courseService.getPaidCourses();
+        
+        // Проверяем доступ к платным курсам
+        for (const course of paidCourses) {
+            const hasAccess = access.find(a => 
+                String(a.user_id) === userIdStr && 
+                a.course_id === course.id
+            );
+            if (hasAccess) return true;
+        }
+        
+        // Проверяем успешные платежи
+        const payments = database.readTable('payments');
+        const hasPayment = payments.find(p => 
+            String(p.user_id) === userIdStr && 
+            p.status === 'success'
+        );
+        
+        return !!hasPayment;
+    } catch (error) {
+        console.error('[ACCESS] Error checking access:', error);
+        return false;
+    }
+}
+
+// ============================================================
+// ФУНКЦИИ ПОКУПКИ ДОСТУПА
+// ============================================================
+
+async function handleBuyAccess(chatId, maxApi) {
+    try {
+        const text = `💳 **Купить доступ к полному курсу**\n\n` +
+                    `💰 Стоимость: 999 руб.\n\n` +
+                    `После оплаты вам откроются все уроки:\n` +
+                    `• Все уроки с видео\n` +
+                    `• Файлы для скачивания\n` +
+                    `• Тесты для проверки знаний\n\n` +
+                    `Для оплаты переведите 999 руб на карту:\n` +
+                    `**XXXX XXXX XXXX XXXX**\n\n` +
+                    `После оплаты нажмите кнопку "Я оплатил(а)"`;
+        
+        await maxApi.sendKeyboard({
+            chatId: chatId,
+            text: text,
+            buttons: [
+                [{ type: 'callback', text: '✅ Я оплатил(а)', payload: 'payment_confirmed' }],
+                [{ type: 'callback', text: '📚 Назад к урокам', payload: 'show_courses' }]
+            ],
+            parseMode: 'markdown',
+        });
+    } catch (error) {
+        console.error('[PAYMENT] Error:', error);
+        await maxApi.sendMessage({
+            chatId: chatId,
+            text: '❌ Ошибка при оформлении покупки',
+            parseMode: 'markdown',
+        });
+    }
+}
+
+async function handlePaymentConfirmed(chatId, maxApi) {
+    try {
+        // Создаем запись о платеже
+        const payments = database.readTable('payments');
+        const payment = {
+            id: database.generateId(),
+            user_id: String(chatId),
+            amount: 999,
+            currency: 'RUB',
+            status: 'success',
+            payment_gateway: 'manual',
+            gateway_payment_id: null,
+            meta_data: JSON.stringify({ confirmed_at: database.now() }),
+            created_at: database.now(),
+            updated_at: database.now(),
+        };
+        payments.push(payment);
+        database.writeTable('payments', payments);
+        
+        // Даем доступ ко всем платным курсам
+        const paidCourses = await courseService.getPaidCourses();
+        const access = database.readTable('user_course_access');
+        
+        for (const course of paidCourses) {
+            const exists = access.find(a => 
+                String(a.user_id) === String(chatId) && 
+                a.course_id === course.id
+            );
+            if (!exists) {
+                access.push({
+                    id: database.generateId(),
+                    user_id: String(chatId),
+                    course_id: course.id,
+                    granted_at: database.now(),
+                });
+            }
+        }
+        database.writeTable('user_course_access', access);
+        
+        await maxApi.sendMessage({
+            chatId: chatId,
+            text: `✅ **Доступ открыт!**\n\nТеперь вам доступны все уроки.\n\n📚 Используйте кнопку "Уроки" чтобы начать обучение.`,
+            parseMode: 'markdown',
+        });
+        
+        await showCourses(chatId, maxApi);
+        
+    } catch (error) {
+        console.error('[PAYMENT] Confirmation error:', error);
+        await maxApi.sendMessage({
+            chatId: chatId,
+            text: '❌ Ошибка при подтверждении оплаты',
+            parseMode: 'markdown',
+        });
+    }
+
+
+// ============================================================
+// ФУНКЦИЯ ПРОВЕРКИ ДОСТУПА ПОЛЬЗОВАТЕЛЯ
+// ============================================================
+
+async function checkUserHasPaidAccess(userId) {
+    try {
         const access = database.readTable('user_course_access');
         const paidCourses = await courseService.getPaidCourses();
         
@@ -317,6 +444,7 @@ async function handleBotStarted(update) {
         if (!chatId) return;
 
         const maxApi = new MaxAPI();
+        
         const userId = update.user?.user_id || update.message?.sender?.user_id;
         const hasAccess = userId ? await checkUserHasPaidAccess(userId) : false;
         
@@ -343,7 +471,6 @@ async function handleBotStarted(update) {
         console.error('[HANDLER] Error in handleBotStarted:', error);
     }
 }
-
 // ============================================================
 // ОБРАБОТКА СООБЩЕНИЙ С ВЛОЖЕНИЯМИ
 // ============================================================
@@ -443,16 +570,18 @@ async function handleMessageCallback(update) {
             return;
         }
 
-        // Обычные команды
-        if (payload === 'show_courses') {
-            await showCourses(chatId, maxApi);
-        } else if (payload === 'show_help') {
-            await showHelp(chatId, maxApi);
-        } else if (payload === 'buy_access') {
-            await handleBuyAccess(chatId, maxApi);
-        } else if (payload === 'payment_confirmed') {
-            await handlePaymentConfirmed(chatId, maxApi);
-        } else if (payload.startsWith('course_')) {
+
+if (payload === 'show_courses') {
+    await showCourses(chatId, maxApi);
+} else if (payload === 'show_help') {
+    await showHelp(chatId, maxApi);
+} else if (payload === 'buy_access') {  // <-- ДОБАВЬТЕ
+    await handleBuyAccess(chatId, maxApi);
+    return;
+} else if (payload === 'payment_confirmed') {  // <-- ДОБАВЬТЕ
+    await handlePaymentConfirmed(chatId, maxApi);
+    return;
+} else if (payload.startsWith('course_')) {
             const courseId = payload.replace('course_', '');
             await showCourseDetails(chatId, courseId, maxApi);
         } else if (payload.startsWith('lesson_')) {
@@ -576,7 +705,6 @@ async function handleStartCommand(chatId, userId, text, maxApi) {
         parseMode: 'markdown',
     });
 }
-
 async function handleHelpCommand(chatId, maxApi) {
     await maxApi.sendMessage({
         chatId: chatId,
@@ -852,23 +980,22 @@ async function sendLessonToUser(chatId, lessonId, maxApi) {
             return;
         }
 
-        // Проверяем доступ к уроку
-        if (!lesson.is_free) {
-            const hasAccess = await checkUserHasPaidAccess(chatId);
-            if (!hasAccess) {
-                await maxApi.sendKeyboard({
-                    chatId: chatId,
-                    text: `🔒 **Этот урок платный**\n\n"${lesson.title}" доступен только после покупки полного курса.\n\n💳 Купите доступ чтобы открыть все уроки!`,
-                    buttons: [
-                        [{ type: 'callback', text: '💳 Купить доступ', payload: 'buy_access' }],
-                        [{ type: 'callback', text: '📚 Назад к урокам', payload: 'show_courses' }]
-                    ],
-                    parseMode: 'markdown',
-                });
-                return;
-            }
-        }
-
+       // Проверяем доступ к уроку
+if (!lesson.is_free) {
+    const hasAccess = await checkUserHasPaidAccess(chatId);
+    if (!hasAccess) {
+        await maxApi.sendKeyboard({
+            chatId: chatId,
+            text: `🔒 **Этот урок платный**\n\n"${lesson.title}" доступен только после покупки полного курса.\n\n💳 Купите доступ чтобы открыть все уроки!`,
+            buttons: [
+                [{ type: 'callback', text: '💳 Купить доступ', payload: 'buy_access' }],
+                [{ type: 'callback', text: '📚 Назад к урокам', payload: 'show_courses' }]
+            ],
+            parseMode: 'markdown',
+        });
+        return;
+    }
+}
         console.log(`[LESSON] Lesson: ${lesson.title}, Files: ${lesson.files ? lesson.files.length : 0}`);
 
         const videoFile = lesson.files?.find(f => f.type === 'video');
