@@ -462,9 +462,12 @@ async function handleMessageCallback(update) {
         } else if (payload.startsWith('lesson_')) {
             const lessonId = payload.replace('lesson_', '');
             await sendLessonToUser(chatId, lessonId, maxApi);
-        } else if (payload.startsWith('test_')) {
-            const testId = payload.replace('test_', '');
-            await showTest(chatId, testId, maxApi);
+if (payload.startsWith('test_')) {
+    const testId = payload.replace('test_', '');
+    console.log(`[TEST] Showing test with ID: ${testId}`);
+    await showTest(chatId, testId, maxApi);
+    return;
+}
         } else if (payload.startsWith('test_answer_')) {
             const parts = payload.split('_');
             const testId = parts[2];
@@ -1038,17 +1041,31 @@ async function sendLessonToUser(chatId, lessonId, maxApi) {
     }
 }
 
-// ============================================================
-// ТЕСТЫ
-// ============================================================
+// server.js - ИСПРАВЛЕННЫЙ showTest
 
 async function showTest(chatId, testId, maxApi) {
     try {
-        const test = await lessonService.getLessonTest(testId);
-        if (!test || !test.answers || test.answers.length === 0) {
+        console.log(`[TEST] showTest called with testId: ${testId}`);
+        
+        // Получаем тест по ID через getTestById
+        const test = await lessonService.getTestById(testId);
+        
+        if (!test) {
+            console.log(`[TEST] Test not found with ID: ${testId}`);
             await maxApi.sendMessage({ 
                 chatId: chatId, 
                 text: '❌ Тест не найден', 
+                parseMode: 'markdown' 
+            });
+            return;
+        }
+
+        console.log(`[TEST] Test found:`, test);
+
+        if (!test.answers || test.answers.length === 0) {
+            await maxApi.sendMessage({ 
+                chatId: chatId, 
+                text: '❌ У теста нет вариантов ответов', 
                 parseMode: 'markdown' 
             });
             return;
@@ -1069,6 +1086,7 @@ async function showTest(chatId, testId, maxApi) {
             ]);
         }
         
+        // Возврат к УРОКУ (а не к тесту)
         buttons.push([{ 
             type: 'callback', 
             text: '⬅️ Назад к уроку', 
