@@ -463,14 +463,18 @@ if (payload === 'show_courses') {
     const lessonId = payload.replace('lesson_', '');
     await sendLessonToUser(chatId, lessonId, maxApi);
 } else if (payload.startsWith('test_')) {
-    // ДОБАВЬТЕ ЭТОТ БЛОК ПЕРЕД test_answer_
     const testId = payload.replace('test_', '');
     console.log(`[TEST] Showing test with ID: ${testId}`);
     await showTest(chatId, testId, maxApi);
 } else if (payload.startsWith('test_answer_')) {
-    const parts = payload.split('_');
-    const testId = parts[2];
-    const answerId = parts[3];
+    // ИСПРАВЛЕННЫЙ ПАРСИНГ
+    // payload: test_answer_4818066c-9273-46fb-b355-aa1fea18b6d5_4834d54c-6dfa-485e-b042-dcd75642c92d
+    const withoutPrefix = payload.replace('test_answer_', ''); // 4818066c-..._4834d54c-...
+    const underscoreIndex = withoutPrefix.lastIndexOf('_');
+    const testId = withoutPrefix.substring(0, underscoreIndex); // 4818066c-...
+    const answerId = withoutPrefix.substring(underscoreIndex + 1); // 4834d54c-...
+    
+    console.log(`[TEST] testId: ${testId}, answerId: ${answerId}`);
     await handleTestAnswer(chatId, testId, answerId, maxApi);
 } else {
     await maxApi.sendMessage({
