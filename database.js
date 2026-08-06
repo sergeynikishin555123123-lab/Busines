@@ -28,7 +28,6 @@ function setPGClient(client, connected) {
     pgConnected = connected;
     console.log('[DB] PostgreSQL client set:', connected ? '✅ connected' : '⚠️ fallback');
 }
-
 // ============================================================
 // БАЗОВЫЕ МЕТОДЫ
 // ============================================================
@@ -249,7 +248,7 @@ async function closePool() {
 // ============================================================
 
 module.exports = {
-    setPGClient,
+    setPGClient,  // ⭐ ДОБАВИТЬ ЭТУ СТРОКУ
     query,
     getClient,
     closePool,
