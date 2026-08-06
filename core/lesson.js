@@ -50,24 +50,48 @@ class LessonService {
         }
     }
 
-    async getLessonTest(lessonId) {
+// core/lesson.js - ИСПРАВЛЕННЫЙ getLessonTest
+
+async getLessonTest(lessonId) {
+    try {
+        console.log(`[TEST] Getting test for lesson: ${lessonId}`);
+        
         const tests = database.readTable('tests');
         const answers = database.readTable('test_answers');
 
-        const test = tests.find(t => t.lesson_id === lessonId);
-        if (!test) return null;
+        console.log(`[TEST] All tests:`, tests.map(t => ({ id: t.id, lesson_id: t.lesson_id })));
+        console.log(`[TEST] Looking for lesson_id: ${lessonId}`);
+
+        // Ищем тест с нужным lesson_id (СРАВНИВАЕМ КАК СТРОКИ)
+        const test = tests.find(t => String(t.lesson_id) === String(lessonId));
+        
+        if (!test) {
+            console.log(`[TEST] No test found for lesson: ${lessonId}`);
+            return null;
+        }
+
+        console.log(`[TEST] Found test:`, test);
+
+        const testAnswers = answers
+            .filter(a => String(a.test_id) === String(test.id))
+            .map(a => ({
+                id: a.id,
+                answer: a.answer,
+                is_correct: a.is_correct === true,
+            }));
+
+        console.log(`[TEST] Found ${testAnswers.length} answers`);
 
         return {
             ...test,
-            answers: answers
-                .filter(a => a.test_id === test.id)
-                .map(a => ({
-                    id: a.id,
-                    answer: a.answer,
-                    is_correct: a.is_correct === true,
-                })),
+            answers: testAnswers,
         };
+        
+    } catch (error) {
+        console.error('[TEST] Error getting test:', error);
+        return null;
     }
+}
 
     async getTestById(testId) {
         const tests = database.readTable('tests');
