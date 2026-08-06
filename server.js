@@ -56,7 +56,7 @@ try {
     process.exit(1);
 }
 
-//config.storage.localPath = UPLOADS_DIR;
+config.storage.localPath = UPLOADS_DIR;
 
 let logger;
 try {
@@ -349,6 +349,10 @@ async function handleBotStarted(update) {
     }
 }
 
+// ============================================================
+// ОБРАБОТКА СООБЩЕНИЙ С ВЛОЖЕНИЯМИ
+// ============================================================
+
 async function handleMessageCreated(update) {
     console.log('[HANDLER] handleMessageCreated called');
     
@@ -462,48 +466,48 @@ async function handleMessageCallback(update) {
             return;
         }
 
-       // ============================================================
-// ПОЛЬЗОВАТЕЛЬСКИЕ КОМАНДЫ
-// ============================================================
-
-if (payload === 'show_courses') {
-    await showCourses(chatId, maxApi);
-} else if (payload === 'show_help') {
-    await showHelp(chatId, maxApi);
-} else if (payload === 'buy_access') {
-    await handleBuyAccess(chatId, maxApi);
-} else if (payload === 'payment_confirmed') {
-    await handlePaymentConfirmed(chatId, maxApi);
-} else if (payload.startsWith('payment_check_')) {
-    const paymentId = payload.replace('payment_check_', '');
-    await handlePaymentCheck(chatId, paymentId, maxApi);
-} else if (payload.startsWith('course_')) {
-    const courseId = payload.replace('course_', '');
-    await showCourseDetails(chatId, courseId, maxApi);
-} else if (payload.startsWith('lesson_')) {
-    const lessonId = payload.replace('lesson_', '');
-    await sendLessonToUser(chatId, lessonId, maxApi);
-} else if (payload.startsWith('test_') && !payload.startsWith('test_answer_')) {
-    // Показ теста
-    const testId = payload.replace('test_', '');
-    console.log(`[TEST] Showing test with ID: ${testId}`);
-    await showTest(chatId, testId, maxApi);
-} else if (payload.startsWith('test_answer_')) {
-    // ИСПРАВЛЕННЫЙ ПАРСИНГ ДЛЯ ОТВЕТОВ НА ТЕСТ
-    const withoutPrefix = payload.replace('test_answer_', '');
-    const underscoreIndex = withoutPrefix.lastIndexOf('_');
-    const testId = withoutPrefix.substring(0, underscoreIndex);
-    const answerId = withoutPrefix.substring(underscoreIndex + 1);
-    
-    console.log(`[TEST] testId: ${testId}, answerId: ${answerId}`);
-    await handleTestAnswer(chatId, testId, answerId, maxApi);
-} else {
-    await maxApi.sendMessage({
-        chatId: chatId,
-        text: `✅ Вы выбрали: ${payload}`,
-        parseMode: 'markdown',
-    });
-}
+        // ============================================================
+        // ПОЛЬЗОВАТЕЛЬСКИЕ КОМАНДЫ
+        // ============================================================
+        
+        if (payload === 'show_courses') {
+            await showCourses(chatId, maxApi);
+        } else if (payload === 'show_help') {
+            await showHelp(chatId, maxApi);
+        } else if (payload === 'buy_access') {
+            await handleBuyAccess(chatId, maxApi);
+        } else if (payload === 'payment_confirmed') {
+            await handlePaymentConfirmed(chatId, maxApi);
+        } else if (payload.startsWith('payment_check_')) {
+            const paymentId = payload.replace('payment_check_', '');
+            await handlePaymentCheck(chatId, paymentId, maxApi);
+        } else if (payload.startsWith('course_')) {
+            const courseId = payload.replace('course_', '');
+            await showCourseDetails(chatId, courseId, maxApi);
+        } else if (payload.startsWith('lesson_')) {
+            const lessonId = payload.replace('lesson_', '');
+            await sendLessonToUser(chatId, lessonId, maxApi);
+        } else if (payload.startsWith('test_') && !payload.startsWith('test_answer_')) {
+            // Показ теста
+            const testId = payload.replace('test_', '');
+            console.log(`[TEST] Showing test with ID: ${testId}`);
+            await showTest(chatId, testId, maxApi);
+        } else if (payload.startsWith('test_answer_')) {
+            // ИСПРАВЛЕННЫЙ ПАРСИНГ ДЛЯ ОТВЕТОВ НА ТЕСТ
+            const withoutPrefix = payload.replace('test_answer_', '');
+            const underscoreIndex = withoutPrefix.lastIndexOf('_');
+            const testId = withoutPrefix.substring(0, underscoreIndex);
+            const answerId = withoutPrefix.substring(underscoreIndex + 1);
+            
+            console.log(`[TEST] testId: ${testId}, answerId: ${answerId}`);
+            await handleTestAnswer(chatId, testId, answerId, maxApi);
+        } else {
+            await maxApi.sendMessage({
+                chatId: chatId,
+                text: `✅ Вы выбрали: ${payload}`,
+                parseMode: 'markdown',
+            });
+        }
     } catch (error) {
         console.error('[HANDLER] Error in handleMessageCallback:', error);
         logger.error({ err: error, update }, 'Error handling message_callback');
