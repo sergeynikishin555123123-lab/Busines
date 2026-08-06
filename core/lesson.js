@@ -479,6 +479,8 @@ async addLessonFile(lessonId, fileData) {
         return true;
     }
 
+// ... все остальные методы ...
+
     async updateProgressPosition(userId, lessonId, position) {
         const progress = database.readTable('progress');
         const item = progress.find(p => p.user_id === userId && p.lesson_id === lessonId);
@@ -489,6 +491,51 @@ async addLessonFile(lessonId, fileData) {
             return true;
         }
         return false;
+    }
+
+    // ============================================================
+    // ПОЛУЧЕНИЕ УРОКОВ (ДЛЯ ПОЛЬЗОВАТЕЛЕЙ)
+    // ============================================================
+
+    async getFreeLessons() {
+        const lessons = database.readTable('lessons');
+        const files = database.readTable('lesson_files');
+        
+        const freeLessons = lessons.filter(l => l.is_free === true);
+        
+        return freeLessons.map(l => {
+            const lessonFiles = files.filter(f => f.lesson_id === l.id);
+            return {
+                ...l,
+                files: lessonFiles,
+            };
+        }).sort((a, b) => (a.order_number || 0) - (b.order_number || 0));
+    }
+
+    async getAllLessons() {
+        const lessons = database.readTable('lessons');
+        const files = database.readTable('lesson_files');
+        
+        return lessons.map(l => {
+            const lessonFiles = files.filter(f => f.lesson_id === l.id);
+            return {
+                ...l,
+                files: lessonFiles,
+            };
+        }).sort((a, b) => (a.order_number || 0) - (b.order_number || 0));
+    }
+
+    async getLessonsWithFiles(courseId) {
+        const lessons = await this.getLessonsByCourse(courseId);
+        const files = database.readTable('lesson_files');
+        
+        return lessons.map(l => {
+            const lessonFiles = files.filter(f => f.lesson_id === l.id);
+            return {
+                ...l,
+                files: lessonFiles,
+            };
+        });
     }
 }
 
