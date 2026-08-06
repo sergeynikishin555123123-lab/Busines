@@ -1047,15 +1047,12 @@ async function sendLessonToUser(chatId, lessonId, maxApi) {
     }
 }
 
-// server.js - ИСПРАВЛЕННЫЙ showTest
-
-// server.js - ИСПРАВЛЕННЫЙ showTest
+// server.js - ИСПРАВЛЕННЫЕ ФУНКЦИИ showTest и handleTestAnswer
 
 async function showTest(chatId, testId, maxApi) {
     try {
         console.log(`[TEST] showTest called with testId: ${testId}`);
         
-        // Используем getTestById, а не getLessonTest
         const test = await lessonService.getTestById(testId);
         
         if (!test) {
@@ -1122,7 +1119,6 @@ async function handleTestAnswer(chatId, testId, answerId, maxApi) {
         console.log(`[TEST] handleTestAnswer: testId=${testId}, answerId=${answerId}`);
         
         const result = await lessonService.checkTestAnswer(testId, answerId, chatId);
-        // ИСПОЛЬЗУЕМ getTestById ВМЕСТО getLessonTest
         const test = await lessonService.getTestById(testId);
         const selectedAnswer = test?.answers?.find(a => a.id === answerId);
 
@@ -1139,7 +1135,6 @@ async function handleTestAnswer(chatId, testId, answerId, maxApi) {
                 text: `❌ **Неправильно.**\n\nВаш ответ: ${selectedAnswer?.answer || 'Неизвестно'}\nПопробуйте еще раз!`,
                 parseMode: 'markdown',
             });
-            // Показываем тест снова
             await showTest(chatId, testId, maxApi);
         }
 
@@ -1152,7 +1147,6 @@ async function handleTestAnswer(chatId, testId, answerId, maxApi) {
         });
     }
 }
-
 // ============================================================
 // ПОМОЩЬ
 // ============================================================
