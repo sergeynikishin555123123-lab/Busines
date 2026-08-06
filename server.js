@@ -1,9 +1,8 @@
-// server.js - ПОЛНАЯ ФИНАЛЬНАЯ ВЕРСИЯ
-
 require('dotenv').config();
 
 const express = require('express');
 const session = require('express-session');
+const pgSession = require('connect-pg-simple')(session);
 const path = require('path');
 const helmet = require('helmet');
 const cors = require('cors');
@@ -14,17 +13,19 @@ const crypto = require('crypto');
 const axios = require('axios');
 const { Client } = require('pg');
 
+console.log('[STARTUP] ========================================');
 console.log('[STARTUP] Starting application...');
 console.log('[STARTUP] NODE_ENV:', process.env.NODE_ENV);
 console.log('[STARTUP] PORT:', process.env.PORT);
+console.log('[STARTUP] ========================================');
 
 // ============================================================
 // ДИРЕКТОРИИ
 // ============================================================
 
-const DATA_DIR = process.env.DATA_DIR || '/tmp/data';
-const LOG_DIR = process.env.LOG_DIR || '/tmp/logs';
-const UPLOADS_DIR = process.env.UPLOADS_DIR || '/tmp/uploads';
+const DATA_DIR = process.env.DATA_DIR || '/app/data';
+const LOG_DIR = process.env.LOG_DIR || '/app/logs';
+const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/uploads';
 
 console.log('[STARTUP] DATA_DIR:', DATA_DIR);
 console.log('[STARTUP] LOG_DIR:', LOG_DIR);
@@ -124,6 +125,7 @@ async function connectPostgreSQL() {
         
         if (!process.env.PG_PASSWORD) {
             console.warn('[POSTGRES] ⚠️ PG_PASSWORD not set in .env');
+            console.warn('[POSTGRES] ⚠️ Using JSON storage fallback');
             return null;
         }
         
@@ -177,6 +179,7 @@ async function initPostgreSQLTables() {
     try {
         console.log('[POSTGRES] Creating tables...');
 
+        // Таблица пользователей
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS users (
                 id VARCHAR(36) PRIMARY KEY,
@@ -193,6 +196,7 @@ async function initPostgreSQLTables() {
             )
         `);
 
+        // Таблица администраторов
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS admins (
                 id VARCHAR(36) PRIMARY KEY,
@@ -204,6 +208,7 @@ async function initPostgreSQLTables() {
             )
         `);
 
+        // Таблица курсов
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS courses (
                 id VARCHAR(36) PRIMARY KEY,
@@ -218,6 +223,7 @@ async function initPostgreSQLTables() {
             )
         `);
 
+        // Таблица уроков
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS lessons (
                 id VARCHAR(36) PRIMARY KEY,
@@ -233,6 +239,7 @@ async function initPostgreSQLTables() {
             )
         `);
 
+        // Таблица файлов уроков
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS lesson_files (
                 id VARCHAR(36) PRIMARY KEY,
@@ -252,6 +259,7 @@ async function initPostgreSQLTables() {
             )
         `);
 
+        // Таблица тестов
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS tests (
                 id VARCHAR(36) PRIMARY KEY,
@@ -261,6 +269,7 @@ async function initPostgreSQLTables() {
             )
         `);
 
+        // Таблица ответов на тесты
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS test_answers (
                 id VARCHAR(36) PRIMARY KEY,
@@ -271,6 +280,7 @@ async function initPostgreSQLTables() {
             )
         `);
 
+        // Таблица прогресса
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS progress (
                 id VARCHAR(36) PRIMARY KEY,
@@ -286,6 +296,7 @@ async function initPostgreSQLTables() {
             )
         `);
 
+        // Таблица платежей
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS payments (
                 id VARCHAR(36) PRIMARY KEY,
@@ -302,6 +313,7 @@ async function initPostgreSQLTables() {
             )
         `);
 
+        // Таблица доступа к курсам
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS user_course_access (
                 id VARCHAR(36) PRIMARY KEY,
@@ -313,6 +325,7 @@ async function initPostgreSQLTables() {
             )
         `);
 
+        // Таблица просмотров уроков
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS lesson_views (
                 id VARCHAR(36) PRIMARY KEY,
@@ -325,6 +338,7 @@ async function initPostgreSQLTables() {
             )
         `);
 
+        // Таблица уведомлений
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS notifications (
                 id VARCHAR(36) PRIMARY KEY,
@@ -338,14 +352,26 @@ async function initPostgreSQLTables() {
             )
         `);
 
-        console.log('[POSTGRES] ✅ Tables created');
+        // ⭐ НОВОЕ: Таблица сессий
+        await pgClient.query(`
+            CREATE TABLE IF NOT EXISTS "session" (
+                sid VARCHAR(255) NOT NULL COLLATE "default",
+                sess JSON NOT NULL,
+                expire TIMESTAMP(6) NOT NULL,
+                CONSTRAINT session_pkey PRIMARY KEY (sid)
+            )
+        `);
+        
+        await pgClient.query(`
+            CREATE INDEX IF NOT EXISTS IDX_session_expire ON "session" (expire)
+        `);
+
+        console.log('[POSTGRES] ✅ All tables created');
     } catch (error) {
         console.error('[POSTGRES] Error creating tables:', error.message);
         throw error;
     }
 }
-
-// В server.js замените блок инициализации database на:
 
 // ============================================================
 // ДАТАБАЗА (с PostgreSQL)
@@ -355,9 +381,7 @@ let database;
 try {
     process.env.DATA_DIR = DATA_DIR;
     database = require('./database');
-    // Передаем PostgreSQL клиент
-    database.setPGClient(pgClient, pgConnected);
-    console.log('[STARTUP] Database loaded');
+    console.log('[STARTUP] Database module loaded');
 } catch (error) {
     console.error('[STARTUP] Database error:', error.message);
     process.exit(1);
@@ -365,7 +389,7 @@ try {
 
 try {
     database.initDatabase();
-    console.log('[STARTUP] Database initialized');
+    console.log('[STARTUP] JSON database initialized');
 } catch (error) {
     console.error('[STARTUP] DB init error:', error.message);
     process.exit(1);
@@ -500,23 +524,64 @@ try {
     process.exit(1);
 }
 
+// ============================================================
+// ⭐ НОВОЕ: НАСТРОЙКА СЕССИЙ ЧЕРЕЗ POSTGRESQL
+// ============================================================
+
 try {
+    let sessionStore;
+    
+    // Если PostgreSQL подключен - используем его для сессий
+    if (pgConnected && pgClient) {
+        console.log('[STARTUP] Setting up PostgreSQL session store...');
+        const PgSession = require('connect-pg-simple')(session);
+        sessionStore = new PgSession({
+            pool: pgClient,
+            tableName: 'session',
+            createTableIfMissing: false, // таблица уже создана
+        });
+        console.log('[STARTUP] PostgreSQL session store configured');
+    } else {
+        console.warn('[STARTUP] ⚠️ Using MemoryStore for sessions (not for production)');
+        sessionStore = new session.MemoryStore();
+    }
+
     const sessionConfig = {
-        secret: config.session.secret,
+        secret: config.session.secret || 'default-secret-change-me',
         resave: false,
         saveUninitialized: false,
+        store: sessionStore,
         cookie: {
-            maxAge: config.session.maxAge,
-            secure: false,
+            maxAge: config.session.maxAge || 86400000,
+            secure: process.env.NODE_ENV === 'production',
             httpOnly: true,
             sameSite: 'lax',
         },
     };
+    
     app.use(session(sessionConfig));
-    console.log('[STARTUP] Sessions configured');
+    console.log('[STARTUP] Sessions configured successfully');
 } catch (error) {
     console.error('[STARTUP] Sessions error:', error.message);
-    process.exit(1);
+    // Продолжаем с MemoryStore как fallback
+    try {
+        const sessionConfig = {
+            secret: config.session.secret || 'default-secret-change-me',
+            resave: false,
+            saveUninitialized: false,
+            cookie: {
+                maxAge: config.session.maxAge || 86400000,
+                secure: process.env.NODE_ENV === 'production',
+                httpOnly: true,
+                sameSite: 'lax',
+            },
+        };
+        app.use(session(sessionConfig));
+        console.warn('[STARTUP] Using MemoryStore for sessions (fallback)');
+    } catch (fallbackError) {
+        console.error('[STARTUP] Sessions fallback error:', fallbackError.message);
+        process.exit(1);
+    }
 }
 
 try {
@@ -565,7 +630,7 @@ async function checkUserHasPaidAccess(userId) {
             return result.rows[0]?.has_access || false;
         }
         
-        const access = database.readTable('user_course_access');
+        const access = await database.readTable('user_course_access');
         const paidCourses = await courseService.getPaidCourses();
         
         for (const course of paidCourses) {
@@ -576,7 +641,7 @@ async function checkUserHasPaidAccess(userId) {
             if (hasAccess) return true;
         }
         
-        const payments = database.readTable('payments');
+        const payments = await database.readTable('payments');
         const hasPayment = payments.find(p =>
             String(p.user_id) === userIdStr &&
             p.status === 'success'
@@ -2447,17 +2512,27 @@ console.log(`[STARTUP] Starting on ${HOST}:${PORT}...`);
         console.warn('[STARTUP] PostgreSQL connection failed, using JSON storage');
     }
     
+    // Устанавливаем клиент в database
+    try {
+        database.setPGClient(pgClient, pgConnected);
+        console.log(`[DB] PostgreSQL client set: ${pgConnected ? '✅ connected' : '⚠️ fallback'}`);
+    } catch (error) {
+        console.warn('[DB] Could not set PG client:', error.message);
+    }
+    
     // Создаем админа
     await ensureAdmin();
     
     const server = app.listen(PORT, HOST, () => {
+        console.log('[STARTUP] ========================================');
         console.log(`[STARTUP] ✅ Server running on port ${PORT}`);
         console.log(`[STARTUP] Health: http://${HOST}:${PORT}/health`);
         console.log(`[STARTUP] MAX Webhook URL: ${config.server.publicUrl}/webhook/max`);
         console.log(`[STARTUP] VK Webhook URL: ${config.server.publicUrl}/webhook/vk`);
         console.log(`[STARTUP] Admin panel: ${config.server.publicUrl}/admin`);
         console.log(`[STARTUP] PostgreSQL: ${pgConnected ? '✅ Connected' : '⚠️ Fallback (JSON)'}`);
-        console.log(`[STARTUP] ✅ Ready`);
+        console.log('[STARTUP] ✅ Ready');
+        console.log('[STARTUP] ========================================');
     });
     
     server.on('error', (error) => {
