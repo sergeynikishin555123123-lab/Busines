@@ -95,6 +95,8 @@ async getLessonTest(lessonId) {
 
    // core/lesson.js - ДОБАВЬТЕ ЭТОТ МЕТОД
 
+// core/lesson.js - ДОБАВЬТЕ ЭТОТ МЕТОД
+
 async getTestById(testId) {
     try {
         const tests = database.readTable('tests');
@@ -511,7 +513,7 @@ async addLessonFile(lessonId, fileData) {
         return true;
     }
 
-// ... все остальные методы ...
+
 
     async updateProgressPosition(userId, lessonId, position) {
         const progress = database.readTable('progress');
