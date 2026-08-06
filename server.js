@@ -1112,8 +1112,11 @@ async function showTest(chatId, testId, maxApi) {
 
 async function handleTestAnswer(chatId, testId, answerId, maxApi) {
     try {
+        console.log(`[TEST] handleTestAnswer: testId=${testId}, answerId=${answerId}`);
+        
         const result = await lessonService.checkTestAnswer(testId, answerId, chatId);
-        const test = await lessonService.getLessonTest(testId);
+        // ИСПОЛЬЗУЕМ getTestById ВМЕСТО getLessonTest
+        const test = await lessonService.getTestById(testId);
         const selectedAnswer = test?.answers?.find(a => a.id === answerId);
 
         if (result.correct) {
@@ -1129,6 +1132,7 @@ async function handleTestAnswer(chatId, testId, answerId, maxApi) {
                 text: `❌ **Неправильно.**\n\nВаш ответ: ${selectedAnswer?.answer || 'Неизвестно'}\nПопробуйте еще раз!`,
                 parseMode: 'markdown',
             });
+            // Показываем тест снова
             await showTest(chatId, testId, maxApi);
         }
 
