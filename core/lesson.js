@@ -103,7 +103,10 @@ async getTestById(testId) {
         const answers = database.readTable('test_answers');
 
         const test = tests.find(t => String(t.id) === String(testId));
-        if (!test) return null;
+        if (!test) {
+            console.log(`[TEST] Test not found with ID: ${testId}`);
+            return null;
+        }
 
         const testAnswers = answers
             .filter(a => String(a.test_id) === String(test.id))
@@ -112,6 +115,9 @@ async getTestById(testId) {
                 answer: a.answer,
                 is_correct: a.is_correct === true,
             }));
+
+        console.log(`[TEST] Found test:`, test);
+        console.log(`[TEST] Found ${testAnswers.length} answers`);
 
         return {
             ...test,
@@ -123,6 +129,7 @@ async getTestById(testId) {
     }
 }
     async checkTestAnswer(testId, answerId, userId) {
+    try {
         const answers = database.readTable('test_answers');
         const tests = database.readTable('tests');
 
@@ -164,8 +171,11 @@ async getTestById(testId) {
             correct: isCorrect,
             answerId: answer.id,
         };
+    } catch (error) {
+        console.error('[TEST] Error checking answer:', error);
+        throw error;
     }
-
+}
     async recordLessonView(userId, lessonId) {
         const views = database.readTable('lesson_views');
         const existing = views.find(v => v.user_id === userId && v.lesson_id === lessonId);
