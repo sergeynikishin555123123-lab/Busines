@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - NODE_ENV=production
+      - PORT=8080
+      - PUBLIC_URL=https://sergeynikishin555123123-lab-busines-56e9.twc1.net
+      - PG_USER=gen_user
+      - PG_HOST=f588fb3b4ee16a08f7a0a9b2.twc1.net
+      - PG_DATABASE=default_db
+      - PG_PASSWORD=7@^r,#={n}D#}^
+      - PG_PORT=5432
+      - MAX_BOT_TOKEN=f9LHodD0cOKnAh9tpU7Sm0qhVPIwJ_hDGExKRx6xXzUXiVRclY2HwISyr78eyx-e-2sR4YEtscn7Df488bBM
+      - MAX_API_URL=https://platform-api2.max.ru
+      - MAX_WEBHOOK_SECRET=my_super_secret_webhook_2024_abc123
+      - SESSION_SECRET=r7X2kP9mQ4vB8nL1wA6cE3jH5yF0dG
+      - ADMIN_LOGIN=admin
+      - ADMIN_PASSWORD=Admin2024!Secure
+      - DATA_DIR=/app/data
+      - UPLOADS_DIR=/app/uploads
+      - LOG_DIR=/app/logs
+    volumes:
+      - ./data:/app/data
+      - ./uploads:/app/uploads
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8080/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
