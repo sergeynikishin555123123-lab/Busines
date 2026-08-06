@@ -288,7 +288,6 @@ async function checkUserHasPaidAccess(userId) {
         const access = database.readTable('user_course_access');
         const paidCourses = await courseService.getPaidCourses();
         
-        // Проверяем доступ к платным курсам
         for (const course of paidCourses) {
             const hasAccess = access.find(a => 
                 String(a.user_id) === userIdStr && 
@@ -297,132 +296,9 @@ async function checkUserHasPaidAccess(userId) {
             if (hasAccess) return true;
         }
         
-        // Проверяем успешные платежи
         const payments = database.readTable('payments');
         const hasPayment = payments.find(p => 
             String(p.user_id) === userIdStr && 
-            p.status === 'success'
-        );
-        
-        return !!hasPayment;
-    } catch (error) {
-        console.error('[ACCESS] Error checking access:', error);
-        return false;
-    }
-}
-
-// ============================================================
-// ФУНКЦИИ ПОКУПКИ ДОСТУПА
-// ============================================================
-
-async function handleBuyAccess(chatId, maxApi) {
-    try {
-        const text = `💳 **Купить доступ к полному курсу**\n\n` +
-                    `💰 Стоимость: 999 руб.\n\n` +
-                    `После оплаты вам откроются все уроки:\n` +
-                    `• Все уроки с видео\n` +
-                    `• Файлы для скачивания\n` +
-                    `• Тесты для проверки знаний\n\n` +
-                    `Для оплаты переведите 999 руб на карту:\n` +
-                    `**XXXX XXXX XXXX XXXX**\n\n` +
-                    `После оплаты нажмите кнопку "Я оплатил(а)"`;
-        
-        await maxApi.sendKeyboard({
-            chatId: chatId,
-            text: text,
-            buttons: [
-                [{ type: 'callback', text: '✅ Я оплатил(а)', payload: 'payment_confirmed' }],
-                [{ type: 'callback', text: '📚 Назад к урокам', payload: 'show_courses' }]
-            ],
-            parseMode: 'markdown',
-        });
-    } catch (error) {
-        console.error('[PAYMENT] Error:', error);
-        await maxApi.sendMessage({
-            chatId: chatId,
-            text: '❌ Ошибка при оформлении покупки',
-            parseMode: 'markdown',
-        });
-    }
-}
-
-async function handlePaymentConfirmed(chatId, maxApi) {
-    try {
-        // Создаем запись о платеже
-        const payments = database.readTable('payments');
-        const payment = {
-            id: database.generateId(),
-            user_id: String(chatId),
-            amount: 999,
-            currency: 'RUB',
-            status: 'success',
-            payment_gateway: 'manual',
-            gateway_payment_id: null,
-            meta_data: JSON.stringify({ confirmed_at: database.now() }),
-            created_at: database.now(),
-            updated_at: database.now(),
-        };
-        payments.push(payment);
-        database.writeTable('payments', payments);
-        
-        // Даем доступ ко всем платным курсам
-        const paidCourses = await courseService.getPaidCourses();
-        const access = database.readTable('user_course_access');
-        
-        for (const course of paidCourses) {
-            const exists = access.find(a => 
-                String(a.user_id) === String(chatId) && 
-                a.course_id === course.id
-            );
-            if (!exists) {
-                access.push({
-                    id: database.generateId(),
-                    user_id: String(chatId),
-                    course_id: course.id,
-                    granted_at: database.now(),
-                });
-            }
-        }
-        database.writeTable('user_course_access', access);
-        
-        await maxApi.sendMessage({
-            chatId: chatId,
-            text: `✅ **Доступ открыт!**\n\nТеперь вам доступны все уроки.\n\n📚 Используйте кнопку "Уроки" чтобы начать обучение.`,
-            parseMode: 'markdown',
-        });
-        
-        await showCourses(chatId, maxApi);
-        
-    } catch (error) {
-        console.error('[PAYMENT] Confirmation error:', error);
-        await maxApi.sendMessage({
-            chatId: chatId,
-            text: '❌ Ошибка при подтверждении оплаты',
-            parseMode: 'markdown',
-        });
-    }
-
-
-// ============================================================
-// ФУНКЦИЯ ПРОВЕРКИ ДОСТУПА ПОЛЬЗОВАТЕЛЯ
-// ============================================================
-
-async function checkUserHasPaidAccess(userId) {
-    try {
-        const access = database.readTable('user_course_access');
-        const paidCourses = await courseService.getPaidCourses();
-        
-        for (const course of paidCourses) {
-            const hasAccess = access.find(a => 
-                a.user_id === String(userId) && 
-                a.course_id === course.id
-            );
-            if (hasAccess) return true;
-        }
-        
-        const payments = database.readTable('payments');
-        const hasPayment = payments.find(p => 
-            p.user_id === String(userId) && 
             p.status === 'success'
         );
         
@@ -471,6 +347,7 @@ async function handleBotStarted(update) {
         console.error('[HANDLER] Error in handleBotStarted:', error);
     }
 }
+
 // ============================================================
 // ОБРАБОТКА СООБЩЕНИЙ С ВЛОЖЕНИЯМИ
 // ============================================================
@@ -570,18 +447,16 @@ async function handleMessageCallback(update) {
             return;
         }
 
-
-if (payload === 'show_courses') {
-    await showCourses(chatId, maxApi);
-} else if (payload === 'show_help') {
-    await showHelp(chatId, maxApi);
-} else if (payload === 'buy_access') {  // <-- ДОБАВЬТЕ
-    await handleBuyAccess(chatId, maxApi);
-    return;
-} else if (payload === 'payment_confirmed') {  // <-- ДОБАВЬТЕ
-    await handlePaymentConfirmed(chatId, maxApi);
-    return;
-} else if (payload.startsWith('course_')) {
+        // Обычные команды
+        if (payload === 'show_courses') {
+            await showCourses(chatId, maxApi);
+        } else if (payload === 'show_help') {
+            await showHelp(chatId, maxApi);
+        } else if (payload === 'buy_access') {
+            await handleBuyAccess(chatId, maxApi);
+        } else if (payload === 'payment_confirmed') {
+            await handlePaymentConfirmed(chatId, maxApi);
+        } else if (payload.startsWith('course_')) {
             const courseId = payload.replace('course_', '');
             await showCourseDetails(chatId, courseId, maxApi);
         } else if (payload.startsWith('lesson_')) {
@@ -705,6 +580,7 @@ async function handleStartCommand(chatId, userId, text, maxApi) {
         parseMode: 'markdown',
     });
 }
+
 async function handleHelpCommand(chatId, maxApi) {
     await maxApi.sendMessage({
         chatId: chatId,
@@ -882,12 +758,12 @@ async function handleBuyAccess(chatId, maxApi) {
         const text = `💳 **Купить доступ к полному курсу**\n\n` +
                     `💰 Стоимость: 999 руб.\n\n` +
                     `После оплаты вам откроются все уроки:\n` +
-                    `• 15 уроков с видео\n` +
+                    `• Все уроки с видео\n` +
                     `• Файлы для скачивания\n` +
                     `• Тесты для проверки знаний\n\n` +
                     `Для оплаты переведите 999 руб на карту:\n` +
                     `**XXXX XXXX XXXX XXXX**\n\n` +
-                    `После оплаты отправьте чек в бот.`;
+                    `После оплаты нажмите кнопку "Я оплатил(а)"`;
         
         await maxApi.sendKeyboard({
             chatId: chatId,
@@ -910,7 +786,6 @@ async function handleBuyAccess(chatId, maxApi) {
 
 async function handlePaymentConfirmed(chatId, maxApi) {
     try {
-        // Создаем запись о платеже
         const payments = database.readTable('payments');
         const payment = {
             id: database.generateId(),
@@ -927,12 +802,14 @@ async function handlePaymentConfirmed(chatId, maxApi) {
         payments.push(payment);
         database.writeTable('payments', payments);
         
-        // Даем доступ ко всем платным курсам
         const paidCourses = await courseService.getPaidCourses();
         const access = database.readTable('user_course_access');
         
         for (const course of paidCourses) {
-            const exists = access.find(a => a.user_id === String(chatId) && a.course_id === course.id);
+            const exists = access.find(a => 
+                String(a.user_id) === String(chatId) && 
+                a.course_id === course.id
+            );
             if (!exists) {
                 access.push({
                     id: database.generateId(),
@@ -980,22 +857,23 @@ async function sendLessonToUser(chatId, lessonId, maxApi) {
             return;
         }
 
-       // Проверяем доступ к уроку
-if (!lesson.is_free) {
-    const hasAccess = await checkUserHasPaidAccess(chatId);
-    if (!hasAccess) {
-        await maxApi.sendKeyboard({
-            chatId: chatId,
-            text: `🔒 **Этот урок платный**\n\n"${lesson.title}" доступен только после покупки полного курса.\n\n💳 Купите доступ чтобы открыть все уроки!`,
-            buttons: [
-                [{ type: 'callback', text: '💳 Купить доступ', payload: 'buy_access' }],
-                [{ type: 'callback', text: '📚 Назад к урокам', payload: 'show_courses' }]
-            ],
-            parseMode: 'markdown',
-        });
-        return;
-    }
-}
+        // Проверяем доступ к уроку
+        if (!lesson.is_free) {
+            const hasAccess = await checkUserHasPaidAccess(chatId);
+            if (!hasAccess) {
+                await maxApi.sendKeyboard({
+                    chatId: chatId,
+                    text: `🔒 **Этот урок платный**\n\n"${lesson.title}" доступен только после покупки полного курса.\n\n💳 Купите доступ чтобы открыть все уроки!`,
+                    buttons: [
+                        [{ type: 'callback', text: '💳 Купить доступ', payload: 'buy_access' }],
+                        [{ type: 'callback', text: '📚 Назад к урокам', payload: 'show_courses' }]
+                    ],
+                    parseMode: 'markdown',
+                });
+                return;
+            }
+        }
+
         console.log(`[LESSON] Lesson: ${lesson.title}, Files: ${lesson.files ? lesson.files.length : 0}`);
 
         const videoFile = lesson.files?.find(f => f.type === 'video');
@@ -1247,6 +1125,23 @@ async function handleTestAnswer(chatId, testId, answerId, maxApi) {
 }
 
 // ============================================================
+// ПОМОЩЬ
+// ============================================================
+
+async function showHelp(chatId, maxApi) {
+    await maxApi.sendMessage({
+        chatId: chatId,
+        text: `📚 **Помощь**\n\n` +
+              `/start - Главное меню\n` +
+              `/help - Помощь\n` +
+              `/courses - Уроки\n` +
+              `/admin - Админ-панель\n\n` +
+              `Просто напиши сообщение, и я помогу!`,
+        parseMode: 'markdown',
+    });
+}
+
+// ============================================================
 // АДМИН-ПАНЕЛЬ (ДАШБОРД)
 // ============================================================
 
@@ -1317,25 +1212,21 @@ async function handleAdminCommand(chatId, text, maxApi) {
             return;
         }
 
-        // Редактирование названия урока
         if (session.context === 'editing_lesson_title') {
             await handleAdminLessonEditTitle(chatId, text, maxApi);
             return;
         }
 
-        // Редактирование описания урока
         if (session.context === 'editing_lesson_desc') {
             await handleAdminLessonEditDesc(chatId, text, maxApi);
             return;
         }
 
-        // Создание теста (вопрос)
         if (session.context === 'creating_test_question') {
             await handleAdminTestQuestion(chatId, text, maxApi);
             return;
         }
 
-        // Создание теста (варианты ответов)
         if (session.context === 'creating_test_answers') {
             await handleAdminTestAnswers(chatId, text, maxApi);
             return;
@@ -1360,7 +1251,6 @@ async function handleAdminCallback(chatId, payload, maxApi) {
             return;
         }
 
-        // Выход
         if (payload === 'admin_logout') {
             adminSessions.delete(chatId);
             await maxApi.sendMessage({ chatId: chatId, text: `🚪 Вы вышли из админ-панели.`, parseMode: 'markdown' });
@@ -1395,7 +1285,6 @@ async function handleAdminCallback(chatId, payload, maxApi) {
             return;
         }
 
-        // Редактирование названия
         if (payload.startsWith('admin_lesson_edit_title_')) {
             const lessonId = payload.replace('admin_lesson_edit_title_', '');
             session.context = 'editing_lesson_title';
@@ -1408,7 +1297,6 @@ async function handleAdminCallback(chatId, payload, maxApi) {
             return;
         }
 
-        // Редактирование описания
         if (payload.startsWith('admin_lesson_edit_desc_')) {
             const lessonId = payload.replace('admin_lesson_edit_desc_', '');
             session.context = 'editing_lesson_desc';
@@ -1421,7 +1309,6 @@ async function handleAdminCallback(chatId, payload, maxApi) {
             return;
         }
 
-        // Переключение бесплатный/платный
         if (payload.startsWith('admin_lesson_toggle_free_')) {
             const lessonId = payload.replace('admin_lesson_toggle_free_', '');
             const lesson = await lessonService.getLessonById(lessonId);
@@ -1432,28 +1319,24 @@ async function handleAdminCallback(chatId, payload, maxApi) {
             return;
         }
 
-        // Редактирование теста
         if (payload.startsWith('admin_lesson_edit_test_')) {
             const lessonId = payload.replace('admin_lesson_edit_test_', '');
             await handleAdminEditTest(chatId, lessonId, maxApi);
             return;
         }
 
-        // Загрузка видео
         if (payload.startsWith('admin_lesson_video_')) {
             const lessonId = payload.replace('admin_lesson_video_', '');
             await handleAdminUploadVideo(chatId, lessonId, maxApi);
             return;
         }
 
-        // Загрузка файла
         if (payload.startsWith('admin_lesson_file_')) {
             const lessonId = payload.replace('admin_lesson_file_', '');
             await handleAdminUploadFile(chatId, lessonId, maxApi);
             return;
         }
 
-        // Удаление урока
         if (payload.startsWith('admin_lesson_delete_')) {
             const lessonId = payload.replace('admin_lesson_delete_', '');
             const lesson = await lessonService.getLessonById(lessonId);
@@ -1738,7 +1621,6 @@ async function handleAdminTestAnswers(chatId, text, maxApi) {
         const session = adminSessions.get(chatId);
         
         if (text.toLowerCase() === 'готово' || text.toLowerCase() === 'done') {
-            // Сохраняем тест
             if (session.testAnswers.length < 2) {
                 await maxApi.sendMessage({
                     chatId: chatId,
@@ -1765,7 +1647,6 @@ async function handleAdminTestAnswers(chatId, text, maxApi) {
             return;
         }
         
-        // Проверяем, помечен ли ответ как правильный
         const isCorrect = text.endsWith('*');
         const answerText = isCorrect ? text.slice(0, -1).trim() : text.trim();
         
@@ -1814,7 +1695,6 @@ async function handleAdminLessonCreateStep2(chatId, title, maxApi) {
             return;
         }
         
-        // Если нет курса, создаем дефолтный
         if (!session.courseId) {
             const courses = await courseService.getAllCourses(false);
             if (courses.length === 0) {
@@ -1983,14 +1863,12 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
                 maxType = 'image';
             }
 
-            // Случай 1: Файл уже загружен в MAX (есть токен)
             if (fileData.token) {
                 const token = fileData.token;
                 const fileName = fileData.filename || 'file';
                 
                 console.log(`[ADMIN] File already in MAX: ${fileName}, token: ${token.substring(0, 20)}...`);
 
-                // Если это видео, удаляем старое
                 if (maxType === 'video') {
                     const existingFiles = await lessonService.getLessonFiles(lessonId);
                     const oldVideo = existingFiles.find(f => f.type === 'video');
@@ -2021,7 +1899,6 @@ async function handleAdminAttachment(chatId, attachments, maxApi) {
                 return;
             }
 
-            // Случай 2: Есть URL файла
             if (fileData.url) {
                 const fileUrl = fileData.url;
                 const fileName = fileData.filename || 'file';
@@ -2223,23 +2100,6 @@ async function showAdminCourseDetail(chatId, courseId, maxApi) {
     } catch (error) {
         console.error('[ADMIN] Error showing course detail:', error);
     }
-}
-
-// ============================================================
-// ПОМОЩЬ
-// ============================================================
-
-async function showHelp(chatId, maxApi) {
-    await maxApi.sendMessage({
-        chatId: chatId,
-        text: `📚 **Помощь**\n\n` +
-              `/start - Главное меню\n` +
-              `/help - Помощь\n` +
-              `/courses - Уроки\n` +
-              `/admin - Админ-панель\n\n` +
-              `Просто напиши сообщение, и я помогу!`,
-        parseMode: 'markdown',
-    });
 }
 
 // ============================================================
