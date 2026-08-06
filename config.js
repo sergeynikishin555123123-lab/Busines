@@ -43,7 +43,23 @@ module.exports = {
         messagesPerChatPerSecond: 2,
     },
 
-    payment: {
-        defaultGateway: process.env.PAYMENT_GATEWAY || 'test',
+   payment: {
+        defaultGateway: process.env.PAYMENT_GATEWAY || 'manual',
+        yookassa: {
+            shopId: process.env.YOOKASSA_SHOP_ID || '',
+            secretKey: process.env.YOOKASSA_SECRET_KEY || '',
+            returnUrl: process.env.YOOKASSA_RETURN_URL || '',
+        },
+        stripe: {
+            secretKey: process.env.STRIPE_SECRET_KEY || '',
+            publicKey: process.env.STRIPE_PUBLIC_KEY || '',
+        },
+        robokassa: {
+            merchantLogin: process.env.ROBOKASSA_MERCHANT_LOGIN || '',
+            password1: process.env.ROBOKASSA_PASSWORD_1 || '',
+            password2: process.env.ROBOKASSA_PASSWORD_2 || '',
+        },
     },
+    
+    // ... остальные настройки ...
 };
