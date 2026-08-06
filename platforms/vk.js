@@ -1,30 +1,50 @@
-// platforms/vk.js
-// ПОЛНАЯ ИНТЕГРАЦИЯ VK
+// platforms/vk.js - ДОБАВЛЯЕМ setSharedFunctions
 
 const crypto = require('crypto');
 const axios = require('axios');
 const FormData = require('form-data');
 const fs = require('fs');
+const path = require('path');
 const config = require('../config');
-const dispatcher = require('../core/dispatcher');
 const logger = require('../logger');
+const database = require('../database');
+const userService = require('../core/user');
+
+// ============================================================
+// ОБЩИЕ ФУНКЦИИ (будут установлены из server.js)
+// ============================================================
+
+let sharedFunctions = {};
+
+function setSharedFunctions(functions) {
+    sharedFunctions = functions;
+    console.log('[VK] Shared functions set');
+}
+
+// ============================================================
+// VK API КЛИЕНТ
+// ============================================================
 
 class VKAPI {
     constructor() {
-        this.token = config.vk.token;
+        this.token = config.vk.groupToken;
         this.apiVersion = config.vk.apiVersion || '5.131';
         this.baseUrl = 'https://api.vk.com/method';
-        this.confirmationToken = config.vk.confirmationToken;
+        this.confirmationToken = config.vk.confirmationToken || 'test';
+        this.groupId = config.vk.groupId;
+
+        if (!this.token) {
+            console.warn('[VK] ⚠️ VK_GROUP_TOKEN не установлен!');
+        }
 
         this.client = axios.create({
             baseURL: this.baseUrl,
             timeout: 30000,
         });
 
-        // Логирование запросов
         this.client.interceptors.request.use(
             (config) => {
-                logger.debug(`VK Request: ${config.method.toUpperCase()} ${config.url}`);
+                console.log(`[VK] Request: ${config.method.toUpperCase()} ${config.url}`);
                 return config;
             },
             (error) => Promise.reject(error)
@@ -33,240 +53,403 @@ class VKAPI {
         this.client.interceptors.response.use(
             (response) => {
                 if (response.data && response.data.error) {
-                    logger.error('VK API Error:', response.data.error);
+                    console.error('[VK] API Error:', response.data.error);
                 }
                 return response;
             },
             (error) => {
-                logger.error('VK API Request failed:', error.message);
+                console.error('[VK] Request failed:', error.message);
                 return Promise.reject(error);
             }
         );
     }
 
+    // ============================================================
     // ОТПРАВКА СООБЩЕНИЯ
-    async sendMessage({ userId, text, parseMode = 'html' }) {
-        try {
-            const response = await this.client.post('/messages.send', null, {
-                params: {
-                    user_id: userId,
-                    message: text,
-                    random_id: Math.floor(Math.random() * 2147483647),
-                    access_token: this.token,
-                    v: this.apiVersion,
-                },
-            });
+    // ============================================================
 
-            if (response.data.error) {
+    async sendMessage({ chatId, text, parseMode = 'html', attachments = [] }) {
+        try {
+            const params = {
+                user_id: chatId,
+                message: text || ' ',
+                random_id: Math.floor(Math.random() * 2147483647),
+                access_token: this.token,
+                v: this.apiVersion,
+            };
+
+            if (attachments && attachments.length > 0) {
+                params.attachment = attachments.join(',');
+            }
+
+            console.log(`[VK] Sending message to ${chatId}: "${text?.substring(0, 50)}..."`);
+
+            const response = await this.client.post('/messages.send', null, { params });
+
+            if (response.data && response.data.error) {
                 throw new Error(`VK API Error: ${response.data.error.error_msg}`);
             }
 
-            logger.info({ userId, text: text.substring(0, 50) }, 'VK message sent');
             return response.data;
         } catch (error) {
-            logger.error({ err: error, userId }, 'Failed to send VK message');
+            console.error(`[VK] ❌ Failed to send message to ${chatId}:`, error.message);
             throw error;
         }
     }
 
+    // ============================================================
     // ОТПРАВКА КЛАВИАТУРЫ
-    async sendKeyboard({ userId, text, buttons, parseMode = 'html' }) {
+    // ============================================================
+
+    async sendKeyboard({ chatId, text, buttons, parseMode = 'html' }) {
         try {
+            // Конвертируем формат кнопок из MAX в формат VK
+            const vkButtons = buttons.map(row =>
+                row.map(btn => ({
+                    action: {
+                        type: 'text',
+                        label: btn.text || btn.payload || 'Кнопка',
+                        payload: JSON.stringify({ payload: btn.payload || '' }),
+                    },
+                    color: this.getButtonColor(btn),
+                }))
+            );
+
             const keyboard = {
                 one_time: false,
-                buttons: buttons.map(row =>
-                    row.map(btn => ({
-                        action: {
-                            type: 'text',
-                            label: btn.text,
-                            payload: JSON.stringify({ payload: btn.payload || '' }),
-                        },
-                        color: btn.color || 'primary',
-                    }))
-                ),
+                buttons: vkButtons,
             };
 
-            const response = await this.client.post('/messages.send', null, {
-                params: {
-                    user_id: userId,
-                    message: text,
-                    keyboard: JSON.stringify(keyboard),
-                    random_id: Math.floor(Math.random() * 2147483647),
-                    access_token: this.token,
-                    v: this.apiVersion,
-                },
-            });
-
-            if (response.data.error) {
-                throw new Error(`VK API Error: ${response.data.error.error_msg}`);
-            }
-
-            logger.info({ userId }, 'VK keyboard sent');
-            return response.data;
-        } catch (error) {
-            logger.error({ err: error, userId }, 'Failed to send VK keyboard');
-            throw error;
-        }
-    }
-
-    // ОТПРАВКА ФАЙЛА (через загрузку на сервер VK)
-    async sendFile({ userId, filePath, caption = '' }) {
-        try {
-            // 1. Загружаем файл на сервер VK
-            const uploadUrl = await this.getUploadUrl('doc');
-
-            const formData = new FormData();
-            formData.append('file', fs.createReadStream(filePath));
-
-            const uploadResponse = await axios.post(uploadUrl, formData, {
-                headers: {
-                    ...formData.getHeaders(),
-                },
-            });
-
-            // 2. Сохраняем документ
-            const doc = await this.saveDocument(uploadResponse.data);
-
-            // 3. Отправляем сообщение с документом
-            const response = await this.client.post('/messages.send', null, {
-                params: {
-                    user_id: userId,
-                    message: caption,
-                    attachment: `doc${doc.owner_id}_${doc.id}`,
-                    random_id: Math.floor(Math.random() * 2147483647),
-                    access_token: this.token,
-                    v: this.apiVersion,
-                },
-            });
-
-            if (response.data.error) {
-                throw new Error(`VK API Error: ${response.data.error.error_msg}`);
-            }
-
-            logger.info({ userId, docId: doc.id }, 'VK file sent');
-            return response.data;
-        } catch (error) {
-            logger.error({ err: error, userId }, 'Failed to send VK file');
-            // Fallback: отправляем ссылку
-            return this.sendMessage({
-                userId,
-                text: `📎 Файл: ${caption || 'Вложение'}\nСсылка: ${filePath}`,
-            });
-        }
-    }
-
-    // ОТПРАВКА ВИДЕО
-    async sendVideo({ userId, videoUrl, caption = '' }) {
-        try {
-            // Для VK нужно сначала загрузить видео
-            // Если это ссылка, пробуем загрузить
-            const videoData = await this.uploadVideo(videoUrl);
-
-            const response = await this.client.post('/messages.send', null, {
-                params: {
-                    user_id: userId,
-                    message: caption,
-                    attachment: `video${videoData.owner_id}_${videoData.id}`,
-                    random_id: Math.floor(Math.random() * 2147483647),
-                    access_token: this.token,
-                    v: this.apiVersion,
-                },
-            });
-
-            if (response.data.error) {
-                throw new Error(`VK API Error: ${response.data.error.error_msg}`);
-            }
-
-            logger.info({ userId, videoId: videoData.id }, 'VK video sent');
-            return response.data;
-        } catch (error) {
-            logger.error({ err: error, userId }, 'Failed to send VK video');
-            // Fallback: отправляем ссылку
-            return this.sendMessage({
-                userId,
-                text: `🎬 Видео: ${caption || 'Видео'}\n${videoUrl}`,
-            });
-        }
-    }
-
-    // ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ДЛЯ РАБОТЫ С ФАЙЛАМИ
-
-    async getUploadUrl(type = 'doc') {
-        const method = type === 'doc' ? '/docs.getUploadServer' : '/photos.getUploadServer';
-        const response = await this.client.post(method, null, {
-            params: {
+            const params = {
+                user_id: chatId,
+                message: text || ' ',
+                keyboard: JSON.stringify(keyboard),
+                random_id: Math.floor(Math.random() * 2147483647),
                 access_token: this.token,
                 v: this.apiVersion,
-            },
-        });
-
-        if (response.data.error) {
-            throw new Error(`VK API Error: ${response.data.error.error_msg}`);
-        }
-
-        return response.data.response.upload_url;
-    }
-
-    async saveDocument(uploadData) {
-        const response = await this.client.post('/docs.save', null, {
-            params: {
-                file: uploadData.file,
-                access_token: this.token,
-                v: this.apiVersion,
-            },
-        });
-
-        if (response.data.error) {
-            throw new Error(`VK API Error: ${response.data.error.error_msg}`);
-        }
-
-        return response.data.response.doc;
-    }
-
-    async uploadVideo(videoUrl) {
-        // Получаем сервер для загрузки видео
-        const response = await this.client.post('/video.save', null, {
-            params: {
-                link: videoUrl,
-                access_token: this.token,
-                v: this.apiVersion,
-            },
-        });
-
-        if (response.data.error) {
-            throw new Error(`VK API Error: ${response.data.error.error_msg}`);
-        }
-
-        return response.data.response;
-    }
-
-    // ПОЛУЧЕНИЕ ИНФОРМАЦИИ О ПОЛЬЗОВАТЕЛЕ
-    async getUserInfo(userId) {
-        try {
-            const response = await this.client.post('/users.get', null, {
-                params: {
-                    user_ids: userId,
-                    access_token: this.token,
-                    v: this.apiVersion,
-                },
-            });
-
-            if (response.data.error) {
-                throw new Error(`VK API Error: ${response.data.error.error_msg}`);
-            }
-
-            const user = response.data.response[0];
-            return {
-                id: user.id,
-                firstName: user.first_name,
-                lastName: user.last_name,
-                username: user.screen_name || '',
-                photo: user.photo_50 || '',
             };
+
+            console.log(`[VK] Sending keyboard to ${chatId}: ${buttons.length} rows`);
+
+            const response = await this.client.post('/messages.send', null, { params });
+
+            if (response.data && response.data.error) {
+                throw new Error(`VK API Error: ${response.data.error.error_msg}`);
+            }
+
+            return response.data;
         } catch (error) {
-            logger.error({ err: error, userId }, 'Failed to get VK user info');
-            return null;
+            console.error(`[VK] ❌ Failed to send keyboard to ${chatId}:`, error.message);
+            // Fallback: отправляем обычное сообщение
+            return this.sendMessage({ chatId, text, parseMode });
         }
+    }
+
+    getButtonColor(btn) {
+        if (btn.color) return btn.color;
+        if (btn.payload === 'admin_panel' || btn.payload === 'admin_login') return 'negative';
+        if (btn.payload === 'buy_access' || btn.payload === 'payment_confirmed') return 'positive';
+        return 'primary';
+    }
+
+    // ============================================================
+    // ЗАГЛУШКИ ДЛЯ ОТПРАВКИ ВИДЕО/ФАЙЛОВ (имитация MAX методов)
+    // ============================================================
+
+    async sendVideoByToken({ chatId, token, caption = '', parseMode = 'html' }) {
+        console.log(`[VK] sendVideoByToken called (stub) for ${chatId}`);
+        return this.sendMessage({
+            chatId,
+            text: `${caption}\n\n🎬 Видео доступно по ссылке (токен: ${token?.substring(0, 20)}...)`,
+            parseMode,
+        });
+    }
+
+    async sendFileByToken({ chatId, token, caption = '', parseMode = 'html' }) {
+        console.log(`[VK] sendFileByToken called (stub) for ${chatId}`);
+        return this.sendMessage({
+            chatId,
+            text: `${caption}\n\n📎 Файл доступен по ссылке (токен: ${token?.substring(0, 20)}...)`,
+            parseMode,
+        });
+    }
+
+    async sendImageByToken({ chatId, token, caption = '', parseMode = 'html' }) {
+        console.log(`[VK] sendImageByToken called (stub) for ${chatId}`);
+        return this.sendMessage({
+            chatId,
+            text: `${caption}\n\n🖼️ Изображение доступно по ссылке (токен: ${token?.substring(0, 20)}...)`,
+            parseMode,
+        });
+    }
+
+    async uploadFile(filePath, fileType = 'file') {
+        console.log(`[VK] uploadFile called (stub) for ${filePath}`);
+        return `vk_stub_token_${Date.now()}`;
+    }
+}
+
+// ============================================================
+// ХРАНИЛИЩЕ СЕССИЙ АДМИНА
+// ============================================================
+
+const adminSessions = new Map();
+
+// ============================================================
+// ОБРАБОТКА СООБЩЕНИЙ
+// ============================================================
+
+async function handleMessageNew(message) {
+    try {
+        const userId = String(message.from_id);
+        const text = message.text || '';
+        let payload = null;
+
+        console.log(`[VK HANDLER] Message from ${userId}: "${text}"`);
+
+        if (message.payload) {
+            try {
+                const parsed = JSON.parse(message.payload);
+                payload = parsed.payload || null;
+            } catch (e) {}
+        }
+
+        const vkApi = new VKAPI();
+
+        // Регистрируем пользователя
+        try {
+            await userService.registerUser({
+                platform_user_id: userId,
+                platform: 'vk',
+                first_name: 'Пользователь VK',
+                last_name: '',
+                username: '',
+                chat_id: userId,
+            });
+        } catch (regError) {
+            console.warn('[VK USER] Registration error:', regError.message);
+        }
+
+        // Если есть payload - обрабатываем как callback
+        if (payload) {
+            await handleCallback(userId, payload, vkApi);
+            return;
+        }
+
+        // Команды
+        if (text.startsWith('/start')) {
+            await handleStartCommand(userId, vkApi);
+        } else if (text.startsWith('/help')) {
+            await handleHelpCommand(userId, vkApi);
+        } else if (text.startsWith('/courses')) {
+            await handleCoursesCommand(userId, vkApi);
+        } else if (text.startsWith('/admin')) {
+            await showAdminLogin(userId, vkApi);
+        } else {
+            await handleTextMessage(userId, text, vkApi);
+        }
+
+        console.log(`[VK HANDLER] ✅ Message from ${userId} processed`);
+    } catch (error) {
+        console.error('[VK HANDLER] Error:', error);
+    }
+}
+
+async function handleMessageEvent(event) {
+    try {
+        const userId = String(event.user_id);
+        let payload = null;
+
+        if (event.payload) {
+            try {
+                const parsed = typeof event.payload === 'string'
+                    ? JSON.parse(event.payload)
+                    : event.payload;
+                payload = parsed.payload || null;
+            } catch (e) {}
+        }
+
+        console.log(`[VK EVENT] User ${userId}, payload: ${payload}`);
+
+        if (payload) {
+            const vkApi = new VKAPI();
+            await handleCallback(userId, payload, vkApi);
+        }
+    } catch (error) {
+        console.error('[VK EVENT] Error:', error);
+    }
+}
+
+// ============================================================
+// ОБРАБОТЧИКИ КОМАНД (используют sharedFunctions)
+// ============================================================
+
+async function handleStartCommand(chatId, vkApi) {
+    const { checkUserHasPaidAccess } = sharedFunctions;
+    const hasAccess = checkUserHasPaidAccess ? await checkUserHasPaidAccess(chatId) : false;
+
+    let text = `👋 **Привет! Я обучающий бот!**
+
+Здесь вы найдете уроки по программированию.`;
+
+    const buttons = [
+        [{ text: '📚 Уроки', payload: 'show_courses' }]
+    ];
+
+    if (!hasAccess) {
+        buttons.push([{ text: '💳 Купить доступ', payload: 'buy_access' }]);
+    }
+
+    buttons.push([{ text: '❓ Помощь', payload: 'show_help' }]);
+
+    await vkApi.sendKeyboard({ chatId, text, buttons });
+}
+
+async function handleHelpCommand(chatId, vkApi) {
+    await vkApi.sendMessage({
+        chatId,
+        text: `📚 **Помощь**
+
+/start - Главное меню
+/help - Помощь
+/courses - Уроки
+/admin - Админ-панель
+
+Просто напиши сообщение, и я помогу!`,
+    });
+}
+
+async function handleCoursesCommand(chatId, vkApi) {
+    const { showCourses } = sharedFunctions;
+    if (showCourses) {
+        await showCourses(chatId, vkApi);
+    } else {
+        await vkApi.sendMessage({
+            chatId,
+            text: '📚 Функция уроков временно недоступна.',
+        });
+    }
+}
+
+async function handleTextMessage(chatId, text, vkApi) {
+    const { checkUserHasPaidAccess } = sharedFunctions;
+    const hasAccess = checkUserHasPaidAccess ? await checkUserHasPaidAccess(chatId) : false;
+
+    const buttons = [
+        [{ text: '📚 Уроки', payload: 'show_courses' }]
+    ];
+
+    if (!hasAccess) {
+        buttons.push([{ text: '💳 Купить доступ', payload: 'buy_access' }]);
+    }
+
+    buttons.push([{ text: '❓ Помощь', payload: 'show_help' }]);
+
+    await vkApi.sendKeyboard({
+        chatId,
+        text: `📝 Я получил ваше сообщение.
+
+Что хотите сделать дальше?`,
+        buttons,
+    });
+}
+
+// ============================================================
+// ОБРАБОТКА CALLBACK
+// ============================================================
+
+async function handleCallback(chatId, payload, vkApi) {
+    console.log(`[VK CALLBACK] chatId=${chatId}, payload=${payload}`);
+
+    // Админ-панель
+    if (payload === 'admin_panel' || payload === 'admin_login') {
+        const { showAdminLogin } = sharedFunctions;
+        if (showAdminLogin) {
+            await showAdminLogin(chatId, vkApi);
+        }
+        return;
+    }
+
+    // Проверяем админ-сессию
+    const adminSession = adminSessions.get(chatId);
+    if (adminSession && adminSession.mode === 'admin') {
+        const { handleAdminCallback } = sharedFunctions;
+        if (handleAdminCallback) {
+            await handleAdminCallback(chatId, payload, vkApi);
+        }
+        return;
+    }
+
+    // Пользовательские команды
+    const handlers = {
+        'show_courses': async () => {
+            const { showCourses } = sharedFunctions;
+            if (showCourses) await showCourses(chatId, vkApi);
+        },
+        'show_help': async () => {
+            await handleHelpCommand(chatId, vkApi);
+        },
+        'buy_access': async () => {
+            const { handleBuyAccess } = sharedFunctions;
+            if (handleBuyAccess) await handleBuyAccess(chatId, vkApi);
+        },
+    };
+
+    if (handlers[payload]) {
+        await handlers[payload]();
+        return;
+    }
+
+    if (payload.startsWith('payment_check_')) {
+        const { handlePaymentCheck } = sharedFunctions;
+        const paymentId = payload.replace('payment_check_', '');
+        if (handlePaymentCheck) await handlePaymentCheck(chatId, paymentId, vkApi);
+        return;
+    }
+
+    if (payload.startsWith('lesson_')) {
+        const { sendLessonToUser } = sharedFunctions;
+        const lessonId = payload.replace('lesson_', '');
+        if (sendLessonToUser) await sendLessonToUser(chatId, lessonId, vkApi);
+        return;
+    }
+
+    if (payload.startsWith('test_') && !payload.startsWith('test_answer_')) {
+        const { showTest } = sharedFunctions;
+        const testId = payload.replace('test_', '');
+        if (showTest) await showTest(chatId, testId, vkApi);
+        return;
+    }
+
+    if (payload.startsWith('test_answer_')) {
+        const { handleTestAnswer } = sharedFunctions;
+        const withoutPrefix = payload.replace('test_answer_', '');
+        const underscoreIndex = withoutPrefix.lastIndexOf('_');
+        const testId = withoutPrefix.substring(0, underscoreIndex);
+        const answerId = withoutPrefix.substring(underscoreIndex + 1);
+        if (handleTestAnswer) await handleTestAnswer(chatId, testId, answerId, vkApi);
+        return;
+    }
+
+    await vkApi.sendMessage({
+        chatId,
+        text: `✅ Вы выбрали: ${payload}`,
+    });
+}
+
+// ============================================================
+// ПОКАЗ АДМИН-ЛОГИНА
+// ============================================================
+
+async function showAdminLogin(chatId, vkApi) {
+    const { showAdminLogin } = sharedFunctions;
+    if (showAdminLogin) {
+        await showAdminLogin(chatId, vkApi);
+    } else {
+        await vkApi.sendMessage({
+            chatId,
+            text: `🔐 Админ-панель\n\nВведите /admin для входа.`,
+        });
     }
 }
 
@@ -278,138 +461,61 @@ async function webhookHandler(req, res) {
     try {
         const { type, secret, object, group_id } = req.body;
 
-        logger.info({ type, group_id }, 'VK webhook received');
+        console.log('[VK WEBHOOK] Type:', type);
+        console.log('[VK WEBHOOK] Group ID:', group_id);
 
-        // Проверка секрета
         if (config.vk.secret && secret !== config.vk.secret) {
-            logger.warn('Invalid VK webhook secret');
+            console.warn('[VK WEBHOOK] Invalid secret');
             return res.status(403).send('Invalid secret');
         }
 
-        // Обработка различных типов событий
         switch (type) {
             case 'confirmation':
-                logger.info('VK confirmation request');
+                console.log('[VK WEBHOOK] Confirmation request');
                 return res.send(config.vk.confirmationToken || 'test');
 
             case 'message_new':
                 res.send('ok');
-                await handleMessageNew(object.message);
+                setImmediate(async () => {
+                    try {
+                        await handleMessageNew(object);
+                    } catch (error) {
+                        console.error('[VK WEBHOOK] Error processing message:', error);
+                    }
+                });
                 return;
 
             case 'message_event':
                 res.send('ok');
-                await handleMessageEvent(object);
-                return;
-
-            case 'message_reply':
-                res.send('ok');
-                await handleMessageNew(object.message);
+                setImmediate(async () => {
+                    try {
+                        await handleMessageEvent(object);
+                    } catch (error) {
+                        console.error('[VK WEBHOOK] Error processing event:', error);
+                    }
+                });
                 return;
 
             default:
-                logger.info(`Unhandled VK event type: ${type}`);
+                console.log(`[VK WEBHOOK] Unhandled type: ${type}`);
                 return res.send('ok');
         }
     } catch (error) {
-        logger.error('VK webhook error:', error);
+        console.error('[VK WEBHOOK] Error:', error);
         return res.send('ok');
     }
 }
 
-async function handleMessageNew(message) {
-    try {
-        const userId = message.from_id.toString();
-        const text = message.text || '';
-        let payload = null;
-
-        // Парсим payload из кнопок
-        if (message.payload) {
-            try {
-                const parsed = JSON.parse(message.payload);
-                payload = parsed.payload || null;
-            } catch (e) {
-                // Игнорируем
-            }
-        }
-
-        // Получаем информацию о пользователе
-        const vkApi = new VKAPI();
-        const userInfo = await vkApi.getUserInfo(userId);
-
-        // Нормализуем сообщение
-        const normalizedMessage = {
-            platform: 'vk',
-            userId: userId,
-            firstName: userInfo?.firstName || '',
-            lastName: userInfo?.lastName || '',
-            username: userInfo?.username || '',
-            message: text,
-            payload: payload,
-            attachments: message.attachments || [],
-            from: message.from_id,
-        };
-
-        // Отправляем в диспетчер
-        await dispatcher.handleMessage(
-            'vk',
-            userId,
-            text,
-            payload
-        );
-
-        logger.info({ userId, text: text.substring(0, 50) }, 'VK message processed');
-
-    } catch (error) {
-        logger.error({ err: error, message }, 'Error handling VK message');
-    }
-}
-
-async function handleMessageEvent(event) {
-    try {
-        const userId = event.user_id.toString();
-        let payload = null;
-
-        if (event.payload) {
-            try {
-                const parsed = typeof event.payload === 'string'
-                    ? JSON.parse(event.payload)
-                    : event.payload;
-                payload = parsed.payload || null;
-            } catch (e) {
-                // Игнорируем
-            }
-        }
-
-        // Отправляем в диспетчер
-        await dispatcher.handleMessage(
-            'vk',
-            userId,
-            '',
-            payload
-        );
-
-        logger.info({ userId, payload }, 'VK event processed');
-
-    } catch (error) {
-        logger.error({ err: error, event }, 'Error handling VK event');
-    }
-}
-
-// ОТПРАВКА СООБЩЕНИЙ ЧЕРЕЗ VK (для использования из других частей системы)
-async function sendVkMessage(userId, text, parseMode = 'html') {
-    const vkApi = new VKAPI();
-    return vkApi.sendMessage({ userId, text, parseMode });
-}
-
-async function sendVkKeyboard(userId, text, buttons, parseMode = 'html') {
-    const vkApi = new VKAPI();
-    return vkApi.sendKeyboard({ userId, text, buttons, parseMode });
-}
+// ============================================================
+// ЭКСПОРТЫ
+// ============================================================
 
 module.exports = {
     VKAPI,
     webhookHandler,
-    sendVkMessage,
-    sendVkKeyboard,
+    handleMessageNew,
+    handleMessageEvent,
+    handleCallback,
+    adminSessions,
+    setSharedFunctions,
 };
