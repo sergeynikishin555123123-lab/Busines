@@ -405,6 +405,20 @@ async function handleMessageCreated(update) {
         console.error('[HANDLER] Error in handleMessageCreated:', error);
         logger.error({ err: error, update }, 'Error handling message_created');
     }
+     const userId = message?.sender?.user_id || update.user?.user_id;
+    const chatId = update.chat_id || message?.recipient?.chat_id;
+    
+    // Регистрируем пользователя
+    if (userId) {
+        await userService.registerUser({
+            platform_user_id: String(userId),
+            platform: 'max',
+            first_name: message?.sender?.first_name || 'Пользователь',
+            last_name: message?.sender?.last_name || '',
+            username: message?.sender?.username || '',
+            chat_id: String(chatId),
+        });
+    }
 }
 
 // server.js - ИСПРАВЛЕННЫЙ ФРАГМЕНТ
@@ -464,6 +478,9 @@ async function handleMessageCallback(update) {
         } else if (payload.startsWith('lesson_')) {
             const lessonId = payload.replace('lesson_', '');
             await sendLessonToUser(chatId, lessonId, maxApi);
+            else if (payload.startsWith('payment_check_')) {
+    const paymentId = payload.replace('payment_check_', '');
+    await handlePaymentCheck(chatId, paymentId, maxApi);
         } else if (payload.startsWith('test_') && !payload.startsWith('test_answer_')) {
             // Показ теста
             const testId = payload.replace('test_', '');
@@ -762,23 +779,41 @@ async function showCourseDetails(chatId, courseId, maxApi) {
 // ПОКУПКА ДОСТУПА
 // ============================================================
 
+// server.js - ДОБАВЛЕНИЕ ОБРАБОТЧИКОВ ОПЛАТЫ
+
+// В функцию handleBuyAccess добавьте:
 async function handleBuyAccess(chatId, maxApi) {
     try {
-        const text = `💳 **Купить доступ к полному курсу**\n\n` +
-                    `💰 Стоимость: 999 руб.\n\n` +
-                    `После оплаты вам откроются все уроки:\n` +
-                    `• Все уроки с видео\n` +
-                    `• Файлы для скачивания\n` +
-                    `• Тесты для проверки знаний\n\n` +
-                    `Для оплаты переведите 999 руб на карту:\n` +
-                    `**XXXX XXXX XXXX XXXX**\n\n` +
-                    `После оплаты нажмите кнопку "Я оплатил(а)"`;
+        const user = await userService.getUserByPlatformId(chatId);
+        
+        // Создаем платеж
+        const payment = await paymentService.createPayment(
+            user?.id || chatId, 
+            999, 
+            'RUB',
+            config.payment?.defaultGateway || 'manual'
+        );
+        
+        let text = `💳 **Купить доступ к полному курсу**\n\n` +
+                   `💰 Стоимость: 999 руб.\n` +
+                   `🆔 Платеж: ${payment.id}\n\n`;
+        
+        if (payment.payment_url) {
+            text += `🔗 **Перейдите по ссылке для оплаты:**\n` +
+                   `${payment.payment_url}\n\n` +
+                   `После оплаты нажмите кнопку "Я оплатил(а)"`;
+        } else {
+            text += `Для оплаты переведите 999 руб на карту:\n` +
+                   `**XXXX XXXX XXXX XXXX**\n\n` +
+                   `После оплаты нажмите кнопку "Я оплатил(а)"\n` +
+                   `Укажите номер платежа: ${payment.id}`;
+        }
         
         await maxApi.sendKeyboard({
             chatId: chatId,
             text: text,
             buttons: [
-                [{ type: 'callback', text: '✅ Я оплатил(а)', payload: 'payment_confirmed' }],
+                [{ type: 'callback', text: '✅ Я оплатил(а)', payload: `payment_check_${payment.id}` }],
                 [{ type: 'callback', text: '📚 Назад к урокам', payload: 'show_courses' }]
             ],
             parseMode: 'markdown',
@@ -792,6 +827,51 @@ async function handleBuyAccess(chatId, maxApi) {
         });
     }
 }
+
+// Обработчик проверки оплаты
+async function handlePaymentCheck(chatId, paymentId, maxApi) {
+    try {
+        const result = await paymentService.checkPaymentStatus(paymentId);
+        
+        if (result.status === 'success') {
+            await maxApi.sendMessage({
+                chatId: chatId,
+                text: `✅ **Оплата подтверждена!**\n\n` +
+                      `Доступ к курсам открыт. Начинайте обучение! 📚`,
+                parseMode: 'markdown',
+            });
+            await showCourses(chatId, maxApi);
+        } else if (result.status === 'pending') {
+            await maxApi.sendMessage({
+                chatId: chatId,
+                text: `⏳ **Платеж в обработке...**\n\n` +
+                      `Пожалуйста, подождите или проверьте позже.`,
+                parseMode: 'markdown',
+            });
+        } else if (result.status === 'failed') {
+            await maxApi.sendMessage({
+                chatId: chatId,
+                text: `❌ **Платеж не прошел**\n\n` +
+                      `Попробуйте еще раз или свяжитесь с поддержкой.`,
+                parseMode: 'markdown',
+            });
+        } else {
+            await maxApi.sendMessage({
+                chatId: chatId,
+                text: `❌ Платеж не найден. Попробуйте еще раз.`,
+                parseMode: 'markdown',
+            });
+        }
+    } catch (error) {
+        console.error('[PAYMENT] Check error:', error);
+        await maxApi.sendMessage({
+            chatId: chatId,
+            text: '❌ Ошибка при проверке оплаты',
+            parseMode: 'markdown',
+        });
+    }
+}
+
 
 async function handlePaymentConfirmed(chatId, maxApi) {
     try {
