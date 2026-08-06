@@ -1,4 +1,4 @@
-// server.js - ПОЛНАЯ ВЕРСИЯ С ИСПРАВЛЕННЫМ ФУНКЦИОНАЛОМ
+// server.js - ПОЛНАЯ ИСПРАВЛЕННАЯ ВЕРСИЯ
 
 require('dotenv').config();
 
@@ -56,7 +56,9 @@ try {
     process.exit(1);
 }
 
-config.storage.localPath = UPLOADS_DIR;
+// ============================================================
+// УДАЛЕНО: config.storage.localPath = UPLOADS_DIR;
+// ============================================================
 
 let logger;
 try {
@@ -272,6 +274,7 @@ const courseService = require('./core/course');
 const lessonService = require('./core/lesson');
 const userService = require('./core/user');
 const progressService = require('./core/progress');
+const paymentService = require('./core/payment');
 
 // Хранилище сессий админ-панели
 const adminSessions = new Map();
@@ -366,6 +369,24 @@ async function handleMessageCreated(update) {
 
         if (!chatId) return;
 
+        // ============================================================
+        // РЕГИСТРАЦИЯ ПОЛЬЗОВАТЕЛЯ
+        // ============================================================
+        if (userId) {
+            try {
+                await userService.registerUser({
+                    platform_user_id: String(userId),
+                    platform: 'max',
+                    first_name: message?.sender?.first_name || 'Пользователь',
+                    last_name: message?.sender?.last_name || '',
+                    username: message?.sender?.username || '',
+                    chat_id: String(chatId),
+                });
+            } catch (regError) {
+                console.warn('[USER] Registration error:', regError.message);
+            }
+        }
+
         const maxApi = new MaxAPI();
 
         // Обработка вложений от администратора
@@ -447,38 +468,48 @@ async function handleMessageCallback(update) {
             return;
         }
 
-// Обычные команды
-if (payload === 'show_courses') {
-    await showCourses(chatId, maxApi);
-} else if (payload === 'show_help') {
-    await showHelp(chatId, maxApi);
-} else if (payload === 'buy_access') {
-    await handleBuyAccess(chatId, maxApi);
-} else if (payload === 'payment_confirmed') {
-    await handlePaymentConfirmed(chatId, maxApi);
-} else if (payload.startsWith('course_')) {
-    const courseId = payload.replace('course_', '');
-    await showCourseDetails(chatId, courseId, maxApi);
-} else if (payload.startsWith('lesson_')) {
-    const lessonId = payload.replace('lesson_', '');
-    await sendLessonToUser(chatId, lessonId, maxApi);
-} else if (payload.startsWith('test_')) {
-    // ДОБАВЬТЕ ЭТОТ БЛОК ПЕРЕД test_answer_
-    const testId = payload.replace('test_', '');
-    console.log(`[TEST] Showing test with ID: ${testId}`);
-    await showTest(chatId, testId, maxApi);
-} else if (payload.startsWith('test_answer_')) {
-    const parts = payload.split('_');
-    const testId = parts[2];
-    const answerId = parts[3];
-    await handleTestAnswer(chatId, testId, answerId, maxApi);
-} else {
-    await maxApi.sendMessage({
-        chatId: chatId,
-        text: `✅ Вы выбрали: ${payload}`,
-        parseMode: 'markdown',
-    });
-}
+        // ============================================================
+        // ПОЛЬЗОВАТЕЛЬСКИЕ КОМАНДЫ
+        // ============================================================
+        
+        if (payload === 'show_courses') {
+            await showCourses(chatId, maxApi);
+        } else if (payload === 'show_help') {
+            await showHelp(chatId, maxApi);
+        } else if (payload === 'buy_access') {
+            await handleBuyAccess(chatId, maxApi);
+        } else if (payload === 'payment_confirmed') {
+            await handlePaymentConfirmed(chatId, maxApi);
+        } else if (payload.startsWith('payment_check_')) {
+            const paymentId = payload.replace('payment_check_', '');
+            await handlePaymentCheck(chatId, paymentId, maxApi);
+        } else if (payload.startsWith('course_')) {
+            const courseId = payload.replace('course_', '');
+            await showCourseDetails(chatId, courseId, maxApi);
+        } else if (payload.startsWith('lesson_')) {
+            const lessonId = payload.replace('lesson_', '');
+            await sendLessonToUser(chatId, lessonId, maxApi);
+        } else if (payload.startsWith('test_') && !payload.startsWith('test_answer_')) {
+            // Показ теста
+            const testId = payload.replace('test_', '');
+            console.log(`[TEST] Showing test with ID: ${testId}`);
+            await showTest(chatId, testId, maxApi);
+        } else if (payload.startsWith('test_answer_')) {
+            // ИСПРАВЛЕННЫЙ ПАРСИНГ ДЛЯ ОТВЕТОВ НА ТЕСТ
+            const withoutPrefix = payload.replace('test_answer_', '');
+            const underscoreIndex = withoutPrefix.lastIndexOf('_');
+            const testId = withoutPrefix.substring(0, underscoreIndex);
+            const answerId = withoutPrefix.substring(underscoreIndex + 1);
+            
+            console.log(`[TEST] testId: ${testId}, answerId: ${answerId}`);
+            await handleTestAnswer(chatId, testId, answerId, maxApi);
+        } else {
+            await maxApi.sendMessage({
+                chatId: chatId,
+                text: `✅ Вы выбрали: ${payload}`,
+                parseMode: 'markdown',
+            });
+        }
     } catch (error) {
         console.error('[HANDLER] Error in handleMessageCallback:', error);
         logger.error({ err: error, update }, 'Error handling message_callback');
@@ -757,21 +788,36 @@ async function showCourseDetails(chatId, courseId, maxApi) {
 
 async function handleBuyAccess(chatId, maxApi) {
     try {
-        const text = `💳 **Купить доступ к полному курсу**\n\n` +
-                    `💰 Стоимость: 999 руб.\n\n` +
-                    `После оплаты вам откроются все уроки:\n` +
-                    `• Все уроки с видео\n` +
-                    `• Файлы для скачивания\n` +
-                    `• Тесты для проверки знаний\n\n` +
-                    `Для оплаты переведите 999 руб на карту:\n` +
-                    `**XXXX XXXX XXXX XXXX**\n\n` +
-                    `После оплаты нажмите кнопку "Я оплатил(а)"`;
+        const user = await userService.getUserByPlatformId(chatId);
+        
+        // Создаем платеж
+        const payment = await paymentService.createPayment(
+            user?.id || chatId, 
+            999, 
+            'RUB',
+            config.payment?.defaultGateway || 'manual'
+        );
+        
+        let text = `💳 **Купить доступ к полному курсу**\n\n` +
+                   `💰 Стоимость: 999 руб.\n` +
+                   `🆔 Платеж: ${payment.id}\n\n`;
+        
+        if (payment.payment_url) {
+            text += `🔗 **Перейдите по ссылке для оплаты:**\n` +
+                   `${payment.payment_url}\n\n` +
+                   `После оплаты нажмите кнопку "Я оплатил(а)"`;
+        } else {
+            text += `Для оплаты переведите 999 руб на карту:\n` +
+                   `**XXXX XXXX XXXX XXXX**\n\n` +
+                   `После оплаты нажмите кнопку "Я оплатил(а)"\n` +
+                   `Укажите номер платежа: ${payment.id}`;
+        }
         
         await maxApi.sendKeyboard({
             chatId: chatId,
             text: text,
             buttons: [
-                [{ type: 'callback', text: '✅ Я оплатил(а)', payload: 'payment_confirmed' }],
+                [{ type: 'callback', text: '✅ Я оплатил(а)', payload: `payment_check_${payment.id}` }],
                 [{ type: 'callback', text: '📚 Назад к урокам', payload: 'show_courses' }]
             ],
             parseMode: 'markdown',
@@ -781,6 +827,50 @@ async function handleBuyAccess(chatId, maxApi) {
         await maxApi.sendMessage({
             chatId: chatId,
             text: '❌ Ошибка при оформлении покупки',
+            parseMode: 'markdown',
+        });
+    }
+}
+
+// Обработчик проверки оплаты
+async function handlePaymentCheck(chatId, paymentId, maxApi) {
+    try {
+        const result = await paymentService.checkPaymentStatus(paymentId);
+        
+        if (result.status === 'success') {
+            await maxApi.sendMessage({
+                chatId: chatId,
+                text: `✅ **Оплата подтверждена!**\n\n` +
+                      `Доступ к курсам открыт. Начинайте обучение! 📚`,
+                parseMode: 'markdown',
+            });
+            await showCourses(chatId, maxApi);
+        } else if (result.status === 'pending') {
+            await maxApi.sendMessage({
+                chatId: chatId,
+                text: `⏳ **Платеж в обработке...**\n\n` +
+                      `Пожалуйста, подождите или проверьте позже.`,
+                parseMode: 'markdown',
+            });
+        } else if (result.status === 'failed') {
+            await maxApi.sendMessage({
+                chatId: chatId,
+                text: `❌ **Платеж не прошел**\n\n` +
+                      `Попробуйте еще раз или свяжитесь с поддержкой.`,
+                parseMode: 'markdown',
+            });
+        } else {
+            await maxApi.sendMessage({
+                chatId: chatId,
+                text: `❌ Платеж не найден. Попробуйте еще раз.`,
+                parseMode: 'markdown',
+            });
+        }
+    } catch (error) {
+        console.error('[PAYMENT] Check error:', error);
+        await maxApi.sendMessage({
+            chatId: chatId,
+            text: '❌ Ошибка при проверке оплаты',
             parseMode: 'markdown',
         });
     }
@@ -1040,15 +1130,14 @@ async function sendLessonToUser(chatId, lessonId, maxApi) {
     }
 }
 
-// server.js - ИСПРАВЛЕННЫЙ showTest
-
-// server.js - ИСПРАВЛЕННЫЙ showTest
+// ============================================================
+// ФУНКЦИИ ДЛЯ ТЕСТОВ
+// ============================================================
 
 async function showTest(chatId, testId, maxApi) {
     try {
         console.log(`[TEST] showTest called with testId: ${testId}`);
         
-        // Используем getTestById, а не getLessonTest
         const test = await lessonService.getTestById(testId);
         
         if (!test) {
@@ -1115,7 +1204,6 @@ async function handleTestAnswer(chatId, testId, answerId, maxApi) {
         console.log(`[TEST] handleTestAnswer: testId=${testId}, answerId=${answerId}`);
         
         const result = await lessonService.checkTestAnswer(testId, answerId, chatId);
-        // ИСПОЛЬЗУЕМ getTestById ВМЕСТО getLessonTest
         const test = await lessonService.getTestById(testId);
         const selectedAnswer = test?.answers?.find(a => a.id === answerId);
 
@@ -1132,7 +1220,6 @@ async function handleTestAnswer(chatId, testId, answerId, maxApi) {
                 text: `❌ **Неправильно.**\n\nВаш ответ: ${selectedAnswer?.answer || 'Неизвестно'}\nПопробуйте еще раз!`,
                 parseMode: 'markdown',
             });
-            // Показываем тест снова
             await showTest(chatId, testId, maxApi);
         }
 
