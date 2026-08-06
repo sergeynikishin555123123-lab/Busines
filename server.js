@@ -447,39 +447,38 @@ async function handleMessageCallback(update) {
             return;
         }
 
-        // Обычные команды
-        if (payload === 'show_courses') {
-            await showCourses(chatId, maxApi);
-        } else if (payload === 'show_help') {
-            await showHelp(chatId, maxApi);
-        } else if (payload === 'buy_access') {
-            await handleBuyAccess(chatId, maxApi);
-        } else if (payload === 'payment_confirmed') {
-            await handlePaymentConfirmed(chatId, maxApi);
-        } else if (payload.startsWith('course_')) {
-            const courseId = payload.replace('course_', '');
-            await showCourseDetails(chatId, courseId, maxApi);
-        } else if (payload.startsWith('lesson_')) {
-            const lessonId = payload.replace('lesson_', '');
-            await sendLessonToUser(chatId, lessonId, maxApi);
-if (payload.startsWith('test_')) {
+// Обычные команды
+if (payload === 'show_courses') {
+    await showCourses(chatId, maxApi);
+} else if (payload === 'show_help') {
+    await showHelp(chatId, maxApi);
+} else if (payload === 'buy_access') {
+    await handleBuyAccess(chatId, maxApi);
+} else if (payload === 'payment_confirmed') {
+    await handlePaymentConfirmed(chatId, maxApi);
+} else if (payload.startsWith('course_')) {
+    const courseId = payload.replace('course_', '');
+    await showCourseDetails(chatId, courseId, maxApi);
+} else if (payload.startsWith('lesson_')) {
+    const lessonId = payload.replace('lesson_', '');
+    await sendLessonToUser(chatId, lessonId, maxApi);
+} else if (payload.startsWith('test_')) {
+    // ДОБАВЬТЕ ЭТОТ БЛОК ПЕРЕД test_answer_
     const testId = payload.replace('test_', '');
     console.log(`[TEST] Showing test with ID: ${testId}`);
     await showTest(chatId, testId, maxApi);
-    return;
+} else if (payload.startsWith('test_answer_')) {
+    const parts = payload.split('_');
+    const testId = parts[2];
+    const answerId = parts[3];
+    await handleTestAnswer(chatId, testId, answerId, maxApi);
+} else {
+    await maxApi.sendMessage({
+        chatId: chatId,
+        text: `✅ Вы выбрали: ${payload}`,
+        parseMode: 'markdown',
+    });
 }
-        } else if (payload.startsWith('test_answer_')) {
-            const parts = payload.split('_');
-            const testId = parts[2];
-            const answerId = parts[3];
-            await handleTestAnswer(chatId, testId, answerId, maxApi);
-        } else {
-            await maxApi.sendMessage({
-                chatId: chatId,
-                text: `✅ Вы выбрали: ${payload}`,
-                parseMode: 'markdown',
-            });
-        }
     } catch (error) {
         console.error('[HANDLER] Error in handleMessageCallback:', error);
         logger.error({ err: error, update }, 'Error handling message_callback');
@@ -1043,11 +1042,13 @@ async function sendLessonToUser(chatId, lessonId, maxApi) {
 
 // server.js - ИСПРАВЛЕННЫЙ showTest
 
+// server.js - ИСПРАВЛЕННЫЙ showTest
+
 async function showTest(chatId, testId, maxApi) {
     try {
         console.log(`[TEST] showTest called with testId: ${testId}`);
         
-        // Получаем тест по ID через getTestById
+        // Используем getTestById, а не getLessonTest
         const test = await lessonService.getTestById(testId);
         
         if (!test) {
@@ -1086,7 +1087,6 @@ async function showTest(chatId, testId, maxApi) {
             ]);
         }
         
-        // Возврат к УРОКУ (а не к тесту)
         buttons.push([{ 
             type: 'callback', 
             text: '⬅️ Назад к уроку', 
