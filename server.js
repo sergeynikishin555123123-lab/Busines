@@ -1490,10 +1490,17 @@ async function handleAdminCallback(chatId, payload, api) {
             return;
         }
         
-        if (payload === 'admin_back') {
-            await showAdminDashboard(chatId, api);
-            return;
-        }
+       if (payload === 'admin_back') {
+    // Очищаем контекст если был
+    const session = adminSessions.get(chatId);
+    if (session) {
+        session.context = 'dashboard';
+        session.lessonId = null;
+        session.courseId = null;
+    }
+    await showAdminDashboard(chatId, api);
+    return;
+}
         
         if (payload === 'admin_create_lesson') {
             session.context = 'creating_lesson';
@@ -1507,9 +1514,9 @@ async function handleAdminCallback(chatId, payload, api) {
         }
         
         if (payload === 'admin_edit_lessons') {
-            await handleAdminEditLessons(chatId, api);
-            return;
-        }
+    await handleAdminEditLessons(chatId, api);
+    return;
+}
         
         if (payload.startsWith('admin_edit_lesson_')) {
             const lessonId = payload.replace('admin_edit_lesson_', '');
@@ -1646,7 +1653,15 @@ async function handleAdminCallback(chatId, payload, api) {
 
 async function handleAdminEditLessons(chatId, api) {
     try {
-        let lessons = database.readTable('lessons');
+        let lessons = await database.readTable('lessons');
+        
+        // Проверяем что lessons - массив
+        if (!Array.isArray(lessons)) {
+            console.log('[ADMIN] Lessons is not an array, reinitializing...');
+            // Если не массив - создаем новый
+            await database.writeTable('lessons', []);
+            lessons = [];
+        }
         
         if (lessons.length === 0) {
             await api.sendMessage({
@@ -1685,6 +1700,11 @@ async function handleAdminEditLessons(chatId, api) {
         });
     } catch (error) {
         console.error('[ADMIN] Error showing edit lessons:', error);
+        await api.sendMessage({
+            chatId: chatId,
+            text: `❌ Ошибка: ${error.message}`,
+            parseMode: 'markdown',
+        });
     }
 }
 
