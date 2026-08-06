@@ -5,29 +5,22 @@ const logger = require('../logger');
 
 class CourseService {
 
-    async getAllCourses(activeOnly = false) {
-        try {
-            let courses = await database.readTable('courses');
-            
-            // Убеждаемся что courses - это массив
-            if (!Array.isArray(courses)) {
-                courses = [];
-            }
-            
-            const filtered = activeOnly ? courses.filter(c => c.is_active !== false) : courses;
-            
-            // Убеждаемся что filtered - массив перед сортировкой
-            if (!Array.isArray(filtered)) {
-                return [];
-            }
-            
-            return filtered.sort((a, b) => (a.order_number || 0) - (b.order_number || 0));
-        } catch (error) {
-            console.error('[COURSE] Error in getAllCourses:', error);
-            return [];
-        }
-    }
+    // core/course.js - ДОБАВИТЬ ПРОВЕРКИ
 
+async getAllCourses(activeOnly = false) {
+    try {
+        let courses = await database.readTable('courses');
+        // Убеждаемся что это массив
+        if (!Array.isArray(courses)) {
+            courses = [];
+        }
+        const filtered = activeOnly ? courses.filter(c => c.is_active !== false) : courses;
+        return filtered.sort((a, b) => (a.order_number || 0) - (b.order_number || 0));
+    } catch (error) {
+        console.error('[COURSE] Error in getAllCourses:', error);
+        return [];
+    }
+}
     async getCourseById(courseId) {
         try {
             const courses = await database.readTable('courses');
