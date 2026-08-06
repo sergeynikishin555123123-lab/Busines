@@ -5,32 +5,25 @@ const logger = require('../logger');
 
 class UserService {
     
-    // ============================================================
-    // РЕГИСТРАЦИЯ ПОЛЬЗОВАТЕЛЯ
-    // ============================================================
-    
     async registerUser(data) {
         try {
-            const users = database.readTable('users');
+            const users = await database.readTable('users');
             
-            // Проверяем существование
             const existing = users.find(u => 
                 u.platform_user_id === data.platform_user_id && 
                 u.platform === data.platform
             );
             
             if (existing) {
-                // Обновляем данные
                 existing.first_name = data.first_name || existing.first_name;
                 existing.last_name = data.last_name || existing.last_name;
                 existing.username = data.username || existing.username;
                 existing.chat_id = data.chat_id || existing.chat_id;
                 existing.updated_at = database.now();
-                database.writeTable('users', users);
+                await database.writeTable('users', users);
                 return existing;
             }
             
-            // Создаем нового пользователя
             const user = {
                 id: database.generateId(),
                 platform_user_id: String(data.platform_user_id),
@@ -46,7 +39,7 @@ class UserService {
             };
             
             users.push(user);
-            database.writeTable('users', users);
+            await database.writeTable('users', users);
             
             logger.info({ userId: user.id, platform: user.platform }, 'User registered');
             return user;
@@ -56,13 +49,9 @@ class UserService {
         }
     }
     
-    // ============================================================
-    // ПОЛУЧЕНИЕ ПОЛЬЗОВАТЕЛЯ
-    // ============================================================
-    
     async getUserByPlatformId(platformUserId) {
         try {
-            const users = database.readTable('users');
+            const users = await database.readTable('users');
             return users.find(u => String(u.platform_user_id) === String(platformUserId)) || null;
         } catch (error) {
             logger.error({ err: error, platformUserId }, 'Failed to get user');
@@ -72,7 +61,7 @@ class UserService {
     
     async getUserById(userId) {
         try {
-            const users = database.readTable('users');
+            const users = await database.readTable('users');
             return users.find(u => u.id === userId) || null;
         } catch (error) {
             logger.error({ err: error, userId }, 'Failed to get user');
@@ -84,16 +73,15 @@ class UserService {
         try {
             let user = await this.getUserByPlatformId(platformUserId);
             if (user) {
-                // Обновляем данные
                 if (data.firstName) user.first_name = data.firstName;
                 if (data.lastName) user.last_name = data.lastName;
                 if (data.username) user.username = data.username;
                 user.updated_at = database.now();
-                const users = database.readTable('users');
+                const users = await database.readTable('users');
                 const index = users.findIndex(u => u.id === user.id);
                 if (index !== -1) {
                     users[index] = user;
-                    database.writeTable('users', users);
+                    await database.writeTable('users', users);
                 }
                 return user;
             }
@@ -112,13 +100,9 @@ class UserService {
         }
     }
     
-    // ============================================================
-    // ОБНОВЛЕНИЕ ПОЛЬЗОВАТЕЛЯ
-    // ============================================================
-    
     async updateUser(userId, data) {
         try {
-            const users = database.readTable('users');
+            const users = await database.readTable('users');
             const index = users.findIndex(u => u.id === userId);
             if (index === -1) return null;
             
@@ -129,7 +113,7 @@ class UserService {
             if (data.phone !== undefined) users[index].phone = data.phone;
             
             users[index].updated_at = database.now();
-            database.writeTable('users', users);
+            await database.writeTable('users', users);
             
             return users[index];
         } catch (error) {
@@ -138,13 +122,9 @@ class UserService {
         }
     }
     
-    // ============================================================
-    // СТАТИСТИКА
-    // ============================================================
-    
     async getUsersCount() {
         try {
-            const users = database.readTable('users');
+            const users = await database.readTable('users');
             return users.length;
         } catch (error) {
             logger.error({ err: error }, 'Failed to get users count');
@@ -154,7 +134,7 @@ class UserService {
     
     async getUsersByPlatform(platform) {
         try {
-            const users = database.readTable('users');
+            const users = await database.readTable('users');
             return users.filter(u => u.platform === platform);
         } catch (error) {
             logger.error({ err: error, platform }, 'Failed to get users by platform');
