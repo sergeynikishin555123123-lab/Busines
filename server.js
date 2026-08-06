@@ -1,4 +1,4 @@
-// server.js - ПОЛНАЯ ФИНАЛЬНАЯ ВЕРСИЯ С VK И POSTGRESQL
+// server.js - ПОЛНАЯ ФИНАЛЬНАЯ ВЕРСИЯ
 
 require('dotenv').config();
 
@@ -17,7 +17,6 @@ const { Client } = require('pg');
 console.log('[STARTUP] Starting application...');
 console.log('[STARTUP] NODE_ENV:', process.env.NODE_ENV);
 console.log('[STARTUP] PORT:', process.env.PORT);
-console.log('[STARTUP] PWD:', process.cwd());
 
 // ============================================================
 // ДИРЕКТОРИИ
@@ -85,41 +84,68 @@ try {
 let pgClient = null;
 let pgConnected = false;
 
+async function downloadCertificate() {
+    try {
+        const homeDir = process.env.HOME || process.env.USERPROFILE || '';
+        const certDir = path.join(homeDir, '.cloud-certs');
+        const certPath = path.join(certDir, 'root.crt');
+        
+        if (!fs.existsSync(certDir)) {
+            fs.mkdirSync(certDir, { recursive: true });
+            console.log('[POSTGRES] Created certificate directory');
+        }
+        
+        if (fs.existsSync(certPath)) {
+            const stats = fs.statSync(certPath);
+            if (stats.size > 0) {
+                console.log('[POSTGRES] Certificate already exists');
+                return certPath;
+            }
+        }
+        
+        console.log('[POSTGRES] Downloading certificate...');
+        const response = await axios.get('https://st.timeweb.com/cloud-static/ca.crt', {
+            responseType: 'text',
+            timeout: 10000
+        });
+        
+        fs.writeFileSync(certPath, response.data);
+        console.log('[POSTGRES] ✅ Certificate downloaded');
+        return certPath;
+    } catch (error) {
+        console.warn('[POSTGRES] ⚠️ Could not download certificate:', error.message);
+        return null;
+    }
+}
+
 async function connectPostgreSQL() {
     try {
         console.log('[POSTGRES] Connecting to PostgreSQL...');
         
-        // Проверяем наличие сертификата
-        const certPath = path.join(process.env.HOME || process.env.USERPROFILE || '', '.cloud-certs', 'root.crt');
+        if (!process.env.PG_PASSWORD) {
+            console.warn('[POSTGRES] ⚠️ PG_PASSWORD not set in .env');
+            return null;
+        }
+        
+        const certPath = await downloadCertificate();
+        
         let sslConfig = { rejectUnauthorized: false };
         
-        if (fs.existsSync(certPath)) {
-            console.log('[POSTGRES] Certificate found at:', certPath);
-            sslConfig = {
-                rejectUnauthorized: true,
-                ca: fs.readFileSync(certPath, 'utf-8')
-            };
-        } else {
-            console.warn('[POSTGRES] Certificate not found, using insecure SSL');
-            // Скачиваем сертификат
+        if (certPath && fs.existsSync(certPath)) {
             try {
-                const certDir = path.join(process.env.HOME || process.env.USERPROFILE || '', '.cloud-certs');
-                if (!fs.existsSync(certDir)) {
-                    fs.mkdirSync(certDir, { recursive: true });
+                const certContent = fs.readFileSync(certPath, 'utf-8');
+                if (certContent && certContent.length > 100) {
+                    sslConfig = {
+                        rejectUnauthorized: true,
+                        ca: certContent
+                    };
+                    console.log('[POSTGRES] SSL configured');
                 }
-                const certUrl = 'https://st.timeweb.com/cloud-static/ca.crt';
-                const response = await axios.get(certUrl, { responseType: 'text' });
-                fs.writeFileSync(path.join(certDir, 'root.crt'), response.data);
-                console.log('[POSTGRES] Certificate downloaded');
-                sslConfig = {
-                    rejectUnauthorized: true,
-                    ca: response.data
-                };
-            } catch (certError) {
-                console.warn('[POSTGRES] Could not download certificate:', certError.message);
+            } catch (e) {
+                console.warn('[POSTGRES] SSL certificate read error');
             }
         }
-
+        
         pgClient = new Client({
             user: process.env.PG_USER || 'gen_user',
             host: process.env.PG_HOST || 'f588fb3b4ee16a08f7a0a9b2.twc1.net',
@@ -129,21 +155,17 @@ async function connectPostgreSQL() {
             ssl: sslConfig,
             connectionTimeoutMillis: 10000,
         });
-
+        
         await pgClient.connect();
         pgConnected = true;
         console.log('[POSTGRES] ✅ Connected successfully');
-
-        // Создаем таблицы если их нет
-        await initPostgreSQLTables();
         
+        await initPostgreSQLTables();
         return pgClient;
     } catch (error) {
         console.error('[POSTGRES] ❌ Connection error:', error.message);
         pgConnected = false;
         pgClient = null;
-        
-        // Продолжаем с JSON базой как fallback
         console.warn('[POSTGRES] ⚠️ Falling back to JSON storage');
         return null;
     }
@@ -153,9 +175,8 @@ async function initPostgreSQLTables() {
     if (!pgConnected || !pgClient) return;
 
     try {
-        console.log('[POSTGRES] Initializing tables...');
+        console.log('[POSTGRES] Creating tables...');
 
-        // Таблица пользователей
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS users (
                 id VARCHAR(36) PRIMARY KEY,
@@ -172,7 +193,6 @@ async function initPostgreSQLTables() {
             )
         `);
 
-        // Таблица администраторов
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS admins (
                 id VARCHAR(36) PRIMARY KEY,
@@ -184,7 +204,6 @@ async function initPostgreSQLTables() {
             )
         `);
 
-        // Таблица курсов
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS courses (
                 id VARCHAR(36) PRIMARY KEY,
@@ -199,7 +218,6 @@ async function initPostgreSQLTables() {
             )
         `);
 
-        // Таблица уроков
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS lessons (
                 id VARCHAR(36) PRIMARY KEY,
@@ -215,7 +233,6 @@ async function initPostgreSQLTables() {
             )
         `);
 
-        // Таблица файлов уроков
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS lesson_files (
                 id VARCHAR(36) PRIMARY KEY,
@@ -235,7 +252,6 @@ async function initPostgreSQLTables() {
             )
         `);
 
-        // Таблица тестов
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS tests (
                 id VARCHAR(36) PRIMARY KEY,
@@ -245,7 +261,6 @@ async function initPostgreSQLTables() {
             )
         `);
 
-        // Таблица ответов на тесты
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS test_answers (
                 id VARCHAR(36) PRIMARY KEY,
@@ -256,7 +271,6 @@ async function initPostgreSQLTables() {
             )
         `);
 
-        // Таблица прогресса
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS progress (
                 id VARCHAR(36) PRIMARY KEY,
@@ -272,7 +286,6 @@ async function initPostgreSQLTables() {
             )
         `);
 
-        // Таблица платежей
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS payments (
                 id VARCHAR(36) PRIMARY KEY,
@@ -289,7 +302,6 @@ async function initPostgreSQLTables() {
             )
         `);
 
-        // Таблица доступа к курсам
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS user_course_access (
                 id VARCHAR(36) PRIMARY KEY,
@@ -301,7 +313,6 @@ async function initPostgreSQLTables() {
             )
         `);
 
-        // Таблица просмотров уроков
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS lesson_views (
                 id VARCHAR(36) PRIMARY KEY,
@@ -314,7 +325,6 @@ async function initPostgreSQLTables() {
             )
         `);
 
-        // Таблица уведомлений
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS notifications (
                 id VARCHAR(36) PRIMARY KEY,
@@ -328,7 +338,7 @@ async function initPostgreSQLTables() {
             )
         `);
 
-        console.log('[POSTGRES] ✅ Tables initialized');
+        console.log('[POSTGRES] ✅ Tables created');
     } catch (error) {
         console.error('[POSTGRES] Error creating tables:', error.message);
         throw error;
@@ -342,7 +352,6 @@ async function initPostgreSQLTables() {
 let database;
 try {
     process.env.DATA_DIR = DATA_DIR;
-    // Передаем PostgreSQL клиент в database модуль
     database = require('./database');
     database.setPGClient(pgClient, pgConnected);
     console.log('[STARTUP] Database loaded');
@@ -365,7 +374,6 @@ try {
 
 async function ensureAdmin() {
     try {
-        // Проверяем через PostgreSQL если доступен
         if (pgConnected && pgClient) {
             const result = await pgClient.query('SELECT * FROM admins LIMIT 1');
             if (result.rows.length === 0) {
@@ -380,12 +388,10 @@ async function ensureAdmin() {
                 );
                 
                 console.log(`[STARTUP] ✅ Admin created: ${login} / ${password}`);
-                logger.info({ login }, 'Default admin created');
             } else {
                 console.log(`[STARTUP] Admin(s) already exist`);
             }
         } else {
-            // Fallback на JSON
             const admins = database.readTable('admins');
             if (admins.length === 0) {
                 console.log('[STARTUP] No admin found, creating default admin...');
@@ -393,31 +399,25 @@ async function ensureAdmin() {
                 const password = config.admin.defaultPassword || 'admin123';
                 const passwordHash = await bcrypt.hash(password, 12);
                 
-                const newAdmin = {
+                admins.push({
                     id: database.generateId(),
                     login: login,
                     password_hash: passwordHash,
                     role: 'superadmin',
                     platform_user_id: null,
                     created_at: database.now(),
-                };
-                admins.push(newAdmin);
+                });
                 database.writeTable('admins', admins);
                 
                 console.log(`[STARTUP] ✅ Admin created: ${login} / ${password}`);
-                logger.info({ login }, 'Default admin created');
             } else {
-                console.log(`[STARTUP] Admin(s) already exist: ${admins.map(a => a.login).join(', ')}`);
+                console.log(`[STARTUP] Admin(s) already exist`);
             }
         }
     } catch (error) {
         console.error('[STARTUP] Error creating admin:', error.message);
     }
 }
-
-(async function initAdmin() {
-    await ensureAdmin();
-})();
 
 // ============================================================
 // НАСТРОЙКА MULTER
@@ -478,9 +478,6 @@ try {
     if (fs.existsSync(viewsPath)) {
         app.set('views', viewsPath);
         console.log('[STARTUP] Views configured');
-    } else {
-        console.warn('[STARTUP] Views directory not found, using default');
-        app.set('views', path.join(__dirname, 'views'));
     }
 } catch (error) {
     console.error('[STARTUP] Views error:', error.message);
@@ -536,7 +533,6 @@ try {
 // ============================================================
 
 const MaxAPI = require('./platforms/max');
-const VKAPI = require('./platforms/vk');
 const courseService = require('./core/course');
 const lessonService = require('./core/lesson');
 const userService = require('./core/user');
@@ -555,7 +551,6 @@ async function checkUserHasPaidAccess(userId) {
         if (!userId) return false;
         const userIdStr = String(userId);
         
-        // Проверяем через PostgreSQL если доступен
         if (pgConnected && pgClient) {
             const result = await pgClient.query(`
                 SELECT EXISTS (
@@ -567,7 +562,6 @@ async function checkUserHasPaidAccess(userId) {
             return result.rows[0]?.has_access || false;
         }
         
-        // Fallback на JSON
         const access = database.readTable('user_course_access');
         const paidCourses = await courseService.getPaidCourses();
         
@@ -628,10 +622,6 @@ async function handleBotStarted(update) {
     }
 }
 
-// ============================================================
-// ОБРАБОТКА СООБЩЕНИЙ С ВЛОЖЕНИЯМИ (MAX)
-// ============================================================
-
 async function handleMessageCreated(update) {
     console.log('[HANDLER] handleMessageCreated called');
     try {
@@ -645,7 +635,6 @@ async function handleMessageCreated(update) {
         
         if (!chatId) return;
         
-        // Регистрация пользователя
         if (userId) {
             try {
                 await userService.registerUser({
@@ -663,7 +652,6 @@ async function handleMessageCreated(update) {
         
         const maxApi = new MaxAPI();
         
-        // Обработка вложений от администратора
         if (attachments.length > 0) {
             const session = adminSessions.get(chatId);
             if (session && session.mode === 'admin') {
@@ -672,7 +660,6 @@ async function handleMessageCreated(update) {
             }
         }
         
-        // Админ-режим: ожидание пароля
         const adminSession = adminSessions.get(chatId);
         if (adminSession && adminSession.mode === 'awaiting_password') {
             await handleAdminPassword(chatId, text, maxApi);
@@ -684,7 +671,6 @@ async function handleMessageCreated(update) {
             return;
         }
         
-        // Обычные команды
         if (text.startsWith('/start')) {
             await handleStartCommand(chatId, userId, text, maxApi);
         } else if (text.startsWith('/help')) {
@@ -702,10 +688,6 @@ async function handleMessageCreated(update) {
     }
 }
 
-// ============================================================
-// ОБРАБОТКА CALLBACK (MAX)
-// ============================================================
-
 async function handleMessageCallback(update) {
     console.log('[HANDLER] handleMessageCallback called');
     try {
@@ -720,7 +702,6 @@ async function handleMessageCallback(update) {
         
         const maxApi = new MaxAPI();
         
-        // АДМИН-ПАНЕЛЬ CALLBACK
         if (payload === 'admin_panel') {
             await showAdminLogin(chatId, maxApi);
             return;
@@ -742,21 +723,15 @@ async function handleMessageCallback(update) {
             return;
         }
         
-        // ПОЛЬЗОВАТЕЛЬСКИЕ КОМАНДЫ
         if (payload === 'show_courses') {
             await showCourses(chatId, maxApi);
         } else if (payload === 'show_help') {
             await showHelp(chatId, maxApi);
         } else if (payload === 'buy_access') {
             await handleBuyAccess(chatId, maxApi);
-        } else if (payload === 'payment_confirmed') {
-            await handlePaymentConfirmed(chatId, maxApi);
         } else if (payload.startsWith('payment_check_')) {
             const paymentId = payload.replace('payment_check_', '');
             await handlePaymentCheck(chatId, paymentId, maxApi);
-        } else if (payload.startsWith('course_')) {
-            const courseId = payload.replace('course_', '');
-            await showCourseDetails(chatId, courseId, maxApi);
         } else if (payload.startsWith('lesson_')) {
             const lessonId = payload.replace('lesson_', '');
             await sendLessonToUser(chatId, lessonId, maxApi);
@@ -783,15 +758,13 @@ async function handleMessageCallback(update) {
 }
 
 // ============================================================
-// ОБРАБОТЧИКИ VK (ИДЕНТИЧНЫ MAX)
+// VK МОДУЛЬ
 // ============================================================
 
-// Импортируем VK обработчики
-const vkHandlers = require('./platforms/vk');
+const vkModule = require('./platforms/vk');
 
-// Передаем общие сессии и функции в VK модуль
-vkHandlers.setSharedContext({
-    adminSessions,
+// Передаем общие функции в VK модуль
+vkModule.setSharedFunctions({
     checkUserHasPaidAccess,
     showAdminLogin,
     showCourses,
@@ -815,14 +788,12 @@ vkHandlers.setSharedContext({
     handleAdminTestAnswers,
     handleAdminUploadVideo,
     handleAdminUploadFile,
+    adminSessions,
 });
 
 // ============================================================
-// АДМИН-ПАНЕЛЬ (ОБЩАЯ ДЛЯ MAX И VK)
+// ОБЩИЕ КОМАНДЫ
 // ============================================================
-
-// Эти функции используются и для MAX и для VK
-// Они определены в общем контексте
 
 async function showAdminLogin(chatId, api) {
     try {
@@ -850,7 +821,6 @@ async function handleAdminPassword(chatId, password, api) {
     try {
         let admin = null;
         
-        // Проверяем через PostgreSQL если доступен
         if (pgConnected && pgClient) {
             const result = await pgClient.query('SELECT * FROM admins');
             for (const a of result.rows) {
@@ -860,7 +830,6 @@ async function handleAdminPassword(chatId, password, api) {
                 }
             }
         } else {
-            // Fallback на JSON
             const admins = database.readTable('admins');
             for (const a of admins) {
                 if (await bcrypt.compare(password, a.password_hash)) {
@@ -909,28 +878,19 @@ async function showAdminDashboard(chatId, api) {
             return;
         }
         
-        let courses = [];
-        let lessons = [];
-        let users = [];
-        let payments = [];
-        let paidUsers = 0;
+        let courses = [], lessons = [], users = [], payments = [], paidUsers = 0;
         
-        // Получаем данные через PostgreSQL если доступен
         if (pgConnected && pgClient) {
             const coursesRes = await pgClient.query('SELECT * FROM courses');
             courses = coursesRes.rows;
-            
             const lessonsRes = await pgClient.query('SELECT * FROM lessons');
             lessons = lessonsRes.rows;
-            
             const usersRes = await pgClient.query('SELECT * FROM users');
             users = usersRes.rows;
-            
             const paymentsRes = await pgClient.query('SELECT * FROM payments WHERE status = $1', ['success']);
             payments = paymentsRes.rows;
             paidUsers = payments.length;
         } else {
-            // Fallback на JSON
             courses = await courseService.getAllCourses(false);
             lessons = database.readTable('lessons');
             users = database.readTable('users');
@@ -963,10 +923,6 @@ async function showAdminDashboard(chatId, api) {
         console.error('[ADMIN] Error showing dashboard:', error);
     }
 }
-
-// ============================================================
-// ОБЩИЕ КОМАНДЫ
-// ============================================================
 
 async function handleStartCommand(chatId, userId, text, api) {
     const hasAccess = userId ? await checkUserHasPaidAccess(userId) : false;
@@ -1022,10 +978,6 @@ async function handleTextMessage(chatId, userId, text, api) {
         parseMode: 'markdown',
     });
 }
-
-// ============================================================
-// ПОКАЗ УРОКОВ (ОБЩИЙ)
-// ============================================================
 
 async function showCourses(chatId, api) {
     try {
@@ -1106,10 +1058,6 @@ async function showCourses(chatId, api) {
     }
 }
 
-// ============================================================
-// ОТПРАВКА УРОКА (ОБЩАЯ)
-// ============================================================
-
 async function sendLessonToUser(chatId, lessonId, api) {
     try {
         console.log(`[LESSON] Sending lesson ${lessonId} to ${chatId}`);
@@ -1124,7 +1072,6 @@ async function sendLessonToUser(chatId, lessonId, api) {
             return;
         }
         
-        // Проверяем доступ к уроку
         if (!lesson.is_free) {
             const hasAccess = await checkUserHasPaidAccess(chatId);
             if (!hasAccess) {
@@ -1144,7 +1091,6 @@ async function sendLessonToUser(chatId, lessonId, api) {
         const videoFile = lesson.files?.find(f => f.type === 'video');
         const otherFiles = lesson.files?.filter(f => f.type !== 'video') || [];
         
-        // Отправляем видео
         if (videoFile) {
             try {
                 if (videoFile.token) {
@@ -1158,23 +1104,17 @@ async function sendLessonToUser(chatId, lessonId, api) {
                     } else {
                         await api.sendMessage({
                             chatId: chatId,
-                            text: `🎬 **${lesson.title}**\n\n${lesson.description || ''}\n\n📎 Видео загружено (токен: ${videoFile.token.substring(0, 20)}...)`,
+                            text: `🎬 **${lesson.title}**\n\n${lesson.description || ''}`,
                             parseMode: 'markdown',
                         });
                     }
                     console.log(`[LESSON] ✅ Video sent by token`);
-                } else {
-                    await api.sendMessage({
-                        chatId: chatId,
-                        text: `📖 **${lesson.title}**\n\n${lesson.description || ''}\n\n⚠️ Видео недоступно.`,
-                        parseMode: 'markdown',
-                    });
                 }
             } catch (error) {
                 console.error('[LESSON] Failed to send video:', error.message);
                 await api.sendMessage({
                     chatId: chatId,
-                    text: `📖 **${lesson.title}**\n\n${lesson.description || ''}\n\n⚠️ Ошибка отправки видео.`,
+                    text: `📖 **${lesson.title}**\n\n${lesson.description || ''}\n\n⚠️ Видео недоступно.`,
                     parseMode: 'markdown',
                 });
             }
@@ -1186,7 +1126,6 @@ async function sendLessonToUser(chatId, lessonId, api) {
             });
         }
         
-        // Отправляем файлы
         for (const file of otherFiles) {
             try {
                 if (file.token) {
@@ -1200,7 +1139,7 @@ async function sendLessonToUser(chatId, lessonId, api) {
                     } else {
                         await api.sendMessage({
                             chatId: chatId,
-                            text: `📎 **${file.original_name || file.filename}**\nТокен: ${file.token.substring(0, 20)}...`,
+                            text: `📎 **${file.original_name || file.filename}**`,
                             parseMode: 'markdown',
                         });
                     }
@@ -1211,7 +1150,6 @@ async function sendLessonToUser(chatId, lessonId, api) {
             }
         }
         
-        // Тест
         const test = await lessonService.getLessonTest(lessonId);
         if (test && test.answers && test.answers.length > 0) {
             await api.sendKeyboard({
@@ -1237,7 +1175,6 @@ async function sendLessonToUser(chatId, lessonId, api) {
         console.log(`[LESSON] ✅ Lesson ${lessonId} sent to ${chatId}`);
     } catch (error) {
         console.error('[LESSON] Error sending lesson:', error);
-        logger.error({ err: error, chatId, lessonId }, 'Failed to send lesson');
         await api.sendMessage({
             chatId: chatId,
             text: '❌ Ошибка при загрузке урока.',
@@ -1246,17 +1183,12 @@ async function sendLessonToUser(chatId, lessonId, api) {
     }
 }
 
-// ============================================================
-// ТЕСТЫ (ОБЩИЕ)
-// ============================================================
-
 async function showTest(chatId, testId, api) {
     try {
         console.log(`[TEST] showTest called with testId: ${testId}`);
         
         const test = await lessonService.getTestById(testId);
         if (!test) {
-            console.log(`[TEST] Test not found with ID: ${testId}`);
             await api.sendMessage({
                 chatId: chatId,
                 text: '❌ Тест не найден',
@@ -1344,10 +1276,6 @@ async function handleTestAnswer(chatId, testId, answerId, api) {
     }
 }
 
-// ============================================================
-// ПОКУПКА ДОСТУПА (ОБЩАЯ)
-// ============================================================
-
 async function handleBuyAccess(chatId, api) {
     try {
         const user = await userService.getUserByPlatformId(chatId);
@@ -1420,63 +1348,6 @@ async function handlePaymentCheck(chatId, paymentId, api) {
     }
 }
 
-async function handlePaymentConfirmed(chatId, api) {
-    try {
-        const payments = database.readTable('payments');
-        const payment = {
-            id: database.generateId(),
-            user_id: String(chatId),
-            amount: 999,
-            currency: 'RUB',
-            status: 'success',
-            payment_gateway: 'manual',
-            gateway_payment_id: null,
-            meta_data: JSON.stringify({ confirmed_at: database.now() }),
-            created_at: database.now(),
-            updated_at: database.now(),
-        };
-        payments.push(payment);
-        database.writeTable('payments', payments);
-        
-        const paidCourses = await courseService.getPaidCourses();
-        const access = database.readTable('user_course_access');
-        
-        for (const course of paidCourses) {
-            const exists = access.find(a =>
-                String(a.user_id) === String(chatId) &&
-                a.course_id === course.id
-            );
-            if (!exists) {
-                access.push({
-                    id: database.generateId(),
-                    user_id: String(chatId),
-                    course_id: course.id,
-                    granted_at: database.now(),
-                });
-            }
-        }
-        database.writeTable('user_course_access', access);
-        
-        await api.sendMessage({
-            chatId: chatId,
-            text: `✅ **Доступ открыт!**\n\nТеперь вам доступны все уроки.\n\n📚 Используйте кнопку "Уроки" чтобы начать обучение.`,
-            parseMode: 'markdown',
-        });
-        await showCourses(chatId, api);
-    } catch (error) {
-        console.error('[PAYMENT] Confirmation error:', error);
-        await api.sendMessage({
-            chatId: chatId,
-            text: '❌ Ошибка при подтверждении оплаты',
-            parseMode: 'markdown',
-        });
-    }
-}
-
-// ============================================================
-// ПОМОЩЬ (ОБЩАЯ)
-// ============================================================
-
 async function showHelp(chatId, api) {
     await api.sendMessage({
         chatId: chatId,
@@ -1491,7 +1362,7 @@ async function showHelp(chatId, api) {
 }
 
 // ============================================================
-// АДМИН-КОМАНДЫ (ОБЩИЕ)
+// АДМИН-КОМАНДЫ
 // ============================================================
 
 async function handleAdminCommand(chatId, text, api) {
@@ -1556,7 +1427,6 @@ async function handleAdminCallback(chatId, payload, api) {
             return;
         }
         
-        // Управление уроками
         if (payload === 'admin_create_lesson') {
             session.context = 'creating_lesson';
             session.courseId = null;
@@ -1656,7 +1526,6 @@ async function handleAdminCallback(chatId, payload, api) {
             return;
         }
         
-        // Статистика
         if (payload === 'admin_stats') {
             let users = [], lessons = [], courses = [], payments = [], progress = [];
             
@@ -1707,10 +1576,6 @@ async function handleAdminCallback(chatId, payload, api) {
     }
 }
 
-// ============================================================
-// АДМИН: РЕДАКТИРОВАНИЕ УРОКОВ (СПИСОК)
-// ============================================================
-
 async function handleAdminEditLessons(chatId, api) {
     try {
         let lessons = database.readTable('lessons');
@@ -1754,10 +1619,6 @@ async function handleAdminEditLessons(chatId, api) {
         console.error('[ADMIN] Error showing edit lessons:', error);
     }
 }
-
-// ============================================================
-// АДМИН: ДЕТАЛИ УРОКА
-// ============================================================
 
 async function showAdminLessonDetail(chatId, lessonId, api) {
     try {
@@ -1807,10 +1668,6 @@ async function showAdminLessonDetail(chatId, lessonId, api) {
         });
     }
 }
-
-// ============================================================
-// АДМИН: СОЗДАНИЕ УРОКА
-// ============================================================
 
 async function handleAdminLessonCreateStep2(chatId, title, api) {
     try {
@@ -1888,10 +1745,6 @@ async function handleAdminLessonCreateStep3(chatId, description, api) {
     }
 }
 
-// ============================================================
-// АДМИН: РЕДАКТИРОВАНИЕ НАЗВАНИЯ И ОПИСАНИЯ
-// ============================================================
-
 async function handleAdminLessonEditTitle(chatId, text, api) {
     try {
         const session = adminSessions.get(chatId);
@@ -1951,10 +1804,6 @@ async function handleAdminLessonEditDesc(chatId, text, api) {
         });
     }
 }
-
-// ============================================================
-// АДМИН: РЕДАКТИРОВАНИЕ ТЕСТА
-// ============================================================
 
 async function handleAdminEditTest(chatId, lessonId, api) {
     try {
@@ -2067,10 +1916,6 @@ async function handleAdminTestAnswers(chatId, text, api) {
     }
 }
 
-// ============================================================
-// АДМИН: ЗАГРУЗКА ВИДЕО И ФАЙЛОВ
-// ============================================================
-
 async function handleAdminUploadVideo(chatId, lessonId, api) {
     try {
         const session = adminSessions.get(chatId);
@@ -2119,10 +1964,6 @@ async function handleAdminUploadFile(chatId, lessonId, api) {
         });
     }
 }
-
-// ============================================================
-// АДМИН: ОБРАБОТКА ВЛОЖЕНИЙ
-// ============================================================
 
 async function handleAdminAttachment(chatId, attachments, api) {
     try {
@@ -2215,7 +2056,6 @@ async function handleAdminAttachment(chatId, attachments, api) {
                     
                     console.log(`[ADMIN] Uploading as type: ${maxType}`);
                     
-                    // Загружаем в MAX
                     const maxApi = new MaxAPI();
                     const token = await maxApi.uploadFile(tempPath, maxType);
                     
@@ -2277,39 +2117,6 @@ async function handleAdminAttachment(chatId, attachments, api) {
 }
 
 // ============================================================
-// ЭКСПОРТ ДЛЯ VK МОДУЛЯ
-// ============================================================
-
-// Передаем общие функции в VK модуль
-const vkModule = require('./platforms/vk');
-vkModule.setSharedFunctions({
-    checkUserHasPaidAccess,
-    showAdminLogin,
-    showCourses,
-    sendLessonToUser,
-    showTest,
-    handleTestAnswer,
-    handleBuyAccess,
-    handlePaymentCheck,
-    handleAdminCommand,
-    handleAdminCallback,
-    handleAdminAttachment,
-    showAdminDashboard,
-    showAdminLessonDetail,
-    handleAdminEditLessons,
-    handleAdminLessonCreateStep2,
-    handleAdminLessonCreateStep3,
-    handleAdminLessonEditTitle,
-    handleAdminLessonEditDesc,
-    handleAdminEditTest,
-    handleAdminTestQuestion,
-    handleAdminTestAnswers,
-    handleAdminUploadVideo,
-    handleAdminUploadFile,
-    adminSessions,
-});
-
-// ============================================================
 // РОУТЫ
 // ============================================================
 
@@ -2340,6 +2147,27 @@ app.get('/health', (req, res) => {
 const adminRoutes = require('./admin/admin');
 app.use('/admin', adminRoutes);
 console.log('[STARTUP] Web Admin panel mounted at /admin');
+
+app.post('/admin/upload', upload.single('file'), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ error: 'No file uploaded' });
+        }
+        
+        const fileData = {
+            filename: req.file.filename,
+            originalname: req.file.originalname,
+            size: req.file.size,
+            mimetype: req.file.mimetype,
+            path: req.file.path,
+            url: `/uploads/${path.basename(path.dirname(req.file.path))}/${req.file.filename}`,
+        };
+        
+        res.json({ success: true, file: fileData });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
 
 // ============================================================
 // MAX WEBHOOK
@@ -2408,7 +2236,6 @@ app.post('/webhook/vk', async (req, res) => {
         console.log('[VK WEBHOOK] Type:', type);
         console.log('[VK WEBHOOK] Group ID:', group_id);
         
-        // Проверка секрета
         if (config.vk.secret && secret !== config.vk.secret) {
             console.warn('[VK WEBHOOK] Invalid secret');
             return res.status(403).send('Invalid secret');
@@ -2452,29 +2279,8 @@ app.post('/webhook/vk', async (req, res) => {
 });
 
 // ============================================================
-// АДМИН РОУТЫ ДЛЯ УПРАВЛЕНИЯ ВЕБХУКАМИ
+// АДМИН РОУТЫ
 // ============================================================
-
-app.post('/admin/upload', upload.single('file'), async (req, res) => {
-    try {
-        if (!req.file) {
-            return res.status(400).json({ error: 'No file uploaded' });
-        }
-        
-        const fileData = {
-            filename: req.file.filename,
-            originalname: req.file.originalname,
-            size: req.file.size,
-            mimetype: req.file.mimetype,
-            path: req.file.path,
-            url: `/uploads/${path.basename(path.dirname(req.file.path))}/${req.file.filename}`,
-        };
-        
-        res.json({ success: true, file: fileData });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
 
 app.post('/admin/register-max-webhook', async (req, res) => {
     try {
@@ -2630,13 +2436,16 @@ const HOST = '0.0.0.0';
 
 console.log(`[STARTUP] Starting on ${HOST}:${PORT}...`);
 
-// Подключаем PostgreSQL перед запуском
 (async function start() {
+    // Подключаем PostgreSQL
     try {
         await connectPostgreSQL();
     } catch (error) {
         console.warn('[STARTUP] PostgreSQL connection failed, using JSON storage');
     }
+    
+    // Создаем админа
+    await ensureAdmin();
     
     const server = app.listen(PORT, HOST, () => {
         console.log(`[STARTUP] ✅ Server running on port ${PORT}`);
