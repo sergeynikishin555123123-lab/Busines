@@ -407,9 +407,8 @@ async function handleMessageCreated(update) {
     }
 }
 
-// ============================================================
-// ОБРАБОТКА CALLBACK
-// ============================================================
+// server.js - ИСПРАВЛЕННЫЙ ФРАГМЕНТ
+// Найдите функцию handleMessageCallback и замените блок обработки callback'ов
 
 async function handleMessageCallback(update) {
     console.log('[HANDLER] handleMessageCallback called');
@@ -447,42 +446,46 @@ async function handleMessageCallback(update) {
             return;
         }
 
-// Обычные команды
-if (payload === 'show_courses') {
-    await showCourses(chatId, maxApi);
-} else if (payload === 'show_help') {
-    await showHelp(chatId, maxApi);
-} else if (payload === 'buy_access') {
-    await handleBuyAccess(chatId, maxApi);
-} else if (payload === 'payment_confirmed') {
-    await handlePaymentConfirmed(chatId, maxApi);
-} else if (payload.startsWith('course_')) {
-    const courseId = payload.replace('course_', '');
-    await showCourseDetails(chatId, courseId, maxApi);
-} else if (payload.startsWith('lesson_')) {
-    const lessonId = payload.replace('lesson_', '');
-    await sendLessonToUser(chatId, lessonId, maxApi);
-} else if (payload.startsWith('test_')) {
-    const testId = payload.replace('test_', '');
-    console.log(`[TEST] Showing test with ID: ${testId}`);
-    await showTest(chatId, testId, maxApi);
-} else if (payload.startsWith('test_answer_')) {
-    // ИСПРАВЛЕННЫЙ ПАРСИНГ
-    // payload: test_answer_4818066c-9273-46fb-b355-aa1fea18b6d5_4834d54c-6dfa-485e-b042-dcd75642c92d
-    const withoutPrefix = payload.replace('test_answer_', ''); // 4818066c-..._4834d54c-...
-    const underscoreIndex = withoutPrefix.lastIndexOf('_');
-    const testId = withoutPrefix.substring(0, underscoreIndex); // 4818066c-...
-    const answerId = withoutPrefix.substring(underscoreIndex + 1); // 4834d54c-...
-    
-    console.log(`[TEST] testId: ${testId}, answerId: ${answerId}`);
-    await handleTestAnswer(chatId, testId, answerId, maxApi);
-} else {
-    await maxApi.sendMessage({
-        chatId: chatId,
-        text: `✅ Вы выбрали: ${payload}`,
-        parseMode: 'markdown',
-    });
-}
+        // ============================================================
+        // ПОЛЬЗОВАТЕЛЬСКИЕ КОМАНДЫ
+        // ============================================================
+        
+        if (payload === 'show_courses') {
+            await showCourses(chatId, maxApi);
+        } else if (payload === 'show_help') {
+            await showHelp(chatId, maxApi);
+        } else if (payload === 'buy_access') {
+            await handleBuyAccess(chatId, maxApi);
+        } else if (payload === 'payment_confirmed') {
+            await handlePaymentConfirmed(chatId, maxApi);
+        } else if (payload.startsWith('course_')) {
+            const courseId = payload.replace('course_', '');
+            await showCourseDetails(chatId, courseId, maxApi);
+        } else if (payload.startsWith('lesson_')) {
+            const lessonId = payload.replace('lesson_', '');
+            await sendLessonToUser(chatId, lessonId, maxApi);
+        } else if (payload.startsWith('test_') && !payload.startsWith('test_answer_')) {
+            // Показ теста
+            const testId = payload.replace('test_', '');
+            console.log(`[TEST] Showing test with ID: ${testId}`);
+            await showTest(chatId, testId, maxApi);
+        } else if (payload.startsWith('test_answer_')) {
+            // ИСПРАВЛЕННЫЙ ПАРСИНГ ДЛЯ ОТВЕТОВ НА ТЕСТ
+            // payload: test_answer_b720c6b3-53db-4679-8f63-e40964189f57_322a8bd8-c78a-4540-acf5-046636129851
+            const withoutPrefix = payload.replace('test_answer_', '');
+            const underscoreIndex = withoutPrefix.lastIndexOf('_');
+            const testId = withoutPrefix.substring(0, underscoreIndex);
+            const answerId = withoutPrefix.substring(underscoreIndex + 1);
+            
+            console.log(`[TEST] testId: ${testId}, answerId: ${answerId}`);
+            await handleTestAnswer(chatId, testId, answerId, maxApi);
+        } else {
+            await maxApi.sendMessage({
+                chatId: chatId,
+                text: `✅ Вы выбрали: ${payload}`,
+                parseMode: 'markdown',
+            });
+        }
     } catch (error) {
         console.error('[HANDLER] Error in handleMessageCallback:', error);
         logger.error({ err: error, update }, 'Error handling message_callback');
