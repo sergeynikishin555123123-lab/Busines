@@ -1,4 +1,4 @@
-// core/lesson.js
+// core/lesson.js - ИСПРАВЛЕННАЯ ВЕРСИЯ
 // УПРАВЛЕНИЕ УРОКАМИ - ПОЛНАЯ РАБОЧАЯ ВЕРСИЯ
 
 const database = require('../database');
@@ -50,132 +50,149 @@ class LessonService {
         }
     }
 
-// core/lesson.js - ИСПРАВЛЕННЫЙ getLessonTest
+    // ============================================================
+    // МЕТОДЫ ДЛЯ ТЕСТОВ
+    // ============================================================
 
-async getLessonTest(lessonId) {
-    try {
-        console.log(`[TEST] Getting test for lesson: ${lessonId}`);
-        
-        const tests = database.readTable('tests');
-        const answers = database.readTable('test_answers');
+    async getLessonTest(lessonId) {
+        try {
+            console.log(`[TEST] Getting test for lesson: ${lessonId}`);
+            
+            const tests = database.readTable('tests');
+            const answers = database.readTable('test_answers');
 
-        console.log(`[TEST] All tests:`, tests.map(t => ({ id: t.id, lesson_id: t.lesson_id })));
-        console.log(`[TEST] Looking for lesson_id: ${lessonId}`);
+            console.log(`[TEST] All tests:`, tests.map(t => ({ id: t.id, lesson_id: t.lesson_id })));
+            console.log(`[TEST] Looking for lesson_id: ${lessonId}`);
 
-        // Ищем тест с нужным lesson_id (СРАВНИВАЕМ КАК СТРОКИ)
-        const test = tests.find(t => String(t.lesson_id) === String(lessonId));
-        
-        if (!test) {
-            console.log(`[TEST] No test found for lesson: ${lessonId}`);
-            return null;
-        }
-
-        console.log(`[TEST] Found test:`, test);
-
-        const testAnswers = answers
-            .filter(a => String(a.test_id) === String(test.id))
-            .map(a => ({
-                id: a.id,
-                answer: a.answer,
-                is_correct: a.is_correct === true,
-            }));
-
-        console.log(`[TEST] Found ${testAnswers.length} answers`);
-
-        return {
-            ...test,
-            answers: testAnswers,
-        };
-        
-    } catch (error) {
-        console.error('[TEST] Error getting test:', error);
-        return null;
-    }
-}
-
-   // core/lesson.js - ДОБАВЬТЕ ЭТОТ МЕТОД
-
-// core/lesson.js - ДОБАВЬТЕ ЭТОТ МЕТОД
-
-async getTestById(testId) {
-    try {
-        const tests = database.readTable('tests');
-        const answers = database.readTable('test_answers');
-
-        const test = tests.find(t => String(t.id) === String(testId));
-        if (!test) {
-            console.log(`[TEST] Test not found with ID: ${testId}`);
-            return null;
-        }
-
-        const testAnswers = answers
-            .filter(a => String(a.test_id) === String(test.id))
-            .map(a => ({
-                id: a.id,
-                answer: a.answer,
-                is_correct: a.is_correct === true,
-            }));
-
-        console.log(`[TEST] Found test:`, test);
-        console.log(`[TEST] Found ${testAnswers.length} answers`);
-
-        return {
-            ...test,
-            answers: testAnswers,
-        };
-    } catch (error) {
-        console.error('[TEST] Error getting test by id:', error);
-        return null;
-    }
-}
-    async checkTestAnswer(testId, answerId, userId) {
-    try {
-        const answers = database.readTable('test_answers');
-        const tests = database.readTable('tests');
-
-        const answer = answers.find(a => a.id === answerId);
-        if (!answer) {
-            throw new Error('Ответ не найден');
-        }
-
-        const test = tests.find(t => t.id === testId);
-        if (!test) {
-            throw new Error('Тест не найден');
-        }
-
-        const isCorrect = answer.is_correct === true;
-
-        if (isCorrect) {
-            const progress = database.readTable('progress');
-            const existing = progress.find(p => p.user_id === userId && p.lesson_id === test.lesson_id);
-
-            if (existing) {
-                existing.status = 'completed';
-                existing.test_passed = true;
-                existing.completed_at = database.now();
-            } else {
-                progress.push({
-                    id: database.generateId(),
-                    user_id: userId,
-                    lesson_id: test.lesson_id,
-                    status: 'completed',
-                    test_passed: true,
-                    last_position: 0,
-                    completed_at: database.now(),
-                });
+            const test = tests.find(t => String(t.lesson_id) === String(lessonId));
+            
+            if (!test) {
+                console.log(`[TEST] No test found for lesson: ${lessonId}`);
+                return null;
             }
-            database.writeTable('progress', progress);
-        }
 
-        return {
-            correct: isCorrect,
-            answerId: answer.id,
-        };
-    } catch (error) {
-        console.error('[TEST] Error checking answer:', error);
-        throw error;
+            console.log(`[TEST] Found test:`, test);
+
+            const testAnswers = answers
+                .filter(a => String(a.test_id) === String(test.id))
+                .map(a => ({
+                    id: a.id,
+                    answer: a.answer,
+                    is_correct: a.is_correct === true,
+                }));
+
+            console.log(`[TEST] Found ${testAnswers.length} answers`);
+
+            return {
+                ...test,
+                answers: testAnswers,
+            };
+            
+        } catch (error) {
+            console.error('[TEST] Error getting test:', error);
+            return null;
+        }
     }
-}
+
+    // ============================================================
+    // ПОЛУЧЕНИЕ ТЕСТА ПО ID (ДОБАВЛЕННЫЙ МЕТОД)
+    // ============================================================
+
+    async getTestById(testId) {
+        try {
+            console.log(`[TEST] getTestById called with: ${testId}`);
+            
+            const tests = database.readTable('tests');
+            const answers = database.readTable('test_answers');
+
+            const test = tests.find(t => String(t.id) === String(testId));
+            if (!test) {
+                console.log(`[TEST] Test not found with ID: ${testId}`);
+                return null;
+            }
+
+            console.log(`[TEST] Found test:`, test);
+
+            const testAnswers = answers
+                .filter(a => String(a.test_id) === String(test.id))
+                .map(a => ({
+                    id: a.id,
+                    answer: a.answer,
+                    is_correct: a.is_correct === true,
+                }));
+
+            console.log(`[TEST] Found ${testAnswers.length} answers`);
+
+            return {
+                ...test,
+                answers: testAnswers,
+            };
+        } catch (error) {
+            console.error('[TEST] Error getting test by id:', error);
+            return null;
+        }
+    }
+
+    // ============================================================
+    // ПРОВЕРКА ОТВЕТА НА ТЕСТ
+    // ============================================================
+
+    async checkTestAnswer(testId, answerId, userId) {
+        try {
+            console.log(`[TEST] checkTestAnswer: testId=${testId}, answerId=${answerId}, userId=${userId}`);
+            
+            const answers = database.readTable('test_answers');
+            const tests = database.readTable('tests');
+
+            const answer = answers.find(a => a.id === answerId);
+            if (!answer) {
+                throw new Error('Ответ не найден');
+            }
+
+            const test = tests.find(t => t.id === testId);
+            if (!test) {
+                throw new Error('Тест не найден');
+            }
+
+            const isCorrect = answer.is_correct === true;
+            console.log(`[TEST] Answer is correct: ${isCorrect}`);
+
+            if (isCorrect) {
+                const progress = database.readTable('progress');
+                const existing = progress.find(p => p.user_id === userId && p.lesson_id === test.lesson_id);
+
+                if (existing) {
+                    existing.status = 'completed';
+                    existing.test_passed = true;
+                    existing.completed_at = database.now();
+                } else {
+                    progress.push({
+                        id: database.generateId(),
+                        user_id: userId,
+                        lesson_id: test.lesson_id,
+                        status: 'completed',
+                        test_passed: true,
+                        last_position: 0,
+                        completed_at: database.now(),
+                    });
+                }
+                database.writeTable('progress', progress);
+            }
+
+            return {
+                correct: isCorrect,
+                answerId: answer.id,
+            };
+        } catch (error) {
+            console.error('[TEST] Error checking answer:', error);
+            throw error;
+        }
+    }
+
+    // ============================================================
+    // ЗАПИСЬ ПРОСМОТРА УРОКА
+    // ============================================================
+
     async recordLessonView(userId, lessonId) {
         const views = database.readTable('lesson_views');
         const existing = views.find(v => v.user_id === userId && v.lesson_id === lessonId);
@@ -318,68 +335,67 @@ async getTestById(testId) {
         };
     }
 
-    // core/lesson.js - исправленный addLessonFile
+    // ============================================================
+    // ФАЙЛЫ УРОКОВ
+    // ============================================================
 
-// core/lesson.js - ИСПРАВЛЕННЫЙ addLessonFile
-
-async addLessonFile(lessonId, fileData) {
-    try {
-        const files = database.readTable('lesson_files');
-        
-        let fileHash = '';
-        if (fileData.path && !fileData.is_max_uploaded && fs.existsSync(fileData.path)) {
-            try {
-                const fileBuffer = fs.readFileSync(fileData.path);
-                fileHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
-            } catch (e) {
-                console.warn('[LESSON] Could not hash file:', e.message);
+    async addLessonFile(lessonId, fileData) {
+        try {
+            const files = database.readTable('lesson_files');
+            
+            let fileHash = '';
+            if (fileData.path && !fileData.is_max_uploaded && fs.existsSync(fileData.path)) {
+                try {
+                    const fileBuffer = fs.readFileSync(fileData.path);
+                    fileHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+                } catch (e) {
+                    console.warn('[LESSON] Could not hash file:', e.message);
+                }
             }
-        }
 
-        // Определяем тип файла
-        let fileType = fileData.type || 'file';
-        if (!fileType || fileType === 'file') {
-            if (fileData.mimetype && fileData.mimetype.startsWith('video/')) {
-                fileType = 'video';
-            } else if (fileData.mimetype && fileData.mimetype.startsWith('image/')) {
-                fileType = 'image';
+            let fileType = fileData.type || 'file';
+            if (!fileType || fileType === 'file') {
+                if (fileData.mimetype && fileData.mimetype.startsWith('video/')) {
+                    fileType = 'video';
+                } else if (fileData.mimetype && fileData.mimetype.startsWith('image/')) {
+                    fileType = 'image';
+                }
             }
+
+            const isMaxUploaded = fileData.is_max_uploaded || !!fileData.token;
+
+            const file = {
+                id: database.generateId(),
+                lesson_id: lessonId,
+                type: fileType,
+                filename: fileData.filename || 'file',
+                original_name: fileData.originalname || fileData.filename || 'file',
+                size: fileData.size || 0,
+                mime_type: fileData.mimetype || 'application/octet-stream',
+                path: fileData.path || fileData.token || '',
+                url: fileData.url || null,
+                token: fileData.token || null,
+                is_max_uploaded: isMaxUploaded,
+                hash: fileHash,
+                duration: null,
+                created_at: database.now(),
+            };
+
+            files.push(file);
+            database.writeTable('lesson_files', files);
+
+            console.log(`[LESSON] ✅ File added: ${fileData.filename} (${fileType}) to lesson ${lessonId}${isMaxUploaded ? ' [MAX]' : ''}`);
+            logger.info({ lessonId, fileId: file.id, type: fileType, isMaxUploaded }, 'Lesson file added');
+
+            return file;
+
+        } catch (error) {
+            console.error('[LESSON] Failed to add lesson file:', error);
+            logger.error({ err: error, lessonId, fileData }, 'Failed to add lesson file');
+            throw error;
         }
-
-        // Если есть токен - это уже загруженный в MAX файл
-        const isMaxUploaded = fileData.is_max_uploaded || !!fileData.token;
-
-        const file = {
-            id: database.generateId(),
-            lesson_id: lessonId,
-            type: fileType,
-            filename: fileData.filename || 'file',
-            original_name: fileData.originalname || fileData.filename || 'file',
-            size: fileData.size || 0,
-            mime_type: fileData.mimetype || 'application/octet-stream',
-            path: fileData.path || fileData.token || '',
-            url: fileData.url || null,
-            token: fileData.token || null,
-            is_max_uploaded: isMaxUploaded,
-            hash: fileHash,
-            duration: null,
-            created_at: database.now(),
-        };
-
-        files.push(file);
-        database.writeTable('lesson_files', files);
-
-        console.log(`[LESSON] ✅ File added: ${fileData.filename} (${fileType}) to lesson ${lessonId}${isMaxUploaded ? ' [MAX]' : ''}`);
-        logger.info({ lessonId, fileId: file.id, type: fileType, isMaxUploaded }, 'Lesson file added');
-
-        return file;
-
-    } catch (error) {
-        console.error('[LESSON] Failed to add lesson file:', error);
-        logger.error({ err: error, lessonId, fileData }, 'Failed to add lesson file');
-        throw error;
     }
-}
+
     async getLessonFiles(lessonId) {
         try {
             const files = database.readTable('lesson_files');
@@ -522,8 +538,6 @@ async addLessonFile(lessonId, fileData) {
         logger.info(`Test deleted: ${testId}`);
         return true;
     }
-
-
 
     async updateProgressPosition(userId, lessonId, position) {
         const progress = database.readTable('progress');
