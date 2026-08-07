@@ -1,4 +1,4 @@
-// core/lesson.js - ИСПРАВЛЕННАЯ ВЕРСИЯ С POSTGRESQL
+// core/lesson.js - ПОЛНАЯ ВЕРСИЯ С ПОДДЕРЖКОЙ VK
 
 const database = require('../database');
 const logger = require('../logger');
@@ -207,9 +207,14 @@ class LessonService {
             .sort((a, b) => a.order_number - b.order_number);
     }
     
+    // ============================================================
+    // ОБНОВЛЕННЫЙ МЕТОД addLessonFile С ПОДДЕРЖКОЙ VK
+    // ============================================================
+    
     async addLessonFile(lessonId, fileData) {
         try {
             const files = await database.readTable('lesson_files');
+            
             let fileHash = '';
             if (fileData.path && !fileData.is_max_uploaded && fs.existsSync(fileData.path)) {
                 try {
@@ -227,6 +232,8 @@ class LessonService {
             }
             
             const isMaxUploaded = fileData.is_max_uploaded || !!fileData.token;
+            
+            // 👇 РАСШИРЕННЫЙ ОБЪЕКТ С ПОДДЕРЖКОЙ VK
             const file = {
                 id: database.generateId(),
                 lesson_id: lessonId,
@@ -238,11 +245,16 @@ class LessonService {
                 path: fileData.path || fileData.token || '',
                 url: fileData.url || null,
                 token: fileData.token || null,
+                // 👇 НОВЫЕ ПОЛЯ ДЛЯ VK
+                vk_owner_id: fileData.vk_owner_id || null,
+                vk_video_id: fileData.vk_video_id || null,
+                vk_access_key: fileData.vk_access_key || null,
                 is_max_uploaded: isMaxUploaded,
                 hash: fileHash,
-                duration: null,
+                duration: fileData.duration || null,
                 created_at: database.now(),
             };
+            
             files.push(file);
             await database.writeTable('lesson_files', files);
             console.log(`[LESSON] ✅ File added: ${fileData.filename} (${fileType}) to lesson ${lessonId}`);
@@ -319,6 +331,64 @@ class LessonService {
             ...test,
             answers: answers.filter(a => a.test_id === test.id),
         };
+    }
+    
+    async updateTest(testId, testData) {
+        try {
+            let tests = await database.readTable('tests');
+            let answers = await database.readTable('test_answers');
+            
+            const testIndex = tests.findIndex(t => t.id === testId);
+            if (testIndex === -1) throw new Error('Test not found');
+            
+            tests[testIndex].question = testData.question || tests[testIndex].question;
+            
+            // Удаляем старые ответы
+            answers = answers.filter(a => a.test_id !== testId);
+            
+            // Добавляем новые
+            let addedCount = 0;
+            for (const answer of testData.answers || []) {
+                if (answer.text && answer.text.trim()) {
+                    answers.push({
+                        id: database.generateId(),
+                        test_id: testId,
+                        answer: answer.text.trim(),
+                        is_correct: answer.isCorrect || false,
+                    });
+                    addedCount++;
+                }
+            }
+            
+            await database.writeTable('tests', tests);
+            await database.writeTable('test_answers', answers);
+            logger.info(`Test updated: ${testId}, answers: ${addedCount}`);
+            return {
+                ...tests[testIndex],
+                answers: answers.filter(a => a.test_id === testId),
+            };
+        } catch (error) {
+            logger.error({ err: error, testId }, 'Failed to update test');
+            throw error;
+        }
+    }
+    
+    async deleteTest(testId) {
+        try {
+            let tests = await database.readTable('tests');
+            let answers = await database.readTable('test_answers');
+            
+            answers = answers.filter(a => a.test_id !== testId);
+            tests = tests.filter(t => t.id !== testId);
+            
+            await database.writeTable('tests', tests);
+            await database.writeTable('test_answers', answers);
+            logger.info(`Test deleted: ${testId}`);
+            return true;
+        } catch (error) {
+            logger.error({ err: error, testId }, 'Failed to delete test');
+            throw error;
+        }
     }
     
     async getFreeLessons() {
