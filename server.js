@@ -2324,10 +2324,10 @@ app.post('/webhook/vk', async (req, res) => {
         console.log('[VK WEBHOOK] Type:', type);
         console.log('[VK WEBHOOK] Group ID:', group_id);
         
-        if (config.vk.secret && secret !== config.vk.secret) {
-            console.warn('[VK WEBHOOK] Invalid secret');
-            return res.status(403).send('Invalid secret');
-        }
+        //if (config.vk.secret && secret !== config.vk.secret) {
+            //console.warn('[VK WEBHOOK] Invalid secret');
+           // return res.status(403).send('Invalid secret');
+       // }
         
         switch (type) {
             case 'confirmation':
