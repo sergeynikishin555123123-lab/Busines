@@ -195,22 +195,23 @@ class VKAPI {
 
 const adminSessions = new Map();
 
-// ============================================================
-// ОБРАБОТКА СООБЩЕНИЙ
-// ============================================================
-
 async function handleMessageNew(message) {
     try {
-        // 👇 ИСПРАВЛЕННЫЙ ПАРСИНГ
-        const userId = String(message.message?.from_id || message.from_id || message.user_id);
+        // ПРАВИЛЬНО ИЗВЛЕКАЕМ USER_ID И ТЕКСТ
+        const userId = String(
+            message.message?.from_id || 
+            message.from_id || 
+            message.user_id || 
+            message.object?.message?.from_id
+        );
         const text = message.message?.text || message.text || '';
         let payload = null;
 
         console.log(`[VK HANDLER] Message from ${userId}: "${text}"`);
 
-        if (message.payload) {
+        if (message.message?.payload) {
             try {
-                const parsed = JSON.parse(message.payload);
+                const parsed = JSON.parse(message.message.payload);
                 payload = parsed.payload || null;
             } catch (e) {}
         }
@@ -218,17 +219,22 @@ async function handleMessageNew(message) {
         const vkApi = new VKAPI();
 
         // Регистрируем пользователя
-        try {
-            await userService.registerUser({
-                platform_user_id: userId,
-                platform: 'vk',
-                first_name: 'Пользователь VK',
-                last_name: '',
-                username: '',
-                chat_id: userId,
-            });
-        } catch (regError) {
-            console.warn('[VK USER] Registration error:', regError.message);
+        if (userId && userId !== 'undefined') {
+            try {
+                await userService.registerUser({
+                    platform_user_id: userId,
+                    platform: 'vk',
+                    first_name: 'Пользователь VK',
+                    last_name: '',
+                    username: '',
+                    chat_id: userId,
+                });
+            } catch (regError) {
+                console.warn('[VK USER] Registration error:', regError.message);
+            }
+        } else {
+            console.warn('[VK HANDLER] Skipping registration: userId is undefined');
+            return;
         }
 
         // Если есть payload - обрабатываем как callback
@@ -258,7 +264,12 @@ async function handleMessageNew(message) {
 
 async function handleMessageEvent(event) {
     try {
-        const userId = String(event.user_id);
+        // ПРАВИЛЬНО ИЗВЛЕКАЕМ USER_ID
+        const userId = String(
+            event.user_id || 
+            event.message?.from_id || 
+            event.object?.user_id
+        );
         let payload = null;
 
         if (event.payload) {
@@ -272,7 +283,7 @@ async function handleMessageEvent(event) {
 
         console.log(`[VK EVENT] User ${userId}, payload: ${payload}`);
 
-        if (payload) {
+        if (payload && userId && userId !== 'undefined') {
             const vkApi = new VKAPI();
             await handleCallback(userId, payload, vkApi);
         }
@@ -280,7 +291,6 @@ async function handleMessageEvent(event) {
         console.error('[VK EVENT] Error:', error);
     }
 }
-
 // ============================================================
 // ОБРАБОТЧИКИ КОМАНД (используют sharedFunctions)
 // ============================================================
