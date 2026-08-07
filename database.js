@@ -1,4 +1,4 @@
-// database.js - ПОЛНАЯ ПРОДАКШЕН ВЕРСИЯ С POSTGRESQL
+// database.js - ПОЛНАЯ ПРОДАКШЕН ВЕРСИЯ С POSTGRESQL + VK ПОЛЯ
 
 const fs = require('fs');
 const path = require('path');
@@ -28,6 +28,7 @@ function setPGClient(client, connected) {
     pgConnected = connected;
     console.log('[DB] PostgreSQL client set:', connected ? '✅ connected' : '⚠️ fallback');
 }
+
 // ============================================================
 // БАЗОВЫЕ МЕТОДЫ
 // ============================================================
@@ -248,7 +249,7 @@ async function closePool() {
 // ============================================================
 
 module.exports = {
-    setPGClient,  // ⭐ ДОБАВИТЬ ЭТУ СТРОКУ
+    setPGClient,
     query,
     getClient,
     closePool,
