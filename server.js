@@ -1126,6 +1126,8 @@ async function showCourses(chatId, api) {
     }
 }
 
+// server.js - ЗАМЕНИТЬ ФУНКЦИЮ sendLessonToUser
+
 async function sendLessonToUser(chatId, lessonId, api) {
     try {
         console.log(`[LESSON] Sending lesson ${lessonId} to ${chatId}`);
@@ -1159,24 +1161,63 @@ async function sendLessonToUser(chatId, lessonId, api) {
         const videoFile = lesson.files?.find(f => f.type === 'video');
         const otherFiles = lesson.files?.filter(f => f.type !== 'video') || [];
         
+        // 👇 ОПРЕДЕЛЯЕМ ПЛАТФОРМУ
+        const isVK = api.constructor.name === 'VKAPI' || typeof api.sendVideoByToken !== 'function';
+        
         if (videoFile) {
             try {
-                if (videoFile.token) {
-                    if (api.sendVideoByToken) {
+                if (isVK) {
+                    // ДЛЯ VK — ОТПРАВЛЯЕМ ПО ID ВИДЕО
+                    const ownerId = videoFile.vk_owner_id;
+                    const videoId = videoFile.vk_video_id;
+                    const accessKey = videoFile.vk_access_key;
+                    
+                    if (ownerId && videoId) {
+                        const attachment = accessKey 
+                            ? `video${ownerId}_${videoId}_${accessKey}`
+                            : `video${ownerId}_${videoId}`;
+                        
+                        await api.sendMessage({
+                            chatId: chatId,
+                            text: `🎬 **${lesson.title}**\n\n${lesson.description || ''}`,
+                            attachments: [attachment],
+                            parseMode: 'markdown',
+                        });
+                        console.log(`[LESSON] ✅ Video sent to VK: ${attachment}`);
+                    } else {
+                        await api.sendMessage({
+                            chatId: chatId,
+                            text: `📖 **${lesson.title}**\n\n${lesson.description || ''}\n\n⚠️ Видео недоступно в VK.`,
+                            parseMode: 'markdown',
+                        });
+                    }
+                } else {
+                    // ДЛЯ MAX — ОТПРАВЛЯЕМ ПО ТОКЕНУ
+                    if (videoFile.token && api.sendVideoByToken) {
                         await api.sendVideoByToken({
                             chatId: chatId,
                             token: videoFile.token,
                             caption: `🎬 **${lesson.title}**\n\n${lesson.description || ''}`,
                             parseMode: 'markdown',
                         });
+                        console.log(`[LESSON] ✅ Video sent to MAX by token`);
+                    } else if (videoFile.path && fs.existsSync(videoFile.path)) {
+                        const maxApi = new MaxAPI();
+                        const token = await maxApi.uploadFile(videoFile.path, 'video');
+                        await api.sendVideoByToken({
+                            chatId: chatId,
+                            token: token,
+                            caption: `🎬 **${lesson.title}**\n\n${lesson.description || ''}`,
+                            parseMode: 'markdown',
+                        });
+                        console.log(`[LESSON] ✅ Video uploaded and sent to MAX`);
                     } else {
                         await api.sendMessage({
                             chatId: chatId,
-                            text: `🎬 **${lesson.title}**\n\n${lesson.description || ''}`,
+                            text: `📖 **${lesson.title}**\n\n${lesson.description || ''}\n\n⚠️ Видео недоступно.`,
                             parseMode: 'markdown',
                         });
                     }
-                    console.log(`[LESSON] ✅ Video sent by token`);
                 }
             } catch (error) {
                 console.error('[LESSON] Failed to send video:', error.message);
@@ -1194,30 +1235,46 @@ async function sendLessonToUser(chatId, lessonId, api) {
             });
         }
         
+        // Отправляем файлы
         for (const file of otherFiles) {
             try {
-                if (file.token) {
-                    if (api.sendFileByToken) {
+                if (isVK) {
+                    // Для VK — ссылка на файл
+                    const fileUrl = file.url || file.path || '';
+                    if (fileUrl) {
+                        await api.sendMessage({
+                            chatId: chatId,
+                            text: `📎 **${file.original_name || file.filename}**\n${fileUrl}`,
+                            parseMode: 'markdown',
+                        });
+                    }
+                } else {
+                    // Для MAX — по токену
+                    if (file.token && api.sendFileByToken) {
                         await api.sendFileByToken({
                             chatId: chatId,
                             token: file.token,
                             caption: `📎 **${file.original_name || file.filename}**`,
                             parseMode: 'markdown',
                         });
-                    } else {
-                        await api.sendMessage({
+                    } else if (file.path && fs.existsSync(file.path)) {
+                        const maxApi = new MaxAPI();
+                        const token = await maxApi.uploadFile(file.path, 'file');
+                        await api.sendFileByToken({
                             chatId: chatId,
-                            text: `📎 **${file.original_name || file.filename}**`,
+                            token: token,
+                            caption: `📎 **${file.original_name || file.filename}**`,
                             parseMode: 'markdown',
                         });
                     }
-                    console.log(`[LESSON] ✅ File sent by token: ${file.original_name || file.filename}`);
                 }
+                console.log(`[LESSON] ✅ File sent: ${file.original_name || file.filename}`);
             } catch (error) {
                 console.error('[LESSON] Failed to send file:', error.message);
             }
         }
         
+        // Отправляем тест
         const test = await lessonService.getLessonTest(lessonId);
         if (test && test.answers && test.answers.length > 0) {
             await api.sendKeyboard({
@@ -2053,6 +2110,8 @@ async function handleAdminUploadFile(chatId, lessonId, api) {
     }
 }
 
+// server.js - ЗАМЕНИТЬ ФУНКЦИЮ handleAdminAttachment
+
 async function handleAdminAttachment(chatId, attachments, api) {
     try {
         const session = adminSessions.get(chatId);
@@ -2073,6 +2132,9 @@ async function handleAdminAttachment(chatId, attachments, api) {
         
         console.log(`[ADMIN] Processing ${attachments.length} attachment(s) for lesson ${lessonId}`);
         
+        // 👇 ОПРЕДЕЛЯЕМ ПЛАТФОРМУ
+        const isVK = api.constructor.name === 'VKAPI' || typeof api.sendVideoByToken !== 'function';
+        
         for (const attachment of attachments) {
             console.log('[ADMIN] Attachment:', JSON.stringify(attachment, null, 2));
             
@@ -2086,35 +2148,76 @@ async function handleAdminAttachment(chatId, attachments, api) {
                 maxType = 'image';
             }
             
+            // Если файл уже загружен в MAX (есть токен)
             if (fileData.token) {
                 const token = fileData.token;
                 const fileName = fileData.filename || 'file';
                 
                 console.log(`[ADMIN] File already uploaded, token: ${token.substring(0, 20)}...`);
                 
-                if (maxType === 'video') {
-                    const existingFiles = await lessonService.getLessonFiles(lessonId);
-                    const oldVideo = existingFiles.find(f => f.type === 'video');
-                    if (oldVideo) {
-                        await lessonService.deleteLessonFile(oldVideo.id);
+                let vkVideo = null;
+                
+                // 👇 ЕСЛИ ЭТО VK И ВИДЕО — ЗАГРУЖАЕМ В VK
+                if (isVK && maxType === 'video') {
+                    try {
+                        // Пытаемся скачать видео из MAX по токену
+                        const videoUrl = fileData.url || '';
+                        if (videoUrl) {
+                            const response = await axios.get(videoUrl, {
+                                responseType: 'arraybuffer',
+                                timeout: 300000,
+                            });
+                            
+                            const tempDir = path.join(UPLOADS_DIR, 'temp');
+                            if (!fs.existsSync(tempDir)) {
+                                fs.mkdirSync(tempDir, { recursive: true });
+                            }
+                            
+                            const tempPath = path.join(tempDir, `${Date.now()}-${fileName}`);
+                            fs.writeFileSync(tempPath, Buffer.from(response.data));
+                            
+                            // Загружаем в VK
+                            const vkApi = new VKAPI();
+                            vkVideo = await vkApi.uploadPrivateVideo(tempPath, 'Урок');
+                            
+                            // Удаляем временный файл
+                            fs.unlinkSync(tempPath);
+                            
+                            console.log(`[ADMIN] ✅ VK video uploaded: video${vkVideo.owner_id}_${vkVideo.video_id}`);
+                        } else {
+                            console.log('[ADMIN] No video URL to download for VK');
+                        }
+                    } catch (error) {
+                        console.error('[ADMIN] Failed to upload to VK:', error.message);
                     }
                 }
                 
-                await lessonService.addLessonFile(lessonId, {
+                // Сохраняем в БД
+                const fileDataToSave = {
                     filename: fileName,
                     originalname: fileName,
                     size: fileData.size || 0,
                     mimetype: fileType,
                     path: token,
-                    url: null,
+                    url: fileData.url || null,
                     token: token,
+                    vk_owner_id: vkVideo?.owner_id || null,
+                    vk_video_id: vkVideo?.video_id || null,
+                    vk_access_key: vkVideo?.access_key || null,
                     is_max_uploaded: true,
                     type: maxType,
-                });
+                };
+                
+                await lessonService.addLessonFile(lessonId, fileDataToSave);
+                
+                let messageText = `✅ **${maxType === 'video' ? 'Видео' : 'Файл'} загружен!**\n\n📎 ${fileName}`;
+                if (vkVideo) {
+                    messageText += `\n\n📹 Также загружено в VK`;
+                }
                 
                 await api.sendMessage({
                     chatId: chatId,
-                    text: `✅ **${maxType === 'video' ? 'Видео' : 'Файл'} загружен!**\n\n📎 ${fileName}`,
+                    text: messageText,
                     parseMode: 'markdown',
                 });
                 
@@ -2122,6 +2225,7 @@ async function handleAdminAttachment(chatId, attachments, api) {
                 return;
             }
             
+            // Если файл пришел как URL (скачиваем)
             if (fileData.url) {
                 const fileUrl = fileData.url;
                 const fileName = fileData.filename || 'file';
@@ -2142,22 +2246,28 @@ async function handleAdminAttachment(chatId, attachments, api) {
                     const tempPath = path.join(tempDir, `${Date.now()}-${fileName}`);
                     fs.writeFileSync(tempPath, Buffer.from(response.data));
                     
-                    console.log(`[ADMIN] Uploading as type: ${maxType}`);
+                    let token = null;
+                    let vkVideo = null;
                     
+                    // Загружаем в MAX
                     const maxApi = new MaxAPI();
-                    const token = await maxApi.uploadFile(tempPath, maxType);
+                    token = await maxApi.uploadFile(tempPath, maxType);
                     
-                    fs.unlinkSync(tempPath);
-                    
-                    if (maxType === 'video') {
-                        const existingFiles = await lessonService.getLessonFiles(lessonId);
-                        const oldVideo = existingFiles.find(f => f.type === 'video');
-                        if (oldVideo) {
-                            await lessonService.deleteLessonFile(oldVideo.id);
+                    // 👇 ЕСЛИ ЭТО VK И ВИДЕО — ЗАГРУЖАЕМ В VK
+                    if (isVK && maxType === 'video') {
+                        try {
+                            const vkApi = new VKAPI();
+                            vkVideo = await vkApi.uploadPrivateVideo(tempPath, 'Урок');
+                            console.log(`[ADMIN] ✅ VK video uploaded: video${vkVideo.owner_id}_${vkVideo.video_id}`);
+                        } catch (vkError) {
+                            console.error('[ADMIN] VK upload failed:', vkError.message);
                         }
                     }
                     
-                    await lessonService.addLessonFile(lessonId, {
+                    fs.unlinkSync(tempPath);
+                    
+                    // Сохраняем в БД
+                    const fileDataToSave = {
                         filename: fileName,
                         originalname: fileName,
                         size: response.data.length,
@@ -2165,18 +2275,29 @@ async function handleAdminAttachment(chatId, attachments, api) {
                         path: token,
                         url: null,
                         token: token,
+                        vk_owner_id: vkVideo?.owner_id || null,
+                        vk_video_id: vkVideo?.video_id || null,
+                        vk_access_key: vkVideo?.access_key || null,
                         is_max_uploaded: true,
                         type: maxType,
-                    });
+                    };
+                    
+                    await lessonService.addLessonFile(lessonId, fileDataToSave);
+                    
+                    let messageText = `✅ **${maxType === 'video' ? 'Видео' : 'Файл'} загружен!**\n\n📎 ${fileName}`;
+                    if (vkVideo) {
+                        messageText += `\n\n📹 Также загружено в VK`;
+                    }
                     
                     await api.sendMessage({
                         chatId: chatId,
-                        text: `✅ **${maxType === 'video' ? 'Видео' : 'Файл'} загружен!**\n\n📎 ${fileName}`,
+                        text: messageText,
                         parseMode: 'markdown',
                     });
                     
                     await showAdminLessonDetail(chatId, lessonId, api);
                     return;
+                    
                 } catch (error) {
                     console.error('[ADMIN] Error downloading/uploading file:', error.message);
                     await api.sendMessage({
@@ -2203,7 +2324,6 @@ async function handleAdminAttachment(chatId, attachments, api) {
         });
     }
 }
-
 // ============================================================
 // РОУТЫ
 // ============================================================
