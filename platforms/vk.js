@@ -1,4 +1,4 @@
-// platforms/vk.js - ДОБАВЛЯЕМ setSharedFunctions
+// platforms/vk.js - ПОЛНАЯ ИСПРАВЛЕННАЯ ВЕРСИЯ
 
 const crypto = require('crypto');
 const axios = require('axios');
@@ -103,7 +103,6 @@ class VKAPI {
 
     async sendKeyboard({ chatId, text, buttons, parseMode = 'html' }) {
         try {
-            // Конвертируем формат кнопок из MAX в формат VK
             const vkButtons = buttons.map(row =>
                 row.map(btn => ({
                     action: {
@@ -140,7 +139,6 @@ class VKAPI {
             return response.data;
         } catch (error) {
             console.error(`[VK] ❌ Failed to send keyboard to ${chatId}:`, error.message);
-            // Fallback: отправляем обычное сообщение
             return this.sendMessage({ chatId, text, parseMode });
         }
     }
@@ -183,6 +181,78 @@ class VKAPI {
         });
     }
 
+    // ============================================================
+    // ЗАГРУЗКА ПРИВАТНОГО ВИДЕО В VK
+    // ============================================================
+    
+    async uploadPrivateVideo(filePath, lessonTitle) {
+        try {
+            console.log(`[VK] Uploading private video: ${filePath}`);
+            
+            if (!fs.existsSync(filePath)) {
+                throw new Error(`File not found: ${filePath}`);
+            }
+
+            console.log('[VK] Getting upload server...');
+            const uploadResponse = await this.client.post('/video.save', null, {
+                params: {
+                    group_id: this.groupId,
+                    access_token: this.token,
+                    v: this.apiVersion,
+                }
+            });
+            
+            const uploadData = uploadResponse.data.response;
+            const uploadUrl = uploadData.upload_url;
+            console.log(`[VK] Upload URL: ${uploadUrl}`);
+            
+            console.log('[VK] Uploading video...');
+            const formData = new FormData();
+            formData.append('video_file', fs.createReadStream(filePath));
+            
+            const uploadResult = await axios.post(uploadUrl, formData, {
+                headers: {
+                    ...formData.getHeaders(),
+                },
+                maxBodyLength: Infinity,
+                maxContentLength: Infinity,
+                timeout: 600000,
+            });
+            
+            console.log('[VK] Upload response received');
+            
+            console.log('[VK] Saving video with private access...');
+            const data = uploadResult.data;
+            const saveResponse = await this.client.post('/video.save', null, {
+                params: {
+                    group_id: this.groupId,
+                    video_file: data.video_file,
+                    name: lessonTitle || 'Урок',
+                    description: 'Видео доступно только через бота',
+                    privacy_view: 'only_me',
+                    access_token: this.token,
+                    v: this.apiVersion,
+                }
+            });
+            
+            const video = saveResponse.data.response;
+            console.log(`[VK] ✅ Video saved: video${video.owner_id}_${video.video_id}`);
+            
+            return {
+                owner_id: video.owner_id,
+                video_id: video.video_id,
+                access_key: video.access_key || '',
+            };
+            
+        } catch (error) {
+            console.error('[VK] uploadPrivateVideo error:', error.message);
+            if (error.response) {
+                console.error('[VK] Response:', error.response.data);
+            }
+            throw error;
+        }
+    }
+
     async uploadFile(filePath, fileType = 'file') {
         console.log(`[VK] uploadFile called (stub) for ${filePath}`);
         return `vk_stub_token_${Date.now()}`;
@@ -195,9 +265,12 @@ class VKAPI {
 
 const adminSessions = new Map();
 
+// ============================================================
+// ОБРАБОТКА СООБЩЕНИЙ
+// ============================================================
+
 async function handleMessageNew(message) {
     try {
-        // ПРАВИЛЬНО ИЗВЛЕКАЕМ USER_ID И ТЕКСТ
         const userId = String(
             message.message?.from_id || 
             message.from_id || 
@@ -218,7 +291,6 @@ async function handleMessageNew(message) {
 
         const vkApi = new VKAPI();
 
-        // Регистрируем пользователя
         if (userId && userId !== 'undefined') {
             try {
                 await userService.registerUser({
@@ -237,13 +309,11 @@ async function handleMessageNew(message) {
             return;
         }
 
-        // Если есть payload - обрабатываем как callback
         if (payload) {
             await handleCallback(userId, payload, vkApi);
             return;
         }
 
-        // Команды
         if (text.startsWith('/start')) {
             await handleStartCommand(userId, vkApi);
         } else if (text.startsWith('/help')) {
@@ -264,7 +334,6 @@ async function handleMessageNew(message) {
 
 async function handleMessageEvent(event) {
     try {
-        // ПРАВИЛЬНО ИЗВЛЕКАЕМ USER_ID
         const userId = String(
             event.user_id || 
             event.message?.from_id || 
@@ -291,6 +360,7 @@ async function handleMessageEvent(event) {
         console.error('[VK EVENT] Error:', error);
     }
 }
+
 // ============================================================
 // ОБРАБОТЧИКИ КОМАНД (используют sharedFunctions)
 // ============================================================
@@ -372,7 +442,6 @@ async function handleTextMessage(chatId, text, vkApi) {
 async function handleCallback(chatId, payload, vkApi) {
     console.log(`[VK CALLBACK] chatId=${chatId}, payload=${payload}`);
 
-    // Админ-панель
     if (payload === 'admin_panel' || payload === 'admin_login') {
         const { showAdminLogin } = sharedFunctions;
         if (showAdminLogin) {
@@ -381,7 +450,6 @@ async function handleCallback(chatId, payload, vkApi) {
         return;
     }
 
-    // Проверяем админ-сессию
     const adminSession = adminSessions.get(chatId);
     if (adminSession && adminSession.mode === 'admin') {
         const { handleAdminCallback } = sharedFunctions;
@@ -391,7 +459,6 @@ async function handleCallback(chatId, payload, vkApi) {
         return;
     }
 
-    // Пользовательские команды
     const handlers = {
         'show_courses': async () => {
             const { showCourses } = sharedFunctions;
@@ -463,82 +530,7 @@ async function showAdminLogin(chatId, vkApi) {
         });
     }
 }
-// platforms/vk.js - ДОБАВИТЬ В КЛАСС VKAPI (перед module.exports)
 
-    // ============================================================
-    // ЗАГРУЗКА ПРИВАТНОГО ВИДЕО В VK
-    // ============================================================
-    
-    async uploadPrivateVideo(filePath, lessonTitle) {
-        try {
-            console.log(`[VK] Uploading private video: ${filePath}`);
-            
-            if (!fs.existsSync(filePath)) {
-                throw new Error(`File not found: ${filePath}`);
-            }
-
-            // 1. Получаем сервер для загрузки
-            console.log('[VK] Getting upload server...');
-            const uploadResponse = await this.client.post('/video.save', null, {
-                params: {
-                    group_id: this.groupId,
-                    access_token: this.token,
-                    v: this.apiVersion,
-                }
-            });
-            
-            const uploadData = uploadResponse.data.response;
-            const uploadUrl = uploadData.upload_url;
-            console.log(`[VK] Upload URL: ${uploadUrl}`);
-            
-            // 2. Загружаем видео на сервер VK
-            console.log('[VK] Uploading video...');
-            const formData = new FormData();
-            formData.append('video_file', fs.createReadStream(filePath));
-            
-            const uploadResult = await axios.post(uploadUrl, formData, {
-                headers: {
-                    ...formData.getHeaders(),
-                },
-                maxBodyLength: Infinity,
-                maxContentLength: Infinity,
-                timeout: 600000,
-            });
-            
-            console.log('[VK] Upload response received');
-            
-            // 3. Сохраняем видео с приватным доступом
-            console.log('[VK] Saving video with private access...');
-            const data = uploadResult.data;
-            const saveResponse = await this.client.post('/video.save', null, {
-                params: {
-                    group_id: this.groupId,
-                    video_file: data.video_file,
-                    name: lessonTitle || 'Урок',
-                    description: 'Видео доступно только через бота',
-                    privacy_view: 'only_me',
-                    access_token: this.token,
-                    v: this.apiVersion,
-                }
-            });
-            
-            const video = saveResponse.data.response;
-            console.log(`[VK] ✅ Video saved: video${video.owner_id}_${video.video_id}`);
-            
-            return {
-                owner_id: video.owner_id,
-                video_id: video.video_id,
-                access_key: video.access_key || '',
-            };
-            
-        } catch (error) {
-            console.error('[VK] uploadPrivateVideo error:', error.message);
-            if (error.response) {
-                console.error('[VK] Response:', error.response.data);
-            }
-            throw error;
-        }
-    }
 // ============================================================
 // ВЕБХУК ОБРАБОТЧИК
 // ============================================================
