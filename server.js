@@ -2332,7 +2332,7 @@ app.post('/webhook/vk', async (req, res) => {
         switch (type) {
             case 'confirmation':
                 console.log('[VK WEBHOOK] Confirmation request');
-                return res.send(config.vk.confirmationToken || 'test');
+                return res.send(config.vk.confirmationToken || '642837b1');
             
             case 'message_new':
                 res.send('ok');
