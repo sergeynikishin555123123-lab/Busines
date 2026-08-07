@@ -201,8 +201,9 @@ const adminSessions = new Map();
 
 async function handleMessageNew(message) {
     try {
-        const userId = String(message.from_id);
-        const text = message.text || '';
+        // 👇 ИСПРАВЛЕННЫЙ ПАРСИНГ
+        const userId = String(message.message?.from_id || message.from_id || message.user_id);
+        const text = message.message?.text || message.text || '';
         let payload = null;
 
         console.log(`[VK HANDLER] Message from ${userId}: "${text}"`);
