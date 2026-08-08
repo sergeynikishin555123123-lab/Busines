@@ -241,23 +241,26 @@ async function initPostgreSQLTables() {
 
         // Таблица файлов уроков
         await pgClient.query(`
-            CREATE TABLE IF NOT EXISTS lesson_files (
-                id VARCHAR(36) PRIMARY KEY,
-                lesson_id VARCHAR(36) REFERENCES lessons(id) ON DELETE CASCADE,
-                type VARCHAR(50) NOT NULL,
-                filename VARCHAR(255) NOT NULL,
-                original_name VARCHAR(255),
-                size BIGINT DEFAULT 0,
-                mime_type VARCHAR(255),
-                path TEXT,
-                url TEXT,
-                token TEXT,
-                is_max_uploaded BOOLEAN DEFAULT FALSE,
-                hash TEXT,
-                duration INTEGER,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        `);
+    CREATE TABLE IF NOT EXISTS lesson_files (
+        id VARCHAR(36) PRIMARY KEY,
+        lesson_id VARCHAR(36) REFERENCES lessons(id) ON DELETE CASCADE,
+        type VARCHAR(50) NOT NULL,
+        filename VARCHAR(255) NOT NULL,
+        original_name VARCHAR(255),
+        size BIGINT DEFAULT 0,
+        mime_type VARCHAR(255),
+        path TEXT,
+        url TEXT,
+        token TEXT,
+        vk_owner_id VARCHAR(50),                 -- 👈 ДОБАВЛЕНО
+        vk_video_id VARCHAR(50),                 -- 👈 ДОБАВЛЕНО
+        vk_access_key VARCHAR(50),               -- 👈 ДОБАВЛЕНО
+        is_max_uploaded BOOLEAN DEFAULT FALSE,
+        hash TEXT,
+        duration INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+`);
 
         // Таблица тестов
         await pgClient.query(`
@@ -829,6 +832,8 @@ async function handleMessageCallback(update) {
 // VK МОДУЛЬ
 // ============================================================
 
+// server.js - Убедитесь, что этот блок существует и корректен
+
 const vkModule = require('./platforms/vk');
 
 // Передаем общие функции в VK модуль
@@ -844,6 +849,7 @@ vkModule.setSharedFunctions({
     handleAdminCommand,
     handleAdminCallback,
     handleAdminAttachment,
+    // 👇 ОБЯЗАТЕЛЬНО ДОБАВЬТЕ ЭТИ ФУНКЦИИ
     showAdminDashboard,
     showAdminLessonDetail,
     handleAdminEditLessons,
