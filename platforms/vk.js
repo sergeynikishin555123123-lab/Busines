@@ -694,8 +694,21 @@ async function showAdminDashboard(chatId, vkApi) {
             users = usersRes.rows || [];
         } else {
             courses = await courseService.getAllCourses(false);
-            lessons = database.readTable('lessons') || [];
-            users = database.readTable('users') || [];
+            // ГАРАНТИРУЕМ, ЧТО ЭТО МАССИВ
+            if (!Array.isArray(courses)) courses = [];
+            
+            lessons = database.readTable('lessons');
+            if (!Array.isArray(lessons)) {
+                console.warn('[VK] lessons is not an array in dashboard, resetting...');
+                lessons = [];
+                database.writeTable('lessons', lessons);
+            }
+            
+            users = database.readTable('users');
+            if (!Array.isArray(users)) {
+                users = [];
+                database.writeTable('users', users);
+            }
         }
         
         const text = `🔐 **Админ-панель**\n\n` +
@@ -717,11 +730,10 @@ async function showAdminDashboard(chatId, vkApi) {
         console.error('[VK] Error showing dashboard:', error);
         await vkApi.sendMessage({
             chatId: chatId,
-            text: '❌ Ошибка при загрузке админ-панели',
+            text: '❌ Ошибка при загрузке админ-панели: ' + error.message,
         });
     }
 }
-
 async function handleAdminCommand(chatId, text, vkApi) {
     console.log(`[VK ADMIN COMMAND] ${chatId}: "${text}"`);
     
@@ -851,28 +863,72 @@ async function handleAdminCallback(chatId, payload, vkApi) {
         return;
     }
     
+    // ============================================================
+    // ИСПРАВЛЕННЫЙ БЛОК: СПИСОК УРОКОВ
+    // ============================================================
     if (payload === 'admin_edit_lessons') {
-        let lessons = database.readTable('lessons') || [];
-        
-        if (lessons.length === 0) {
+        try {
+            // ГАРАНТИРУЕМ, ЧТО lessons - ЭТО МАССИВ
+            let lessons = database.readTable('lessons');
+            
+            // Если lessons не массив или null/undefined - создаем пустой массив
+            if (!Array.isArray(lessons)) {
+                console.warn('[VK] lessons is not an array, resetting...');
+                lessons = [];
+                // Сохраняем пустой массив в БД, чтобы исправить данные
+                database.writeTable('lessons', lessons);
+            }
+            
+            if (lessons.length === 0) {
+                await vkApi.sendMessage({
+                    chatId,
+                    text: '❌ Нет созданных уроков. Создайте урок через "Создать урок".',
+                });
+                return;
+            }
+            
+            let text = '📝 **Редактирование уроков**\n\nВыберите урок:\n\n';
+            const buttons = [];
+            let hasValidLessons = false;
+            
+            for (const lesson of lessons) {
+                // Проверяем, что урок валидный
+                if (!lesson || !lesson.id) continue;
+                hasValidLessons = true;
+                const title = lesson.title || 'Без названия';
+                text += `📖 ${title}\n`;
+                buttons.push([
+                    { 
+                        text: `✏️ ${title.substring(0, 25)}`, 
+                        payload: `admin_edit_lesson_${lesson.id}` 
+                    }
+                ]);
+            }
+            
+            if (!hasValidLessons || buttons.length === 0) {
+                await vkApi.sendMessage({
+                    chatId,
+                    text: '❌ Нет доступных уроков для редактирования.',
+                });
+                return;
+            }
+            
+            buttons.push([{ text: '⬅️ Назад', payload: 'admin_back' }]);
+            
+            await vkApi.sendKeyboard({ chatId, text, buttons });
+        } catch (error) {
+            console.error('[VK] Error in admin_edit_lessons:', error);
             await vkApi.sendMessage({
                 chatId,
-                text: '❌ Нет созданных уроков. Создайте урок через "Создать урок".',
+                text: `❌ Ошибка при загрузке уроков: ${error.message}`,
             });
-            return;
         }
-        
-        let text = '📝 **Редактирование уроков**\n\nВыберите урок:\n\n';
-        const buttons = [];
-        for (const lesson of lessons) {
-            text += `📖 ${lesson.title}\n`;
-            buttons.push([{ text: `✏️ ${lesson.title.substring(0, 25)}`, payload: `admin_edit_lesson_${lesson.id}` }]);
-        }
-        buttons.push([{ text: '⬅️ Назад', payload: 'admin_back' }]);
-        
-        await vkApi.sendKeyboard({ chatId, text, buttons });
         return;
     }
+    
+    // ============================================================
+    // ОСТАЛЬНЫЕ ОБРАБОТЧИКИ ОСТАЮТСЯ БЕЗ ИЗМЕНЕНИЙ
+    // ============================================================
     
     if (payload.startsWith('admin_edit_lesson_')) {
         const lessonId = payload.replace('admin_edit_lesson_', '');
