@@ -324,7 +324,9 @@ async function handleMessageNew(message) {
             } catch (e) {}
         }
 
-        const vkApi = new VKAPI();
+       const { VKAPI } = require('./platforms/vk');
+const vkApi = new VKAPI();
+vkVideo = await vkApi.uploadPrivateVideo(localFilePath, 'Урок');
 
         if (userId && userId !== 'undefined') {
             try {
@@ -455,12 +457,11 @@ async function handleTextMessage(chatId, text, vkApi) {
     // Если пользователь вводит пароль
     if (adminSession && adminSession.mode === 'awaiting_password') {
         console.log(`[VK TEXT] Processing admin password`);
-        // 👇 ИСПОЛЬЗУЙТЕ sharedFunctions для вызова
         const { handleAdminPassword } = sharedFunctions;
         if (handleAdminPassword) {
             await handleAdminPassword(chatId, text, vkApi);
         } else {
-            console.error('[VK TEXT] handleAdminPassword not found in sharedFunctions');
+            console.error('[VK TEXT] handleAdminPassword not found');
             await vkApi.sendMessage({
                 chatId,
                 text: '❌ Ошибка: обработчик пароля не найден',
@@ -470,26 +471,17 @@ async function handleTextMessage(chatId, text, vkApi) {
         return;
     }
 
-
-
     // Если пользователь уже в админ-режиме
     if (adminSession && adminSession.mode === 'admin') {
         console.log(`[VK TEXT] Admin mode active, forwarding to admin handler`);
         const { handleAdminCommand } = sharedFunctions;
         if (handleAdminCommand) {
             await handleAdminCommand(chatId, text, vkApi);
-        } else {
-            console.error('[VK TEXT] handleAdminCommand not found');
-            await vkApi.sendMessage({
-                chatId,
-                text: '❌ Ошибка: админ-обработчик не найден',
-            });
         }
         return;
     }
 
-    // Обычное текстовое сообщение пользователя
-    console.log(`[VK TEXT] User text: "${text}"`);
+    // Обычное сообщение пользователя
     const { checkUserHasPaidAccess } = sharedFunctions;
     const hasAccess = checkUserHasPaidAccess ? await checkUserHasPaidAccess(chatId) : false;
 
@@ -531,7 +523,7 @@ async function handleCallback(chatId, payload, vkApi) {
         return;
     }
 
-    // Если пользователь вводит пароль
+    // Если пользователь в процессе ввода пароля
     if (adminSession && adminSession.mode === 'awaiting_password') {
         console.log(`[VK CALLBACK] Awaiting password, ignoring callback`);
         await vkApi.sendMessage({
@@ -547,11 +539,6 @@ async function handleCallback(chatId, payload, vkApi) {
         const { showAdminLogin } = sharedFunctions;
         if (showAdminLogin) {
             await showAdminLogin(chatId, vkApi);
-        } else {
-            await vkApi.sendMessage({
-                chatId,
-                text: `🔐 Админ-панель\n\nВведите /admin для входа.`,
-            });
         }
         return;
     }
