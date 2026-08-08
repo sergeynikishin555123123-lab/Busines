@@ -1191,20 +1191,72 @@ async function sendLessonToUser(chatId, lessonId, api) {
         }
 
         // ============================================================
-        // 2. ОТПРАВЛЯЕМ ВИДЕО
-        // ============================================================
-        if (videoFile) {
-            try {
-                if (isVK) {
-                    // ДЛЯ VK — используем VK ID видео
-                    const ownerId = videoFile.vk_owner_id;
-                    const videoId = videoFile.vk_video_id;
-                    const accessKey = videoFile.vk_access_key;
+// 2. ОТПРАВЛЯЕМ ВИДЕО
+// ============================================================
+if (videoFile) {
+    try {
+        if (isVK) {
+            // ДЛЯ VK — используем VK ID видео
+            const ownerId = videoFile.vk_owner_id;
+            const videoId = videoFile.vk_video_id;
+            const accessKey = videoFile.vk_access_key;
+            
+            if (ownerId && videoId) {
+                const attachment = accessKey 
+                    ? `video${ownerId}_${videoId}_${accessKey}`
+                    : `video${ownerId}_${videoId}`;
+                
+                await api.sendMessage({
+                    chatId: chatId,
+                    text: `🎬 **${lesson.title}**\n\n${lesson.description || ''}`,
+                    attachments: [attachment],
+                    parseMode: 'markdown',
+                });
+                console.log(`[LESSON] ✅ Video sent to VK: ${attachment}`);
+            } else {
+                // Если нет VK ID — пробуем загрузить сейчас из локального файла
+                console.log(`[LESSON] No VK ID, attempting to upload to VK...`);
+                
+                try {
+                    // Пытаемся найти локальный файл
+                    let localFilePath = null;
                     
-                    if (ownerId && videoId) {
-                        const attachment = accessKey 
-                            ? `video${ownerId}_${videoId}_${accessKey}`
-                            : `video${ownerId}_${videoId}`;
+                    // Проверяем path
+                    if (videoFile.path && fs.existsSync(videoFile.path)) {
+                        localFilePath = videoFile.path;
+                    }
+                    // Проверяем локальный путь в uploads
+                    else if (videoFile.url) {
+                        const urlPath = videoFile.url.replace(/^\/uploads\//, '');
+                        const fullPath = path.join(UPLOADS_DIR, urlPath);
+                        if (fs.existsSync(fullPath)) {
+                            localFilePath = fullPath;
+                        }
+                    }
+                    
+                    if (localFilePath) {
+                        // Загружаем в VK
+                        const vkApi = new VKAPI();
+                        const vkResult = await vkApi.uploadPrivateVideo(localFilePath, lesson.title);
+                        
+                        // Сохраняем VK ID в БД
+                        await lessonService.addLessonFile(lesson.id, {
+                            filename: videoFile.filename,
+                            originalname: videoFile.originalname,
+                            size: videoFile.size,
+                            mimetype: videoFile.mimetype,
+                            path: videoFile.path,
+                            token: videoFile.token,
+                            vk_owner_id: vkResult.owner_id,
+                            vk_video_id: vkResult.video_id,
+                            vk_access_key: vkResult.access_key,
+                            is_max_uploaded: true,
+                            type: 'video',
+                        });
+                        
+                        const attachment = vkResult.access_key 
+                            ? `video${vkResult.owner_id}_${vkResult.video_id}_${vkResult.access_key}`
+                            : `video${vkResult.owner_id}_${vkResult.video_id}`;
                         
                         await api.sendMessage({
                             chatId: chatId,
@@ -1212,79 +1264,24 @@ async function sendLessonToUser(chatId, lessonId, api) {
                             attachments: [attachment],
                             parseMode: 'markdown',
                         });
-                        console.log(`[LESSON] ✅ Video sent to VK: ${attachment}`);
+                        console.log(`[LESSON] ✅ Video uploaded to VK from local file`);
                     } else {
-                        // Если нет VK ID — пробуем загрузить сейчас
-                        console.log(`[LESSON] No VK ID, attempting to upload to VK...`);
-                        
-                        try {
-                            if (videoFile.token) {
-                                // Скачиваем видео из MAX
-                                const downloadUrl = `${config.max.baseUrl}/files/${videoFile.token}`;
-                                const response = await axios.get(downloadUrl, {
-                                    responseType: 'arraybuffer',
-                                    timeout: 300000,
-                                    headers: { 'Authorization': config.max.token }
-                                });
-                                
-                                const tempDir = path.join(UPLOADS_DIR, 'temp');
-                                if (!fs.existsSync(tempDir)) {
-                                    fs.mkdirSync(tempDir, { recursive: true });
-                                }
-                                
-                                const tempPath = path.join(tempDir, `${Date.now()}-video.mp4`);
-                                fs.writeFileSync(tempPath, Buffer.from(response.data));
-                                
-                                // Загружаем в VK
-                                const vkApi = new VKAPI();
-                                const vkResult = await vkApi.uploadPrivateVideo(tempPath, lesson.title);
-                                
-                                // Сохраняем VK ID в БД
-                                await lessonService.addLessonFile(lesson.id, {
-                                    filename: videoFile.filename,
-                                    originalname: videoFile.originalname,
-                                    size: videoFile.size,
-                                    mimetype: videoFile.mimetype,
-                                    path: videoFile.path,
-                                    token: videoFile.token,
-                                    vk_owner_id: vkResult.owner_id,
-                                    vk_video_id: vkResult.video_id,
-                                    vk_access_key: vkResult.access_key,
-                                    is_max_uploaded: true,
-                                    type: 'video',
-                                });
-                                
-                                fs.unlinkSync(tempPath);
-                                
-                                const attachment = vkResult.access_key 
-                                    ? `video${vkResult.owner_id}_${vkResult.video_id}_${vkResult.access_key}`
-                                    : `video${vkResult.owner_id}_${vkResult.video_id}`;
-                                
-                                await api.sendMessage({
-                                    chatId: chatId,
-                                    text: `🎬 **${lesson.title}**\n\n${lesson.description || ''}`,
-                                    attachments: [attachment],
-                                    parseMode: 'markdown',
-                                });
-                                console.log(`[LESSON] ✅ Video uploaded and sent to VK`);
-                            } else {
-                                await api.sendMessage({
-                                    chatId: chatId,
-                                    text: `📖 **${lesson.title}**\n\n${lesson.description || ''}\n\n⚠️ Видео недоступно в VK.`,
-                                    parseMode: 'markdown',
-                                });
-                            }
-                        } catch (uploadError) {
-                            console.error('[LESSON] Failed to upload video to VK:', uploadError.message);
-                            await api.sendMessage({
-                                chatId: chatId,
-                                text: `📖 **${lesson.title}**\n\n${lesson.description || ''}\n\n⚠️ Видео недоступно в VK.`,
-                                parseMode: 'markdown',
-                            });
-                        }
+                        await api.sendMessage({
+                            chatId: chatId,
+                            text: `📖 **${lesson.title}**\n\n${lesson.description || ''}\n\n⚠️ Видео недоступно в VK.`,
+                            parseMode: 'markdown',
+                        });
                     }
-                } else {
-                    // ДЛЯ MAX — ОТПРАВЛЯЕМ ПО ТОКЕНУ
+                } catch (uploadError) {
+                    console.error('[LESSON] Failed to upload video to VK:', uploadError.message);
+                    await api.sendMessage({
+                        chatId: chatId,
+                        text: `📖 **${lesson.title}**\n\n${lesson.description || ''}\n\n⚠️ Видео недоступно в VK.`,
+                        parseMode: 'markdown',
+                    });
+                }
+            }
+        } else {
                     if (videoFile.token && api.sendVideoByToken) {
                         await api.sendVideoByToken({
                             chatId: chatId,
