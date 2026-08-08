@@ -192,77 +192,101 @@ class VKAPI {
         });
     }
 
-    // ============================================================
-    // ЗАГРУЗКА ПРИВАТНОГО ВИДЕО В VK
-    // ============================================================
-    
     async uploadPrivateVideo(filePath, lessonTitle) {
-        try {
-            console.log(`[VK] Uploading private video: ${filePath}`);
-            
-            if (!fs.existsSync(filePath)) {
-                throw new Error(`File not found: ${filePath}`);
-            }
-
-            console.log('[VK] Getting upload server...');
-            const uploadResponse = await this.client.post('/video.save', null, {
-                params: {
-                    group_id: this.groupId,
-                    access_token: this.token,
-                    v: this.apiVersion,
-                }
-            });
-            
-            const uploadData = uploadResponse.data.response;
-            const uploadUrl = uploadData.upload_url;
-            console.log(`[VK] Upload URL: ${uploadUrl}`);
-            
-            console.log('[VK] Uploading video...');
-            const formData = new FormData();
-            formData.append('video_file', fs.createReadStream(filePath));
-            
-            const uploadResult = await axios.post(uploadUrl, formData, {
-                headers: {
-                    ...formData.getHeaders(),
-                },
-                maxBodyLength: Infinity,
-                maxContentLength: Infinity,
-                timeout: 600000,
-            });
-            
-            console.log('[VK] Upload response received');
-            
-            console.log('[VK] Saving video with private access...');
-            const data = uploadResult.data;
-            const saveResponse = await this.client.post('/video.save', null, {
-                params: {
-                    group_id: this.groupId,
-                    video_file: data.video_file,
-                    name: lessonTitle || 'Урок',
-                    description: 'Видео доступно только через бота',
-                    privacy_view: 'only_me',
-                    access_token: this.token,
-                    v: this.apiVersion,
-                }
-            });
-            
-            const video = saveResponse.data.response;
-            console.log(`[VK] ✅ Video saved: video${video.owner_id}_${video.video_id}`);
-            
-            return {
-                owner_id: video.owner_id,
-                video_id: video.video_id,
-                access_key: video.access_key || '',
-            };
-            
-        } catch (error) {
-            console.error('[VK] uploadPrivateVideo error:', error.message);
-            if (error.response) {
-                console.error('[VK] Response:', error.response.data);
-            }
-            throw error;
+    try {
+        console.log(`[VK] Uploading private video: ${filePath}`);
+        
+        if (!fs.existsSync(filePath)) {
+            throw new Error(`File not found: ${filePath}`);
         }
+
+        // Проверяем размер
+        const stats = fs.statSync(filePath);
+        const fileSizeInMB = stats.size / (1024 * 1024);
+        console.log(`[VK] File size: ${fileSizeInMB.toFixed(2)} MB`);
+
+        if (fileSizeInMB > 250) {
+            throw new Error(`Video too large: ${fileSizeInMB.toFixed(2)} MB (max 250 MB)`);
+        }
+
+        // Получаем сервер для загрузки
+        console.log('[VK] Getting upload server...');
+        const uploadResponse = await this.client.post('/video.save', null, {
+            params: {
+                group_id: this.groupId,
+                access_token: this.token,
+                v: this.apiVersion,
+            }
+        });
+        
+        const uploadData = uploadResponse.data.response;
+        if (!uploadData) {
+            throw new Error('No upload data received from VK');
+        }
+        
+        const uploadUrl = uploadData.upload_url;
+        console.log(`[VK] Upload URL: ${uploadUrl}`);
+        
+        // Загружаем видео
+        console.log('[VK] Uploading video...');
+        const formData = new FormData();
+        formData.append('video_file', fs.createReadStream(filePath));
+        
+        const uploadResult = await axios.post(uploadUrl, formData, {
+            headers: {
+                ...formData.getHeaders(),
+            },
+            maxBodyLength: Infinity,
+            maxContentLength: Infinity,
+            timeout: 600000,
+        });
+        
+        console.log('[VK] Upload response received');
+        
+        // Сохраняем видео
+        console.log('[VK] Saving video with private access...');
+        const data = uploadResult.data;
+        
+        if (!data.video_file) {
+            console.error('[VK] Upload response missing video_file:', data);
+            throw new Error('No video_file in upload response');
+        }
+        
+        const saveResponse = await this.client.post('/video.save', null, {
+            params: {
+                group_id: this.groupId,
+                video_file: data.video_file,
+                name: lessonTitle || 'Урок',
+                description: 'Видео доступно только через бота',
+                privacy_view: 'only_me',
+                access_token: this.token,
+                v: this.apiVersion,
+            }
+        });
+        
+        const video = saveResponse.data.response;
+        if (!video) {
+            console.error('[VK] Save response missing video:', saveResponse.data);
+            throw new Error('No video in save response');
+        }
+        
+        console.log(`[VK] ✅ Video saved: video${video.owner_id}_${video.video_id}`);
+        
+        return {
+            owner_id: video.owner_id,
+            video_id: video.video_id,
+            access_key: video.access_key || '',
+        };
+        
+    } catch (error) {
+        console.error('[VK] uploadPrivateVideo error:', error.message);
+        if (error.response) {
+            console.error('[VK] Response status:', error.response.status);
+            console.error('[VK] Response data:', error.response.data);
+        }
+        throw error;
     }
+}
 
     async uploadFile(filePath, fileType = 'file') {
         console.log(`[VK] uploadFile called (stub) for ${filePath}`);
