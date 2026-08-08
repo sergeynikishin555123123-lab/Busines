@@ -504,14 +504,12 @@ async function handleCallback(chatId, payload, vkApi) {
 
     const adminSession = adminSessions.get(chatId);
     
-    // ✅ Если есть активная админ-сессия - передаем управление админ-обработчику
     if (adminSession && adminSession.mode === 'admin') {
         console.log(`[VK CALLBACK] ✅ Admin mode active for ${chatId}`);
         await handleAdminCallback(chatId, payload, vkApi);
         return;
     }
 
-    // Если ожидается пароль - игнорируем callback
     if (adminSession && adminSession.mode === 'awaiting_password') {
         console.log(`[VK CALLBACK] Awaiting password, ignoring callback`);
         await vkApi.sendMessage({
@@ -521,14 +519,12 @@ async function handleCallback(chatId, payload, vkApi) {
         return;
     }
 
-    // Обработка входа в админку
     if (payload === 'admin_panel' || payload === 'admin_login') {
         console.log(`[VK CALLBACK] Admin login requested`);
         await showAdminLogin(chatId, vkApi);
         return;
     }
 
-    // Обычные пользовательские callback
     console.log(`[VK CALLBACK] User callback: ${payload}`);
     const handlers = {
         'show_courses': async () => {
@@ -580,7 +576,6 @@ async function handleCallback(chatId, payload, vkApi) {
         return;
     }
 
-    // Если ничего не подошло
     await vkApi.sendMessage({
         chatId,
         text: `✅ Вы выбрали: ${payload}`,
@@ -588,7 +583,7 @@ async function handleCallback(chatId, payload, vkApi) {
 }
 
 // ============================================================
-// АДМИН-ФУНКЦИИ (ИСПРАВЛЕННЫЕ)
+// АДМИН-ФУНКЦИИ
 // ============================================================
 
 async function showAdminLogin(chatId, vkApi) {
@@ -611,10 +606,6 @@ async function showAdminLogin(chatId, vkApi) {
     });
 }
 
-// ============================================================
-// ОБРАБОТКА ПАРОЛЯ АДМИНА (ИСПРАВЛЕННАЯ)
-// ============================================================
-
 async function handleAdminPassword(chatId, password, vkApi) {
     console.log(`[VK] handleAdminPassword called for ${chatId}`);
     
@@ -623,16 +614,13 @@ async function handleAdminPassword(chatId, password, vkApi) {
         let admin = null;
         let admins = [];
 
-        // 1. Пытаемся получить список админов из PostgreSQL или JSON
         if (pgConnected && pgClient) {
             const result = await pgClient.query('SELECT * FROM admins');
-            admins = result.rows || []; // Всегда гарантируем массив
+            admins = result.rows || [];
         } else {
-            // Используем JSON как fallback
-            admins = database.readTable('admins') || []; // Всегда гарантируем массив
+            admins = database.readTable('admins') || [];
         }
 
-        // 2. Проверяем, есть ли вообще администраторы
         if (admins.length === 0) {
             console.error('[VK] No admins found in database!');
             await vkApi.sendMessage({
@@ -643,9 +631,7 @@ async function handleAdminPassword(chatId, password, vkApi) {
             return;
         }
 
-        // 3. Ищем совпадение по паролю
         for (const a of admins) {
-            // Убедимся, что у админа есть хэш пароля
             if (a.password_hash && await bcrypt.compare(password, a.password_hash)) {
                 admin = a;
                 break;
@@ -661,7 +647,6 @@ async function handleAdminPassword(chatId, password, vkApi) {
             return;
         }
 
-        // 4. Успешный вход
         adminSessions.set(chatId, {
             mode: 'admin',
             adminId: admin.id,
@@ -690,10 +675,6 @@ async function handleAdminPassword(chatId, password, vkApi) {
     }
 }
 
-// ============================================================
-// АДМИН-ПАНЕЛЬ
-// ============================================================
-
 async function showAdminDashboard(chatId, vkApi) {
     try {
         const session = adminSessions.get(chatId);
@@ -702,7 +683,6 @@ async function showAdminDashboard(chatId, vkApi) {
             return;
         }
         
-        // Получаем статистику
         let courses = [], lessons = [], users = [];
         
         if (pgConnected && pgClient) {
@@ -742,10 +722,6 @@ async function showAdminDashboard(chatId, vkApi) {
     }
 }
 
-// ============================================================
-// ОБРАБОТКА АДМИН-КОМАНД
-// ============================================================
-
 async function handleAdminCommand(chatId, text, vkApi) {
     console.log(`[VK ADMIN COMMAND] ${chatId}: "${text}"`);
     
@@ -757,7 +733,6 @@ async function handleAdminCommand(chatId, text, vkApi) {
     
     const context = session.context || '';
     
-    // Создание урока - шаг 1: название
     if (context === 'creating_lesson') {
         session.lessonTitle = text;
         session.context = 'creating_lesson_desc';
@@ -768,12 +743,10 @@ async function handleAdminCommand(chatId, text, vkApi) {
         return;
     }
     
-    // Создание урока - шаг 2: описание
     if (context === 'creating_lesson_desc') {
         const title = session.lessonTitle;
         const description = text;
         
-        // Получаем первый курс или создаем новый
         let courses = await courseService.getAllCourses(false);
         let courseId = courses?.[0]?.id;
         
@@ -806,7 +779,6 @@ async function handleAdminCommand(chatId, text, vkApi) {
         return;
     }
     
-    // Изменение названия урока
     if (context === 'editing_lesson_title') {
         const lessonId = session.lessonId;
         if (lessonId) {
@@ -821,7 +793,6 @@ async function handleAdminCommand(chatId, text, vkApi) {
         return;
     }
     
-    // Изменение описания урока
     if (context === 'editing_lesson_desc') {
         const lessonId = session.lessonId;
         if (lessonId) {
@@ -836,22 +807,16 @@ async function handleAdminCommand(chatId, text, vkApi) {
         return;
     }
     
-    // Обработка теста
     if (context === 'editing_test') {
         await handleTestCreation(chatId, text, vkApi);
         return;
     }
     
-    // Если ничего не подошло
     await vkApi.sendMessage({
         chatId,
         text: '❓ Неизвестная команда. Используйте кнопки меню.',
     });
 }
-
-// ============================================================
-// ОБРАБОТКА АДМИН-CALLBACK
-// ============================================================
 
 async function handleAdminCallback(chatId, payload, vkApi) {
     console.log(`[VK ADMIN CALLBACK] ${chatId}: ${payload}`);
@@ -862,7 +827,6 @@ async function handleAdminCallback(chatId, payload, vkApi) {
         return;
     }
     
-    // Выход
     if (payload === 'admin_logout') {
         adminSessions.delete(chatId);
         await vkApi.sendMessage({
@@ -872,14 +836,12 @@ async function handleAdminCallback(chatId, payload, vkApi) {
         return;
     }
     
-    // Назад
     if (payload === 'admin_back') {
         session.context = 'dashboard';
         await showAdminDashboard(chatId, vkApi);
         return;
     }
     
-    // Создание урока
     if (payload === 'admin_create_lesson') {
         session.context = 'creating_lesson';
         await vkApi.sendMessage({
@@ -889,7 +851,6 @@ async function handleAdminCallback(chatId, payload, vkApi) {
         return;
     }
     
-    // Список уроков
     if (payload === 'admin_edit_lessons') {
         let lessons = database.readTable('lessons') || [];
         
@@ -913,7 +874,6 @@ async function handleAdminCallback(chatId, payload, vkApi) {
         return;
     }
     
-    // Редактирование урока
     if (payload.startsWith('admin_edit_lesson_')) {
         const lessonId = payload.replace('admin_edit_lesson_', '');
         const lesson = await lessonService.getLessonWithFiles(lessonId);
@@ -950,7 +910,6 @@ async function handleAdminCallback(chatId, payload, vkApi) {
         return;
     }
     
-    // Изменить название урока
     if (payload.startsWith('admin_lesson_edit_title_')) {
         const lessonId = payload.replace('admin_lesson_edit_title_', '');
         session.lessonId = lessonId;
@@ -962,7 +921,6 @@ async function handleAdminCallback(chatId, payload, vkApi) {
         return;
     }
     
-    // Изменить описание урока
     if (payload.startsWith('admin_lesson_edit_desc_')) {
         const lessonId = payload.replace('admin_lesson_edit_desc_', '');
         session.lessonId = lessonId;
@@ -974,7 +932,6 @@ async function handleAdminCallback(chatId, payload, vkApi) {
         return;
     }
     
-    // Загрузить видео
     if (payload.startsWith('admin_lesson_video_')) {
         const lessonId = payload.replace('admin_lesson_video_', '');
         session.lessonId = lessonId;
@@ -986,7 +943,6 @@ async function handleAdminCallback(chatId, payload, vkApi) {
         return;
     }
     
-    // Загрузить файл
     if (payload.startsWith('admin_lesson_file_')) {
         const lessonId = payload.replace('admin_lesson_file_', '');
         session.lessonId = lessonId;
@@ -998,7 +954,6 @@ async function handleAdminCallback(chatId, payload, vkApi) {
         return;
     }
     
-    // Переключить бесплатный/платный
     if (payload.startsWith('admin_lesson_toggle_free_')) {
         const lessonId = payload.replace('admin_lesson_toggle_free_', '');
         const lesson = await lessonService.getLessonById(lessonId);
@@ -1013,7 +968,6 @@ async function handleAdminCallback(chatId, payload, vkApi) {
         return;
     }
     
-    // Редактировать тест
     if (payload.startsWith('admin_lesson_edit_test_')) {
         const lessonId = payload.replace('admin_lesson_edit_test_', '');
         session.lessonId = lessonId;
@@ -1043,7 +997,6 @@ async function handleAdminCallback(chatId, payload, vkApi) {
         return;
     }
     
-    // Удалить урок
     if (payload.startsWith('admin_lesson_delete_')) {
         const lessonId = payload.replace('admin_lesson_delete_', '');
         const lesson = await lessonService.getLessonById(lessonId);
@@ -1060,7 +1013,6 @@ async function handleAdminCallback(chatId, payload, vkApi) {
         return;
     }
     
-    // Подтверждение удаления
     if (payload.startsWith('admin_lesson_delete_confirm_')) {
         const lessonId = payload.replace('admin_lesson_delete_confirm_', '');
         await lessonService.deleteLesson(lessonId);
@@ -1072,7 +1024,6 @@ async function handleAdminCallback(chatId, payload, vkApi) {
         return;
     }
     
-    // Статистика
     if (payload === 'admin_stats') {
         let users = [], lessons = [], courses = [], payments = [], progress = [];
         
@@ -1113,10 +1064,6 @@ async function handleAdminCallback(chatId, payload, vkApi) {
     
     await showAdminDashboard(chatId, vkApi);
 }
-
-// ============================================================
-// ОБРАБОТКА СОЗДАНИЯ ТЕСТА
-// ============================================================
 
 async function handleTestCreation(chatId, text, vkApi) {
     try {
