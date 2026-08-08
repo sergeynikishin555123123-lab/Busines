@@ -11,6 +11,7 @@ const bcrypt = require('bcryptjs');
 const multer = require('multer');
 const crypto = require('crypto');
 const axios = require('axios');
+const { VKAPI } = require('./platforms/vk');
 const { Client } = require('pg');
 
 console.log('[STARTUP] ========================================');
@@ -1237,7 +1238,8 @@ if (videoFile) {
                     
                     if (localFilePath) {
                         // Загружаем в VK
-                        const vkApi = new VKAPI();
+                        const { VKAPI } = require('./platforms/vk');
+const vkApi = new VKAPI();
                         const vkResult = await vkApi.uploadPrivateVideo(localFilePath, lesson.title);
                         
                         // Сохраняем VK ID в БД
