@@ -162,14 +162,12 @@ async uploadFile(filePath, fileType = 'file') {
         const fileStats = fs.statSync(filePath);
         console.log(`[MAX] File size: ${fileStats.size} bytes`);
 
-        // ШАГ 1: Получаем URL для загрузки через /uploads?type={type}
-        // ПРАВИЛЬНЫЙ URL с параметром type
+        // ШАГ 1: Получаем URL для загрузки
         console.log(`[MAX] Step 1: Getting upload URL for type: ${fileType}`);
         const uploadResponse = await this.client.post(`/uploads?type=${fileType}`);
         
-        // В ответе приходит { url: "...", token: "..." } 
-        // Для видео/аудио token приходит сразу, для остальных - после загрузки
         const uploadUrl = uploadResponse.data.url;
+        // Для video/audio токен приходит сразу
         const initialToken = uploadResponse.data.token || null;
         
         console.log(`[MAX] Got upload URL: ${uploadUrl}`);
@@ -177,13 +175,12 @@ async uploadFile(filePath, fileType = 'file') {
             console.log(`[MAX] Initial token received: ${initialToken.substring(0, 20)}...`);
         }
 
-        // ШАГ 2: Загружаем файл по полученному URL с полем data
+        // ШАГ 2: Загружаем файл на полученный URL
         console.log(`[MAX] Step 2: Uploading file to: ${uploadUrl}`);
         
         const formData = new FormData();
         formData.append('data', fs.createReadStream(filePath));
 
-        // Для загрузки используем axios напрямую (не через client, т.к. URL другой)
         const uploadResult = await axios.post(uploadUrl, formData, {
             headers: {
                 ...formData.getHeaders(),
@@ -194,11 +191,13 @@ async uploadFile(filePath, fileType = 'file') {
             timeout: 600000,
         });
 
+        console.log('[MAX] Upload response received');
+
         // ШАГ 3: Получаем токен из ответа
-        // Для video/audio token уже был в первом ответе, для file/image - приходит сейчас
         let token = uploadResult.data.token || initialToken;
         
         if (!token) {
+            console.error('[MAX] Upload response:', JSON.stringify(uploadResult.data, null, 2));
             throw new Error('No token received from upload');
         }
 
@@ -217,7 +216,6 @@ async uploadFile(filePath, fileType = 'file') {
         throw error;
     }
 }
-
     // ============================================================
     // ОТПРАВКА ВИДЕО (через загрузку файла)
     // ============================================================
