@@ -167,7 +167,7 @@ class VKAPI {
     }
 
     // ============================================================
-    // ОТПРАВКА ВИДЕО/ФАЙЛОВ
+    // ОТПРАВКА ВИДЕО/ФАЙЛОВ (заглушки для VK)
     // ============================================================
 
     async sendVideoByToken({ chatId, token, caption = '', parseMode = 'html' }) {
@@ -504,12 +504,14 @@ async function handleCallback(chatId, payload, vkApi) {
 
     const adminSession = adminSessions.get(chatId);
     
+    // ✅ Если есть активная админ-сессия - передаем управление админ-обработчику
     if (adminSession && adminSession.mode === 'admin') {
         console.log(`[VK CALLBACK] ✅ Admin mode active for ${chatId}`);
         await handleAdminCallback(chatId, payload, vkApi);
         return;
     }
 
+    // Если ожидается пароль - игнорируем callback
     if (adminSession && adminSession.mode === 'awaiting_password') {
         console.log(`[VK CALLBACK] Awaiting password, ignoring callback`);
         await vkApi.sendMessage({
@@ -519,12 +521,14 @@ async function handleCallback(chatId, payload, vkApi) {
         return;
     }
 
+    // Обработка входа в админку
     if (payload === 'admin_panel' || payload === 'admin_login') {
         console.log(`[VK CALLBACK] Admin login requested`);
         await showAdminLogin(chatId, vkApi);
         return;
     }
 
+    // Обычные пользовательские callback
     console.log(`[VK CALLBACK] User callback: ${payload}`);
     const handlers = {
         'show_courses': async () => {
@@ -576,6 +580,7 @@ async function handleCallback(chatId, payload, vkApi) {
         return;
     }
 
+    // Если ничего не подошло
     await vkApi.sendMessage({
         chatId,
         text: `✅ Вы выбрали: ${payload}`,
@@ -583,7 +588,7 @@ async function handleCallback(chatId, payload, vkApi) {
 }
 
 // ============================================================
-// ПОКАЗ АДМИН-ЛОГИНА
+// АДМИН-ФУНКЦИИ (ИСПРАВЛЕННЫЕ)
 // ============================================================
 
 async function showAdminLogin(chatId, vkApi) {
@@ -616,34 +621,47 @@ async function handleAdminPassword(chatId, password, vkApi) {
     try {
         const bcrypt = require('bcryptjs');
         let admin = null;
-        
+        let admins = [];
+
+        // 1. Пытаемся получить список админов из PostgreSQL или JSON
         if (pgConnected && pgClient) {
             const result = await pgClient.query('SELECT * FROM admins');
-            for (const a of result.rows) {
-                if (await bcrypt.compare(password, a.password_hash)) {
-                    admin = a;
-                    break;
-                }
-            }
+            admins = result.rows || []; // Всегда гарантируем массив
         } else {
-            const admins = database.readTable('admins');
-            for (const a of admins) {
-                if (await bcrypt.compare(password, a.password_hash)) {
-                    admin = a;
-                    break;
-                }
+            // Используем JSON как fallback
+            admins = database.readTable('admins') || []; // Всегда гарантируем массив
+        }
+
+        // 2. Проверяем, есть ли вообще администраторы
+        if (admins.length === 0) {
+            console.error('[VK] No admins found in database!');
+            await vkApi.sendMessage({
+                chatId: chatId,
+                text: '❌ Администраторы не найдены. Обратитесь к разработчику.',
+            });
+            adminSessions.delete(chatId);
+            return;
+        }
+
+        // 3. Ищем совпадение по паролю
+        for (const a of admins) {
+            // Убедимся, что у админа есть хэш пароля
+            if (a.password_hash && await bcrypt.compare(password, a.password_hash)) {
+                admin = a;
+                break;
             }
         }
-        
+
         if (!admin) {
             adminSessions.delete(chatId);
             await vkApi.sendMessage({
-                chatId,
+                chatId: chatId,
                 text: '❌ **Неверный пароль!** Попробуйте снова через /admin',
             });
             return;
         }
-        
+
+        // 4. Успешный вход
         adminSessions.set(chatId, {
             mode: 'admin',
             adminId: admin.id,
@@ -652,21 +670,21 @@ async function handleAdminPassword(chatId, password, vkApi) {
             context: 'dashboard',
             created_at: Date.now()
         });
-        
+
         console.log(`[VK] ✅ Admin session saved for ${chatId}:`, adminSessions.get(chatId));
-        
+
         await vkApi.sendMessage({
-            chatId,
+            chatId: chatId,
             text: `✅ **Добро пожаловать в админ-панель, ${admin.login}!**`,
         });
-        
+
         await showAdminDashboard(chatId, vkApi);
-        
+
     } catch (error) {
         console.error('[VK] Error handling admin password:', error);
         adminSessions.delete(chatId);
         await vkApi.sendMessage({
-            chatId,
+            chatId: chatId,
             text: '❌ Ошибка при проверке пароля. Попробуйте позже.',
         });
     }
@@ -684,9 +702,27 @@ async function showAdminDashboard(chatId, vkApi) {
             return;
         }
         
+        // Получаем статистику
+        let courses = [], lessons = [], users = [];
+        
+        if (pgConnected && pgClient) {
+            const coursesRes = await pgClient.query('SELECT * FROM courses');
+            courses = coursesRes.rows || [];
+            const lessonsRes = await pgClient.query('SELECT * FROM lessons');
+            lessons = lessonsRes.rows || [];
+            const usersRes = await pgClient.query('SELECT * FROM users');
+            users = usersRes.rows || [];
+        } else {
+            courses = await courseService.getAllCourses(false);
+            lessons = database.readTable('lessons') || [];
+            users = database.readTable('users') || [];
+        }
+        
         const text = `🔐 **Админ-панель**\n\n` +
             `👤 ${session.login} (${session.role})\n` +
-            `📚 Управление контентом\n\n` +
+            `📚 Курсов: ${courses.length}\n` +
+            `📖 Уроков: ${lessons.length}\n` +
+            `👥 Пользователей: ${users.length}\n\n` +
             `Выберите действие:`;
         
         const buttons = [
@@ -699,6 +735,10 @@ async function showAdminDashboard(chatId, vkApi) {
         await vkApi.sendKeyboard({ chatId, text, buttons });
     } catch (error) {
         console.error('[VK] Error showing dashboard:', error);
+        await vkApi.sendMessage({
+            chatId: chatId,
+            text: '❌ Ошибка при загрузке админ-панели',
+        });
     }
 }
 
@@ -796,6 +836,13 @@ async function handleAdminCommand(chatId, text, vkApi) {
         return;
     }
     
+    // Обработка теста
+    if (context === 'editing_test') {
+        await handleTestCreation(chatId, text, vkApi);
+        return;
+    }
+    
+    // Если ничего не подошло
     await vkApi.sendMessage({
         chatId,
         text: '❓ Неизвестная команда. Используйте кнопки меню.',
@@ -844,8 +891,9 @@ async function handleAdminCallback(chatId, payload, vkApi) {
     
     // Список уроков
     if (payload === 'admin_edit_lessons') {
-        const lessons = database.readTable('lessons');
-        if (!lessons || lessons.length === 0) {
+        let lessons = database.readTable('lessons') || [];
+        
+        if (lessons.length === 0) {
             await vkApi.sendMessage({
                 chatId,
                 text: '❌ Нет созданных уроков. Создайте урок через "Создать урок".',
@@ -877,11 +925,14 @@ async function handleAdminCallback(chatId, payload, vkApi) {
         session.lessonId = lessonId;
         session.context = 'editing_lesson';
         
+        const hasVideo = lesson.files?.find(f => f.type === 'video');
+        const hasFile = lesson.files?.find(f => f.type === 'file');
+        
         const text = `📝 **${lesson.title}**\n\n` +
             `📝 Описание: ${lesson.description || 'Нет'}\n` +
             `🆓 ${lesson.is_free ? 'Бесплатный' : 'Платный'}\n` +
-            `🎬 Видео: ${lesson.files?.find(f => f.type === 'video') ? '✅ Есть' : '❌ Нет'}\n` +
-            `📎 Файлы: ${lesson.files?.filter(f => f.type !== 'video').length || 0}\n\n` +
+            `🎬 Видео: ${hasVideo ? '✅ Есть' : '❌ Нет'}\n` +
+            `📎 Файлы: ${hasFile ? '✅ Есть' : '❌ Нет'}\n\n` +
             `Выберите действие:`;
         
         const buttons = [
@@ -889,7 +940,7 @@ async function handleAdminCallback(chatId, payload, vkApi) {
             [{ text: '✏️ Изменить описание', payload: `admin_lesson_edit_desc_${lessonId}` }],
             [{ text: '🎬 Загрузить видео', payload: `admin_lesson_video_${lessonId}` }],
             [{ text: '📎 Загрузить файл', payload: `admin_lesson_file_${lessonId}` }],
-            [{ text: '🔄 Сделать бесплатным/платным', payload: `admin_lesson_toggle_free_${lessonId}` }],
+            [{ text: lesson.is_free ? '🔒 Сделать платным' : '🆓 Сделать бесплатным', payload: `admin_lesson_toggle_free_${lessonId}` }],
             [{ text: '📝 Редактировать тест', payload: `admin_lesson_edit_test_${lessonId}` }],
             [{ text: '🗑️ Удалить урок', payload: `admin_lesson_delete_${lessonId}` }],
             [{ text: '⬅️ Назад', payload: 'admin_edit_lessons' }]
@@ -957,7 +1008,6 @@ async function handleAdminCallback(chatId, payload, vkApi) {
                 chatId,
                 text: `🔄 Доступ изменен на: ${!lesson.is_free ? '🆓 Бесплатный' : '💰 Платный'}`,
             });
-            // Показываем снова редактирование урока
             await handleAdminCallback(chatId, `admin_edit_lesson_${lessonId}`, vkApi);
         }
         return;
@@ -993,12 +1043,6 @@ async function handleAdminCallback(chatId, payload, vkApi) {
         return;
     }
     
-    // Обработка теста из текстового сообщения
-    if (session.context === 'editing_test') {
-        await handleTestCreation(chatId, payload, vkApi);
-        return;
-    }
-    
     // Удалить урок
     if (payload.startsWith('admin_lesson_delete_')) {
         const lessonId = payload.replace('admin_lesson_delete_', '');
@@ -1030,19 +1074,34 @@ async function handleAdminCallback(chatId, payload, vkApi) {
     
     // Статистика
     if (payload === 'admin_stats') {
-        const users = database.readTable('users');
-        const lessons = database.readTable('lessons');
-        const courses = await courseService.getAllCourses(false);
-        const payments = database.readTable('payments');
-        const progress = database.readTable('progress');
+        let users = [], lessons = [], courses = [], payments = [], progress = [];
+        
+        if (pgConnected && pgClient) {
+            const usersRes = await pgClient.query('SELECT * FROM users');
+            users = usersRes.rows || [];
+            const lessonsRes = await pgClient.query('SELECT * FROM lessons');
+            lessons = lessonsRes.rows || [];
+            const coursesRes = await pgClient.query('SELECT * FROM courses');
+            courses = coursesRes.rows || [];
+            const paymentsRes = await pgClient.query('SELECT * FROM payments WHERE status = $1', ['success']);
+            payments = paymentsRes.rows || [];
+            const progressRes = await pgClient.query('SELECT * FROM progress WHERE status = $1', ['completed']);
+            progress = progressRes.rows || [];
+        } else {
+            users = database.readTable('users') || [];
+            lessons = database.readTable('lessons') || [];
+            courses = await courseService.getAllCourses(false);
+            payments = (database.readTable('payments') || []).filter(p => p.status === 'success');
+            progress = (database.readTable('progress') || []).filter(p => p.status === 'completed');
+        }
         
         const text = `📊 **Статистика**\n\n` +
-            `👤 Пользователей: ${users?.length || 0}\n` +
-            `📚 Курсов: ${courses?.length || 0}\n` +
-            `📖 Уроков: ${lessons?.length || 0}\n` +
-            `✅ Пройдено уроков: ${progress?.filter(p => p.status === 'completed').length || 0}\n` +
-            `💳 Оплат: ${payments?.filter(p => p.status === 'success').length || 0}\n` +
-            `💰 Выручка: ${payments?.filter(p => p.status === 'success').reduce((s, p) => s + (p.amount || 0), 0) || 0} ₽`;
+            `👤 Пользователей: ${users.length}\n` +
+            `📚 Курсов: ${courses.length}\n` +
+            `📖 Уроков: ${lessons.length}\n` +
+            `✅ Пройдено уроков: ${progress.length}\n` +
+            `💳 Оплат: ${payments.length}\n` +
+            `💰 Выручка: ${payments.reduce((s, p) => s + (p.amount || 0), 0)} ₽`;
         
         await vkApi.sendKeyboard({
             chatId,
