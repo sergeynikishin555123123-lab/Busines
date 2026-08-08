@@ -10,8 +10,13 @@ const config = require('../config');
 const logger = require('../logger');
 const database = require('../database');
 const userService = require('../core/user');
+const courseService = require('../core/course');
+const lessonService = require('../core/lesson');
+const paymentService = require('../core/payment');
 
-// 👇 ДОБАВЬТЕ ЭТИ ПЕРЕМЕННЫЕ СЮДА (после импортов)
+// ============================================================
+// ПЕРЕМЕННЫЕ ДЛЯ POSTGRESQL
+// ============================================================
 let pgClient = null;
 let pgConnected = false;
 
@@ -162,7 +167,7 @@ class VKAPI {
     }
 
     // ============================================================
-    // ЗАГЛУШКИ ДЛЯ ОТПРАВКИ ВИДЕО/ФАЙЛОВ (имитация MAX методов)
+    // ОТПРАВКА ВИДЕО/ФАЙЛОВ
     // ============================================================
 
     async sendVideoByToken({ chatId, token, caption = '', parseMode = 'html' }) {
@@ -192,6 +197,10 @@ class VKAPI {
         });
     }
 
+    // ============================================================
+    // ЗАГРУЗКА ВИДЕО В VK
+    // ============================================================
+
     async uploadPrivateVideo(filePath, lessonTitle) {
         try {
             console.log(`[VK] Uploading private video: ${filePath}`);
@@ -200,7 +209,6 @@ class VKAPI {
                 throw new Error(`File not found: ${filePath}`);
             }
 
-            // Проверяем размер
             const stats = fs.statSync(filePath);
             const fileSizeInMB = stats.size / (1024 * 1024);
             console.log(`[VK] File size: ${fileSizeInMB.toFixed(2)} MB`);
@@ -209,7 +217,6 @@ class VKAPI {
                 throw new Error(`Video too large: ${fileSizeInMB.toFixed(2)} MB (max 250 MB)`);
             }
 
-            // Получаем сервер для загрузки
             console.log('[VK] Getting upload server...');
             const uploadResponse = await this.client.post('/video.save', null, {
                 params: {
@@ -221,13 +228,13 @@ class VKAPI {
             
             const uploadData = uploadResponse.data.response;
             if (!uploadData) {
+                console.error('[VK] Upload response:', uploadResponse.data);
                 throw new Error('No upload data received from VK');
             }
             
             const uploadUrl = uploadData.upload_url;
             console.log(`[VK] Upload URL: ${uploadUrl}`);
             
-            // Загружаем видео
             console.log('[VK] Uploading video...');
             const formData = new FormData();
             formData.append('video_file', fs.createReadStream(filePath));
@@ -243,7 +250,6 @@ class VKAPI {
             
             console.log('[VK] Upload response received');
             
-            // Сохраняем видео
             console.log('[VK] Saving video with private access...');
             const data = uploadResult.data;
             
@@ -324,8 +330,6 @@ async function handleMessageNew(message) {
             } catch (e) {}
         }
 
-        // ✅ ИСПРАВЛЕНО: Удалена ошибочная строка с vkVideo
-        // Теперь просто создаем экземпляр VKAPI
         const vkApi = new VKAPI();
 
         if (userId && userId !== 'undefined') {
@@ -399,7 +403,7 @@ async function handleMessageEvent(event) {
 }
 
 // ============================================================
-// ОБРАБОТЧИКИ КОМАНД (используют sharedFunctions)
+// ОБРАБОТЧИКИ КОМАНД
 // ============================================================
 
 async function handleStartCommand(chatId, vkApi) {
@@ -449,39 +453,27 @@ async function handleCoursesCommand(chatId, vkApi) {
     }
 }
 
+// ============================================================
+// ОБРАБОТКА ТЕКСТОВЫХ СООБЩЕНИЙ
+// ============================================================
+
 async function handleTextMessage(chatId, text, vkApi) {
     console.log(`[VK TEXT] chatId=${chatId}, text="${text}"`);
     
     const adminSession = adminSessions.get(chatId);
     
-    // Если пользователь вводит пароль
     if (adminSession && adminSession.mode === 'awaiting_password') {
         console.log(`[VK TEXT] Processing admin password`);
-        const { handleAdminPassword } = sharedFunctions;
-        if (handleAdminPassword) {
-            await handleAdminPassword(chatId, text, vkApi);
-        } else {
-            console.error('[VK TEXT] handleAdminPassword not found');
-            await vkApi.sendMessage({
-                chatId,
-                text: '❌ Ошибка: обработчик пароля не найден',
-            });
-            adminSessions.delete(chatId);
-        }
+        await handleAdminPassword(chatId, text, vkApi);
         return;
     }
 
-    // Если пользователь уже в админ-режиме
     if (adminSession && adminSession.mode === 'admin') {
         console.log(`[VK TEXT] Admin mode active, forwarding to admin handler`);
-        const { handleAdminCommand } = sharedFunctions;
-        if (handleAdminCommand) {
-            await handleAdminCommand(chatId, text, vkApi);
-        }
+        await handleAdminCommand(chatId, text, vkApi);
         return;
     }
 
-    // Обычное сообщение пользователя
     const { checkUserHasPaidAccess } = sharedFunctions;
     const hasAccess = checkUserHasPaidAccess ? await checkUserHasPaidAccess(chatId) : false;
 
@@ -502,29 +494,22 @@ async function handleTextMessage(chatId, text, vkApi) {
     });
 }
 
+// ============================================================
+// ОБРАБОТКА CALLBACK
+// ============================================================
+
 async function handleCallback(chatId, payload, vkApi) {
     console.log(`[VK CALLBACK] chatId=${chatId}, payload=${payload}`);
+    console.log(`[VK CALLBACK] Current session:`, adminSessions.get(chatId));
 
-    // 👇 СНАЧАЛА ПРОВЕРЯЕМ АДМИН-СЕССИЮ
     const adminSession = adminSessions.get(chatId);
     
-    // Если пользователь уже в админ-режиме — ВСЕ callback идут в админ-обработчик
     if (adminSession && adminSession.mode === 'admin') {
-        console.log(`[VK CALLBACK] Admin mode active, forwarding to admin handler`);
-        const { handleAdminCallback } = sharedFunctions;
-        if (handleAdminCallback) {
-            await handleAdminCallback(chatId, payload, vkApi);
-        } else {
-            console.error('[VK CALLBACK] handleAdminCallback not found');
-            await vkApi.sendMessage({
-                chatId,
-                text: '❌ Ошибка: админ-обработчик не найден',
-            });
-        }
+        console.log(`[VK CALLBACK] ✅ Admin mode active for ${chatId}`);
+        await handleAdminCallback(chatId, payload, vkApi);
         return;
     }
 
-    // Если пользователь в процессе ввода пароля
     if (adminSession && adminSession.mode === 'awaiting_password') {
         console.log(`[VK CALLBACK] Awaiting password, ignoring callback`);
         await vkApi.sendMessage({
@@ -534,17 +519,12 @@ async function handleCallback(chatId, payload, vkApi) {
         return;
     }
 
-    // 👇 ТОЛЬКО ПОСЛЕ ПРОВЕРКИ АДМИН-СЕССИИ — обрабатываем вход
     if (payload === 'admin_panel' || payload === 'admin_login') {
         console.log(`[VK CALLBACK] Admin login requested`);
-        const { showAdminLogin } = sharedFunctions;
-        if (showAdminLogin) {
-            await showAdminLogin(chatId, vkApi);
-        }
+        await showAdminLogin(chatId, vkApi);
         return;
     }
 
-    // Остальные обработчики (пользовательские)
     console.log(`[VK CALLBACK] User callback: ${payload}`);
     const handlers = {
         'show_courses': async () => {
@@ -609,22 +589,12 @@ async function handleCallback(chatId, payload, vkApi) {
 async function showAdminLogin(chatId, vkApi) {
     console.log(`[VK] showAdminLogin called for ${chatId}`);
     
-    // Проверяем, не залогинен ли уже
     const session = adminSessions.get(chatId);
     if (session && session.mode === 'admin') {
-        const { showAdminDashboard } = sharedFunctions;
-        if (showAdminDashboard) {
-            await showAdminDashboard(chatId, vkApi);
-        } else {
-            await vkApi.sendMessage({
-                chatId,
-                text: '✅ Вы уже авторизованы как администратор.\n\nИспользуйте кнопки меню.',
-            });
-        }
+        await showAdminDashboard(chatId, vkApi);
         return;
     }
 
-    // Запрашиваем пароль
     adminSessions.set(chatId, { mode: 'awaiting_password' });
     
     await vkApi.sendKeyboard({
@@ -637,7 +607,7 @@ async function showAdminLogin(chatId, vkApi) {
 }
 
 // ============================================================
-// ОБРАБОТКА ПАРОЛЯ АДМИНА
+// ОБРАБОТКА ПАРОЛЯ АДМИНА (ИСПРАВЛЕННАЯ)
 // ============================================================
 
 async function handleAdminPassword(chatId, password, vkApi) {
@@ -646,9 +616,7 @@ async function handleAdminPassword(chatId, password, vkApi) {
     try {
         const bcrypt = require('bcryptjs');
         let admin = null;
-        let database = require('../database');
         
-        // Пробуем через PostgreSQL
         if (pgConnected && pgClient) {
             const result = await pgClient.query('SELECT * FROM admins');
             for (const a of result.rows) {
@@ -658,7 +626,6 @@ async function handleAdminPassword(chatId, password, vkApi) {
                 }
             }
         } else {
-            // Fallback на JSON
             const admins = database.readTable('admins');
             for (const a of admins) {
                 if (await bcrypt.compare(password, a.password_hash)) {
@@ -673,36 +640,27 @@ async function handleAdminPassword(chatId, password, vkApi) {
             await vkApi.sendMessage({
                 chatId,
                 text: '❌ **Неверный пароль!** Попробуйте снова через /admin',
-                parseMode: 'markdown',
             });
             return;
         }
         
-        // Сохраняем сессию
         adminSessions.set(chatId, {
             mode: 'admin',
             adminId: admin.id,
             login: admin.login,
             role: admin.role,
-            context: 'dashboard'
+            context: 'dashboard',
+            created_at: Date.now()
         });
+        
+        console.log(`[VK] ✅ Admin session saved for ${chatId}:`, adminSessions.get(chatId));
         
         await vkApi.sendMessage({
             chatId,
             text: `✅ **Добро пожаловать в админ-панель, ${admin.login}!**`,
-            parseMode: 'markdown',
         });
         
-        // Показываем админ-дашборд
-        const { showAdminDashboard } = sharedFunctions;
-        if (showAdminDashboard) {
-            await showAdminDashboard(chatId, vkApi);
-        } else {
-            await vkApi.sendMessage({
-                chatId,
-                text: '❌ Ошибка: админ-дашборд не найден',
-            });
-        }
+        await showAdminDashboard(chatId, vkApi);
         
     } catch (error) {
         console.error('[VK] Error handling admin password:', error);
@@ -710,6 +668,455 @@ async function handleAdminPassword(chatId, password, vkApi) {
         await vkApi.sendMessage({
             chatId,
             text: '❌ Ошибка при проверке пароля. Попробуйте позже.',
+        });
+    }
+}
+
+// ============================================================
+// АДМИН-ПАНЕЛЬ
+// ============================================================
+
+async function showAdminDashboard(chatId, vkApi) {
+    try {
+        const session = adminSessions.get(chatId);
+        if (!session || session.mode !== 'admin') {
+            await showAdminLogin(chatId, vkApi);
+            return;
+        }
+        
+        const text = `🔐 **Админ-панель**\n\n` +
+            `👤 ${session.login} (${session.role})\n` +
+            `📚 Управление контентом\n\n` +
+            `Выберите действие:`;
+        
+        const buttons = [
+            [{ text: '📖 Создать урок', payload: 'admin_create_lesson' }],
+            [{ text: '📝 Редактировать уроки', payload: 'admin_edit_lessons' }],
+            [{ text: '📊 Статистика', payload: 'admin_stats' }],
+            [{ text: '🚪 Выйти', payload: 'admin_logout' }]
+        ];
+        
+        await vkApi.sendKeyboard({ chatId, text, buttons });
+    } catch (error) {
+        console.error('[VK] Error showing dashboard:', error);
+    }
+}
+
+// ============================================================
+// ОБРАБОТКА АДМИН-КОМАНД
+// ============================================================
+
+async function handleAdminCommand(chatId, text, vkApi) {
+    console.log(`[VK ADMIN COMMAND] ${chatId}: "${text}"`);
+    
+    const session = adminSessions.get(chatId);
+    if (!session || session.mode !== 'admin') {
+        await showAdminLogin(chatId, vkApi);
+        return;
+    }
+    
+    const context = session.context || '';
+    
+    // Создание урока - шаг 1: название
+    if (context === 'creating_lesson') {
+        session.lessonTitle = text;
+        session.context = 'creating_lesson_desc';
+        await vkApi.sendMessage({
+            chatId,
+            text: `📝 **Создание урока: "${text}"**\n\nВведите описание урока:`,
+        });
+        return;
+    }
+    
+    // Создание урока - шаг 2: описание
+    if (context === 'creating_lesson_desc') {
+        const title = session.lessonTitle;
+        const description = text;
+        
+        // Получаем первый курс или создаем новый
+        let courses = await courseService.getAllCourses(false);
+        let courseId = courses?.[0]?.id;
+        
+        if (!courseId) {
+            const course = await courseService.createCourse({
+                title: 'Основной курс',
+                description: 'Все уроки',
+                price: 0,
+                isActive: true,
+            });
+            courseId = course.id;
+        }
+        
+        const lesson = await lessonService.createLesson({
+            courseId: courseId,
+            title: title,
+            description: description,
+            orderNumber: 0,
+            isFree: true,
+        });
+        
+        session.context = 'dashboard';
+        session.lessonId = lesson.id;
+        
+        await vkApi.sendMessage({
+            chatId,
+            text: `✅ **Урок создан!**\n\n📖 ${lesson.title}\n\nТеперь вы можете загрузить видео или файл.`,
+        });
+        await showAdminDashboard(chatId, vkApi);
+        return;
+    }
+    
+    // Изменение названия урока
+    if (context === 'editing_lesson_title') {
+        const lessonId = session.lessonId;
+        if (lessonId) {
+            await lessonService.updateLesson(lessonId, { title: text });
+            session.context = 'dashboard';
+            await vkApi.sendMessage({
+                chatId,
+                text: `✅ Название обновлено: "${text}"`,
+            });
+            await showAdminDashboard(chatId, vkApi);
+        }
+        return;
+    }
+    
+    // Изменение описания урока
+    if (context === 'editing_lesson_desc') {
+        const lessonId = session.lessonId;
+        if (lessonId) {
+            await lessonService.updateLesson(lessonId, { description: text });
+            session.context = 'dashboard';
+            await vkApi.sendMessage({
+                chatId,
+                text: '✅ Описание обновлено.',
+            });
+            await showAdminDashboard(chatId, vkApi);
+        }
+        return;
+    }
+    
+    await vkApi.sendMessage({
+        chatId,
+        text: '❓ Неизвестная команда. Используйте кнопки меню.',
+    });
+}
+
+// ============================================================
+// ОБРАБОТКА АДМИН-CALLBACK
+// ============================================================
+
+async function handleAdminCallback(chatId, payload, vkApi) {
+    console.log(`[VK ADMIN CALLBACK] ${chatId}: ${payload}`);
+    
+    const session = adminSessions.get(chatId);
+    if (!session || session.mode !== 'admin') {
+        await showAdminLogin(chatId, vkApi);
+        return;
+    }
+    
+    // Выход
+    if (payload === 'admin_logout') {
+        adminSessions.delete(chatId);
+        await vkApi.sendMessage({
+            chatId,
+            text: '🚪 Вы вышли из админ-панели.',
+        });
+        return;
+    }
+    
+    // Назад
+    if (payload === 'admin_back') {
+        session.context = 'dashboard';
+        await showAdminDashboard(chatId, vkApi);
+        return;
+    }
+    
+    // Создание урока
+    if (payload === 'admin_create_lesson') {
+        session.context = 'creating_lesson';
+        await vkApi.sendMessage({
+            chatId,
+            text: '📝 **Создание урока**\n\nВведите название урока:',
+        });
+        return;
+    }
+    
+    // Список уроков
+    if (payload === 'admin_edit_lessons') {
+        const lessons = database.readTable('lessons');
+        if (!lessons || lessons.length === 0) {
+            await vkApi.sendMessage({
+                chatId,
+                text: '❌ Нет созданных уроков. Создайте урок через "Создать урок".',
+            });
+            return;
+        }
+        
+        let text = '📝 **Редактирование уроков**\n\nВыберите урок:\n\n';
+        const buttons = [];
+        for (const lesson of lessons) {
+            text += `📖 ${lesson.title}\n`;
+            buttons.push([{ text: `✏️ ${lesson.title.substring(0, 25)}`, payload: `admin_edit_lesson_${lesson.id}` }]);
+        }
+        buttons.push([{ text: '⬅️ Назад', payload: 'admin_back' }]);
+        
+        await vkApi.sendKeyboard({ chatId, text, buttons });
+        return;
+    }
+    
+    // Редактирование урока
+    if (payload.startsWith('admin_edit_lesson_')) {
+        const lessonId = payload.replace('admin_edit_lesson_', '');
+        const lesson = await lessonService.getLessonWithFiles(lessonId);
+        if (!lesson) {
+            await vkApi.sendMessage({ chatId, text: '❌ Урок не найден' });
+            return;
+        }
+        
+        session.lessonId = lessonId;
+        session.context = 'editing_lesson';
+        
+        const text = `📝 **${lesson.title}**\n\n` +
+            `📝 Описание: ${lesson.description || 'Нет'}\n` +
+            `🆓 ${lesson.is_free ? 'Бесплатный' : 'Платный'}\n` +
+            `🎬 Видео: ${lesson.files?.find(f => f.type === 'video') ? '✅ Есть' : '❌ Нет'}\n` +
+            `📎 Файлы: ${lesson.files?.filter(f => f.type !== 'video').length || 0}\n\n` +
+            `Выберите действие:`;
+        
+        const buttons = [
+            [{ text: '✏️ Изменить название', payload: `admin_lesson_edit_title_${lessonId}` }],
+            [{ text: '✏️ Изменить описание', payload: `admin_lesson_edit_desc_${lessonId}` }],
+            [{ text: '🎬 Загрузить видео', payload: `admin_lesson_video_${lessonId}` }],
+            [{ text: '📎 Загрузить файл', payload: `admin_lesson_file_${lessonId}` }],
+            [{ text: '🔄 Сделать бесплатным/платным', payload: `admin_lesson_toggle_free_${lessonId}` }],
+            [{ text: '📝 Редактировать тест', payload: `admin_lesson_edit_test_${lessonId}` }],
+            [{ text: '🗑️ Удалить урок', payload: `admin_lesson_delete_${lessonId}` }],
+            [{ text: '⬅️ Назад', payload: 'admin_edit_lessons' }]
+        ];
+        
+        await vkApi.sendKeyboard({ chatId, text, buttons });
+        return;
+    }
+    
+    // Изменить название урока
+    if (payload.startsWith('admin_lesson_edit_title_')) {
+        const lessonId = payload.replace('admin_lesson_edit_title_', '');
+        session.lessonId = lessonId;
+        session.context = 'editing_lesson_title';
+        await vkApi.sendMessage({
+            chatId,
+            text: '✏️ Введите новое название урока:',
+        });
+        return;
+    }
+    
+    // Изменить описание урока
+    if (payload.startsWith('admin_lesson_edit_desc_')) {
+        const lessonId = payload.replace('admin_lesson_edit_desc_', '');
+        session.lessonId = lessonId;
+        session.context = 'editing_lesson_desc';
+        await vkApi.sendMessage({
+            chatId,
+            text: '✏️ Введите новое описание урока:',
+        });
+        return;
+    }
+    
+    // Загрузить видео
+    if (payload.startsWith('admin_lesson_video_')) {
+        const lessonId = payload.replace('admin_lesson_video_', '');
+        session.lessonId = lessonId;
+        session.context = 'uploading_video';
+        await vkApi.sendMessage({
+            chatId,
+            text: '🎬 **Загрузка видео**\n\nОтправьте видео файлом в этот чат.\n\nПоддерживаются: MP4, MOV, WEBM\nМаксимальный размер: 250MB',
+        });
+        return;
+    }
+    
+    // Загрузить файл
+    if (payload.startsWith('admin_lesson_file_')) {
+        const lessonId = payload.replace('admin_lesson_file_', '');
+        session.lessonId = lessonId;
+        session.context = 'uploading_file';
+        await vkApi.sendMessage({
+            chatId,
+            text: '📎 **Загрузка файла**\n\nОтправьте файл в этот чат.\n\nПоддерживаются: PDF, DOCX, ZIP, изображения',
+        });
+        return;
+    }
+    
+    // Переключить бесплатный/платный
+    if (payload.startsWith('admin_lesson_toggle_free_')) {
+        const lessonId = payload.replace('admin_lesson_toggle_free_', '');
+        const lesson = await lessonService.getLessonById(lessonId);
+        if (lesson) {
+            await lessonService.updateLesson(lessonId, { isFree: !lesson.is_free });
+            await vkApi.sendMessage({
+                chatId,
+                text: `🔄 Доступ изменен на: ${!lesson.is_free ? '🆓 Бесплатный' : '💰 Платный'}`,
+            });
+            // Показываем снова редактирование урока
+            await handleAdminCallback(chatId, `admin_edit_lesson_${lessonId}`, vkApi);
+        }
+        return;
+    }
+    
+    // Редактировать тест
+    if (payload.startsWith('admin_lesson_edit_test_')) {
+        const lessonId = payload.replace('admin_lesson_edit_test_', '');
+        session.lessonId = lessonId;
+        session.context = 'editing_test';
+        
+        const test = await lessonService.getLessonTest(lessonId);
+        if (test) {
+            let text = `📝 **Редактирование теста**\n\n`;
+            text += `Вопрос: ${test.question}\n\n`;
+            text += 'Варианты ответов:\n';
+            test.answers.forEach((a, i) => {
+                text += `${i + 1}. ${a.answer} ${a.is_correct ? '✅' : ''}\n`;
+            });
+            text += '\nОтправьте новый тест в формате:\n';
+            text += 'Вопрос: Текст вопроса\n';
+            text += '1. Ответ 1 (правильный)\n';
+            text += '2. Ответ 2\n';
+            text += '3. Ответ 3\n';
+            text += '4. Ответ 4';
+            await vkApi.sendMessage({ chatId, text });
+        } else {
+            await vkApi.sendMessage({
+                chatId,
+                text: '📝 **Создание теста**\n\nОтправьте тест в формате:\n\nВопрос: Текст вопроса\n1. Ответ 1 (правильный)\n2. Ответ 2\n3. Ответ 3\n4. Ответ 4',
+            });
+        }
+        return;
+    }
+    
+    // Обработка теста из текстового сообщения
+    if (session.context === 'editing_test') {
+        await handleTestCreation(chatId, payload, vkApi);
+        return;
+    }
+    
+    // Удалить урок
+    if (payload.startsWith('admin_lesson_delete_')) {
+        const lessonId = payload.replace('admin_lesson_delete_', '');
+        const lesson = await lessonService.getLessonById(lessonId);
+        if (lesson) {
+            await vkApi.sendKeyboard({
+                chatId,
+                text: `⚠️ **Удалить урок "${lesson.title}"?**`,
+                buttons: [
+                    [{ text: '✅ Да', payload: `admin_lesson_delete_confirm_${lessonId}` }],
+                    [{ text: '❌ Нет', payload: `admin_edit_lesson_${lessonId}` }]
+                ],
+            });
+        }
+        return;
+    }
+    
+    // Подтверждение удаления
+    if (payload.startsWith('admin_lesson_delete_confirm_')) {
+        const lessonId = payload.replace('admin_lesson_delete_confirm_', '');
+        await lessonService.deleteLesson(lessonId);
+        await vkApi.sendMessage({
+            chatId,
+            text: '🗑️ Урок удален.',
+        });
+        await handleAdminCallback(chatId, 'admin_edit_lessons', vkApi);
+        return;
+    }
+    
+    // Статистика
+    if (payload === 'admin_stats') {
+        const users = database.readTable('users');
+        const lessons = database.readTable('lessons');
+        const courses = await courseService.getAllCourses(false);
+        const payments = database.readTable('payments');
+        const progress = database.readTable('progress');
+        
+        const text = `📊 **Статистика**\n\n` +
+            `👤 Пользователей: ${users?.length || 0}\n` +
+            `📚 Курсов: ${courses?.length || 0}\n` +
+            `📖 Уроков: ${lessons?.length || 0}\n` +
+            `✅ Пройдено уроков: ${progress?.filter(p => p.status === 'completed').length || 0}\n` +
+            `💳 Оплат: ${payments?.filter(p => p.status === 'success').length || 0}\n` +
+            `💰 Выручка: ${payments?.filter(p => p.status === 'success').reduce((s, p) => s + (p.amount || 0), 0) || 0} ₽`;
+        
+        await vkApi.sendKeyboard({
+            chatId,
+            text: text,
+            buttons: [[{ text: '⬅️ Назад', payload: 'admin_back' }]]
+        });
+        return;
+    }
+    
+    await showAdminDashboard(chatId, vkApi);
+}
+
+// ============================================================
+// ОБРАБОТКА СОЗДАНИЯ ТЕСТА
+// ============================================================
+
+async function handleTestCreation(chatId, text, vkApi) {
+    try {
+        const session = adminSessions.get(chatId);
+        if (!session || !session.lessonId) {
+            await vkApi.sendMessage({ chatId, text: '❌ Сессия потеряна' });
+            return;
+        }
+
+        const lessonId = session.lessonId;
+        const lines = text.split('\n').filter(l => l.trim());
+
+        let question = '';
+        const answers = [];
+
+        for (const line of lines) {
+            if (line.toLowerCase().startsWith('вопрос:')) {
+                question = line.replace(/^вопрос:\s*/i, '').trim();
+            } else if (/^\d+[\.\)]\s*/.test(line)) {
+                const answerText = line.replace(/^\d+[\.\)]\s*/, '').trim();
+                const isCorrect = answerText.toLowerCase().includes('(правильный)') || 
+                                answerText.toLowerCase().includes('(верный)') ||
+                                answerText.endsWith('✅');
+                const cleanAnswer = answerText
+                    .replace(/\s*\(правильный\)\s*/i, '')
+                    .replace(/\s*\(верный\)\s*/i, '')
+                    .replace(/\s*✅\s*$/, '')
+                    .trim();
+                if (cleanAnswer) {
+                    answers.push({ text: cleanAnswer, isCorrect });
+                }
+            }
+        }
+
+        if (!question || answers.length < 2) {
+            await vkApi.sendMessage({
+                chatId,
+                text: '❌ Неверный формат. Нужно: вопрос и минимум 2 варианта ответа.\n\nПример:\nВопрос: Что такое 2+2?\n1. 3\n2. 4 (правильный)\n3. 5\n4. 6',
+            });
+            return;
+        }
+
+        await lessonService.createTest(lessonId, {
+            question: question,
+            answers: answers
+        });
+
+        session.context = 'editing_lesson';
+        await vkApi.sendMessage({
+            chatId,
+            text: `✅ **Тест сохранен!**\n\nВопрос: ${question}\nКоличество ответов: ${answers.length}`,
+        });
+        
+        await handleAdminCallback(chatId, `admin_edit_lesson_${lessonId}`, vkApi);
+    } catch (error) {
+        console.error('[VK TEST] Error:', error);
+        await vkApi.sendMessage({
+            chatId,
+            text: `❌ Ошибка: ${error.message}`,
         });
     }
 }
@@ -781,4 +1188,9 @@ module.exports = {
     setSharedFunctions,
     setPGClient,
     handleAdminPassword,
+    showAdminLogin,
+    showAdminDashboard,
+    handleAdminCallback,
+    handleAdminCommand,
+    handleTestCreation,
 };
