@@ -239,28 +239,28 @@ async function initPostgreSQLTables() {
             )
         `);
 
-        // Таблица файлов уроков
+        // 👇 ТАБЛИЦА lesson_files — С ДОБАВЛЕННЫМИ ПОЛЯМИ ДЛЯ VK
         await pgClient.query(`
-    CREATE TABLE IF NOT EXISTS lesson_files (
-        id VARCHAR(36) PRIMARY KEY,
-        lesson_id VARCHAR(36) REFERENCES lessons(id) ON DELETE CASCADE,
-        type VARCHAR(50) NOT NULL,
-        filename VARCHAR(255) NOT NULL,
-        original_name VARCHAR(255),
-        size BIGINT DEFAULT 0,
-        mime_type VARCHAR(255),
-        path TEXT,
-        url TEXT,
-        token TEXT,
-        vk_owner_id VARCHAR(50),                 -- 👈 ДОБАВЛЕНО
-        vk_video_id VARCHAR(50),                 -- 👈 ДОБАВЛЕНО
-        vk_access_key VARCHAR(50),               -- 👈 ДОБАВЛЕНО
-        is_max_uploaded BOOLEAN DEFAULT FALSE,
-        hash TEXT,
-        duration INTEGER,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-`);
+            CREATE TABLE IF NOT EXISTS lesson_files (
+                id VARCHAR(36) PRIMARY KEY,
+                lesson_id VARCHAR(36) REFERENCES lessons(id) ON DELETE CASCADE,
+                type VARCHAR(50) NOT NULL,
+                filename VARCHAR(255) NOT NULL,
+                original_name VARCHAR(255),
+                size BIGINT DEFAULT 0,
+                mime_type VARCHAR(255),
+                path TEXT,
+                url TEXT,
+                token TEXT,
+                vk_owner_id VARCHAR(50),
+                vk_video_id VARCHAR(50),
+                vk_access_key VARCHAR(50),
+                is_max_uploaded BOOLEAN DEFAULT FALSE,
+                hash TEXT,
+                duration INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
 
         // Таблица тестов
         await pgClient.query(`
@@ -355,7 +355,7 @@ async function initPostgreSQLTables() {
             )
         `);
 
-        // ⭐ НОВОЕ: Таблица сессий
+        // Таблица сессий
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS "session" (
                 sid VARCHAR(255) NOT NULL COLLATE "default",
@@ -368,6 +368,17 @@ async function initPostgreSQLTables() {
         await pgClient.query(`
             CREATE INDEX IF NOT EXISTS IDX_session_expire ON "session" (expire)
         `);
+
+        // 👇 МИГРАЦИЯ: ДОБАВЛЯЕМ КОЛОНКИ, ЕСЛИ ИХ НЕТ
+        console.log('[POSTGRES] Running migrations...');
+        try {
+            await pgClient.query(`ALTER TABLE lesson_files ADD COLUMN IF NOT EXISTS vk_owner_id VARCHAR(50)`);
+            await pgClient.query(`ALTER TABLE lesson_files ADD COLUMN IF NOT EXISTS vk_video_id VARCHAR(50)`);
+            await pgClient.query(`ALTER TABLE lesson_files ADD COLUMN IF NOT EXISTS vk_access_key VARCHAR(50)`);
+            console.log('[POSTGRES] ✅ Migrations applied: vk_* columns added to lesson_files');
+        } catch (migrationError) {
+            console.warn('[POSTGRES] Migration warning:', migrationError.message);
+        }
 
         console.log('[POSTGRES] ✅ All tables created');
     } catch (error) {
