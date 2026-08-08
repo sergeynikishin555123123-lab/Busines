@@ -873,6 +873,7 @@ vkModule.setSharedFunctions({
     handleAdminTestAnswers,
     handleAdminUploadVideo,
     handleAdminUploadFile,
+    handleAdminPassword,        // 👈 ДОБАВЬТЕ ЭТУ СТРОКУ
     adminSessions,
 });
 
