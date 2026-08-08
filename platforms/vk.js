@@ -426,16 +426,17 @@ async function handleCoursesCommand(chatId, vkApi) {
 async function handleTextMessage(chatId, text, vkApi) {
     console.log(`[VK TEXT] chatId=${chatId}, text="${text}"`);
     
-    // 👇 СНАЧАЛА ПРОВЕРЯЕМ АДМИН-СЕССИЮ
     const adminSession = adminSessions.get(chatId);
     
     // Если пользователь вводит пароль
     if (adminSession && adminSession.mode === 'awaiting_password') {
         console.log(`[VK TEXT] Processing admin password`);
+        // 👇 ИСПОЛЬЗУЙТЕ sharedFunctions для вызова
         const { handleAdminPassword } = sharedFunctions;
         if (handleAdminPassword) {
             await handleAdminPassword(chatId, text, vkApi);
         } else {
+            console.error('[VK TEXT] handleAdminPassword not found in sharedFunctions');
             await vkApi.sendMessage({
                 chatId,
                 text: '❌ Ошибка: обработчик пароля не найден',
@@ -444,6 +445,8 @@ async function handleTextMessage(chatId, text, vkApi) {
         }
         return;
     }
+
+
 
     // Если пользователь уже в админ-режиме
     if (adminSession && adminSession.mode === 'admin') {
@@ -624,13 +627,17 @@ async function showAdminLogin(chatId, vkApi) {
 // 👇 ДОБАВЬТЕ ФУНКЦИЮ СЮДА (ПОСЛЕ showAdminLogin)
 // ============================================================
 
+// ============================================================
+// ОБРАБОТКА ПАРОЛЯ АДМИНА
+// ============================================================
+
 async function handleAdminPassword(chatId, password, vkApi) {
     console.log(`[VK] handleAdminPassword called for ${chatId}`);
     
     try {
-        // Находим админа в БД
         const bcrypt = require('bcryptjs');
         let admin = null;
+        let database = require('../database');
         
         // Пробуем через PostgreSQL
         if (pgConnected && pgClient) {
@@ -643,7 +650,6 @@ async function handleAdminPassword(chatId, password, vkApi) {
             }
         } else {
             // Fallback на JSON
-            const database = require('../database');
             const admins = database.readTable('admins');
             for (const a of admins) {
                 if (await bcrypt.compare(password, a.password_hash)) {
