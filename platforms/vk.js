@@ -319,9 +319,11 @@ async function handleMessageNew(message) {
             message.object?.message?.from_id
         );
         const text = message.message?.text || message.text || '';
+        const attachments = message.message?.attachments || message.attachments || [];
         let payload = null;
 
         console.log(`[VK HANDLER] Message from ${userId}: "${text}"`);
+        console.log(`[VK HANDLER] Attachments: ${attachments.length}`);
 
         if (message.message?.payload) {
             try {
@@ -350,6 +352,18 @@ async function handleMessageNew(message) {
             return;
         }
 
+        // ============================================================
+        // ОБРАБОТКА ВЛОЖЕНИЙ (ВИДЕО/ФАЙЛЫ) ДЛЯ АДМИНКИ
+        // ============================================================
+        if (attachments.length > 0) {
+            const adminSession = adminSessions.get(userId);
+            if (adminSession && adminSession.mode === 'admin') {
+                console.log(`[VK HANDLER] Admin attachment detected, processing...`);
+                await handleAdminAttachmentVk(userId, attachments, vkApi);
+                return;
+            }
+        }
+
         if (payload) {
             await handleCallback(userId, payload, vkApi);
             return;
@@ -364,6 +378,12 @@ async function handleMessageNew(message) {
         } else if (text.startsWith('/admin')) {
             await showAdminLogin(userId, vkApi);
         } else {
+            // Проверяем, есть ли админ-сессия для текстовых команд в админке
+            const adminSession = adminSessions.get(userId);
+            if (adminSession && adminSession.mode === 'admin') {
+                await handleAdminCommand(userId, text, vkApi);
+                return;
+            }
             await handleTextMessage(userId, text, vkApi);
         }
 
@@ -981,17 +1001,16 @@ async function handleAdminCallback(chatId, payload, vkApi) {
         return;
     }
     
-    // Загрузить видео
     if (payload.startsWith('admin_lesson_video_')) {
-        const lessonId = payload.replace('admin_lesson_video_', '');
-        session.lessonId = lessonId;
-        session.context = 'uploading_video';
-        await vkApi.sendMessage({
-            chatId,
-            text: '🎬 **Загрузка видео VK**\n\nОтправьте видео файлом в этот чат.\n\nПоддерживаются: MP4, MOV, WEBM\nМаксимальный размер: 250MB\n\nПосле загрузки видео станет доступно пользователям VK.',
-        });
-        return;
-    }
+    const lessonId = payload.replace('admin_lesson_video_', '');
+    session.lessonId = lessonId;
+    session.context = 'uploading_video';
+    await vkApi.sendMessage({
+        chatId,
+        text: '🎬 **Загрузка видео VK**\n\nОтправьте видео файлом в этот чат.\n\nПоддерживаются: MP4, MOV, WEBM\nМаксимальный размер: 250MB\n\nПосле загрузки видео станет доступно пользователям VK.',
+    });
+    return;
+}
     
     // Загрузить файл
     if (payload.startsWith('admin_lesson_file_')) {
@@ -1183,6 +1202,10 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
         const session = adminSessions.get(chatId);
         if (!session || session.mode !== 'admin') {
             console.log('[VK ADMIN] Not admin session');
+            await vkApi.sendMessage({
+                chatId,
+                text: '❌ Сначала войдите в админ-панель через /admin',
+            });
             return;
         }
         
@@ -1200,86 +1223,42 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
         for (const attachment of attachments) {
             console.log('[VK ADMIN] Attachment:', JSON.stringify(attachment, null, 2));
             
-            let fileType = attachment.type || 'file';
-            let fileData = attachment.payload || {};
+            // VK вложения имеют структуру: { type: 'video', video: { owner_id, video_id, access_key } }
+            const type = attachment.type;
             
-            // Если есть VK ID видео - сохраняем
-            if (fileData.vk_owner_id && fileData.vk_video_id) {
-                const fileDataToSave = {
-                    filename: fileData.filename || 'video',
-                    originalname: fileData.filename || 'video',
-                    size: fileData.size || 0,
-                    mimetype: 'video/mp4',
-                    path: `video${fileData.vk_owner_id}_${fileData.vk_video_id}`,
-                    token: fileData.token || null,
-                    vk_owner_id: fileData.vk_owner_id,
-                    vk_video_id: fileData.vk_video_id,
-                    vk_access_key: fileData.vk_access_key || null,
-                    is_max_uploaded: true,
-                    type: 'video',
-                    platform: 'vk'
-                };
+            // ============================================================
+            // ОБРАБОТКА ВИДЕО
+            // ============================================================
+            if (type === 'video' && attachment.video) {
+                const video = attachment.video;
+                const ownerId = video.owner_id;
+                const videoId = video.video_id;
+                const accessKey = video.access_key || '';
                 
-                const existingFiles = await lessonService.getLessonFiles(lessonId);
-                const oldVideo = existingFiles.find(f => f.type === 'video' && f.platform === 'vk');
-                if (oldVideo) {
-                    await lessonService.deleteLessonFile(oldVideo.id);
-                }
+                console.log(`[VK ADMIN] Video: owner_id=${ownerId}, video_id=${videoId}`);
                 
-                await lessonService.addLessonFile(lessonId, fileDataToSave);
-                
-                await vkApi.sendMessage({
-                    chatId,
-                    text: `✅ **Видео VK загружено!**\n\n📹 Видео сохранено.`,
-                });
-                
-                await handleAdminEditLessonVk(chatId, lessonId, vkApi);
-                return;
-            }
-            
-            // Если есть ссылка на видео - пробуем загрузить в VK
-            if (fileData.url && fileType === 'video') {
-                await vkApi.sendMessage({
-                    chatId,
-                    text: `⏳ Загрузка видео в VK... Это может занять несколько минут.`,
-                });
-                
-                try {
-                    const response = await axios.get(fileData.url, {
-                        responseType: 'arraybuffer',
-                        timeout: 300000,
-                    });
-                    
-                    const tempDir = path.join('/tmp', 'vk_uploads');
-                    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
-                    
-                    const tempPath = path.join(tempDir, `${Date.now()}-video.mp4`);
-                    fs.writeFileSync(tempPath, Buffer.from(response.data));
-                    
-                    const vkApiClient = new VKAPI();
-                    const vkResult = await vkApiClient.uploadPrivateVideo(tempPath, 'Урок VK');
-                    
-                    fs.unlinkSync(tempPath);
-                    
+                if (ownerId && videoId) {
                     const fileDataToSave = {
-                        filename: fileData.filename || 'video',
-                        originalname: fileData.filename || 'video',
-                        size: response.data.length,
+                        filename: video.title || 'video',
+                        originalname: video.title || 'video',
+                        size: 0,
                         mimetype: 'video/mp4',
-                        path: `video${vkResult.owner_id}_${vkResult.video_id}`,
-                        token: fileData.token || null,
-                        vk_owner_id: vkResult.owner_id,
-                        vk_video_id: vkResult.video_id,
-                        vk_access_key: vkResult.access_key || null,
+                        path: `video${ownerId}_${videoId}`,
+                        token: null,
+                        vk_owner_id: ownerId,
+                        vk_video_id: videoId,
+                        vk_access_key: accessKey,
                         is_max_uploaded: true,
                         type: 'video',
                         platform: 'vk'
                     };
                     
+                    // Удаляем старое видео
                     const existingFiles = await lessonService.getLessonFiles(lessonId);
-                    const oldVideo = existingFiles.find(f => f.type === 'video' && f.platform === 'vk');
+                    const oldVideo = existingFiles.find(f => f.type === 'video' && (f.platform === 'vk' || !f.platform));
                     if (oldVideo) {
                         await lessonService.deleteLessonFile(oldVideo.id);
+                        console.log(`[VK ADMIN] Old video deleted: ${oldVideo.id}`);
                     }
                     
                     await lessonService.addLessonFile(lessonId, fileDataToSave);
@@ -1291,53 +1270,97 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
                     
                     await handleAdminEditLessonVk(chatId, lessonId, vkApi);
                     return;
-                } catch (error) {
-                    console.error('[VK ADMIN] Video upload error:', error);
+                }
+            }
+            
+            // ============================================================
+            // ОБРАБОТКА ФАЙЛОВ (ДОКУМЕНТЫ)
+            // ============================================================
+            if (type === 'doc' && attachment.doc) {
+                const doc = attachment.doc;
+                const docUrl = doc.url || doc.preview?.photo?.src || '';
+                const fileName = doc.title || 'file';
+                
+                console.log(`[VK ADMIN] Document: ${fileName}, url: ${docUrl}`);
+                
+                if (docUrl) {
+                    // Отправляем ссылку на файл
                     await vkApi.sendMessage({
                         chatId,
-                        text: `❌ Ошибка загрузки видео: ${error.message}`,
+                        text: `📎 **Файл VK**\n\n${fileName}\n${docUrl}`,
                     });
+                    
+                    const fileDataToSave = {
+                        filename: fileName,
+                        originalname: fileName,
+                        size: doc.size || 0,
+                        mimetype: doc.type || 'application/octet-stream',
+                        path: docUrl,
+                        url: docUrl,
+                        type: 'file',
+                        platform: 'vk'
+                    };
+                    
+                    const existingFiles = await lessonService.getLessonFiles(lessonId);
+                    const oldFile = existingFiles.find(f => f.type === 'file' && (f.platform === 'vk' || !f.platform));
+                    if (oldFile) {
+                        await lessonService.deleteLessonFile(oldFile.id);
+                    }
+                    
+                    await lessonService.addLessonFile(lessonId, fileDataToSave);
+                    
+                    await handleAdminEditLessonVk(chatId, lessonId, vkApi);
                     return;
                 }
             }
             
-            // Если это файл (не видео)
-            if (fileData.url) {
-                const fileName = fileData.filename || 'file';
-                const fileUrl = fileData.url;
+            // ============================================================
+            // ОБРАБОТКА ФОТОГРАФИЙ
+            // ============================================================
+            if (type === 'photo' && attachment.photo) {
+                const photo = attachment.photo;
+                // Берем самое большое фото
+                const sizes = photo.sizes || [];
+                const largest = sizes.reduce((a, b) => (a.width || 0) > (b.width || 0) ? a : b, {});
+                const photoUrl = largest.url || photo.src || '';
+                const photoId = `${photo.owner_id}_${photo.id}`;
                 
-                await vkApi.sendMessage({
-                    chatId,
-                    text: `📎 **Файл VK**\n\n${fileName}\n${fileUrl}`,
-                });
+                console.log(`[VK ADMIN] Photo: ${photoId}, url: ${photoUrl}`);
                 
-                const fileDataToSave = {
-                    filename: fileName,
-                    originalname: fileName,
-                    size: fileData.size || 0,
-                    mimetype: fileData.mimetype || 'application/octet-stream',
-                    path: fileUrl,
-                    url: fileUrl,
-                    type: 'file',
-                    platform: 'vk'
-                };
-                
-                const existingFiles = await lessonService.getLessonFiles(lessonId);
-                const oldFile = existingFiles.find(f => f.type === 'file' && f.platform === 'vk');
-                if (oldFile) {
-                    await lessonService.deleteLessonFile(oldFile.id);
+                if (photoUrl) {
+                    await vkApi.sendMessage({
+                        chatId,
+                        text: `🖼️ **Изображение VK**\n\n${photoUrl}`,
+                    });
+                    
+                    const fileDataToSave = {
+                        filename: `photo_${photoId}.jpg`,
+                        originalname: `photo_${photoId}.jpg`,
+                        size: 0,
+                        mimetype: 'image/jpeg',
+                        path: photoUrl,
+                        url: photoUrl,
+                        type: 'image',
+                        platform: 'vk'
+                    };
+                    
+                    const existingFiles = await lessonService.getLessonFiles(lessonId);
+                    const oldFile = existingFiles.find(f => f.type === 'image' && (f.platform === 'vk' || !f.platform));
+                    if (oldFile) {
+                        await lessonService.deleteLessonFile(oldFile.id);
+                    }
+                    
+                    await lessonService.addLessonFile(lessonId, fileDataToSave);
+                    
+                    await handleAdminEditLessonVk(chatId, lessonId, vkApi);
+                    return;
                 }
-                
-                await lessonService.addLessonFile(lessonId, fileDataToSave);
-                
-                await handleAdminEditLessonVk(chatId, lessonId, vkApi);
-                return;
             }
         }
         
         await vkApi.sendMessage({
             chatId,
-            text: '❌ Не удалось обработать вложение. Отправьте файл как вложение.',
+            text: '❌ Не удалось обработать вложение. Отправьте видео или файл как вложение.',
         });
     } catch (error) {
         console.error('[VK ADMIN] Error handling attachment:', error);
@@ -1347,7 +1370,6 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
         });
     }
 }
-
 // ============================================================
 // ОБРАБОТКА СОЗДАНИЯ ТЕСТА
 // ============================================================
