@@ -1,5 +1,6 @@
-// platforms/vk.js - ПОЛНАЯ ИСПРАВЛЕННАЯ ВЕРСИЯ
-
+// ============================================================
+// ИМПОРТЫ
+// ============================================================
 const crypto = require('crypto');
 const axios = require('axios');
 const FormData = require('form-data');
@@ -9,6 +10,16 @@ const config = require('../config');
 const logger = require('../logger');
 const database = require('../database');
 const userService = require('../core/user');
+
+// 👇 ДОБАВЬТЕ ЭТИ ПЕРЕМЕННЫЕ СЮДА (после импортов)
+let pgClient = null;
+let pgConnected = false;
+
+function setPGClient(client, connected) {
+    pgClient = client;
+    pgConnected = connected;
+    console.log('[VK] PostgreSQL client set:', connected ? '✅ connected' : '⚠️ fallback');
+}
 
 // ============================================================
 // ОБЩИЕ ФУНКЦИИ (будут установлены из server.js)
@@ -413,6 +424,45 @@ async function handleCoursesCommand(chatId, vkApi) {
 }
 
 async function handleTextMessage(chatId, text, vkApi) {
+    console.log(`[VK TEXT] chatId=${chatId}, text="${text}"`);
+    
+    // 👇 СНАЧАЛА ПРОВЕРЯЕМ АДМИН-СЕССИЮ
+    const adminSession = adminSessions.get(chatId);
+    
+    // Если пользователь вводит пароль
+    if (adminSession && adminSession.mode === 'awaiting_password') {
+        console.log(`[VK TEXT] Processing admin password`);
+        const { handleAdminPassword } = sharedFunctions;
+        if (handleAdminPassword) {
+            await handleAdminPassword(chatId, text, vkApi);
+        } else {
+            await vkApi.sendMessage({
+                chatId,
+                text: '❌ Ошибка: обработчик пароля не найден',
+            });
+            adminSessions.delete(chatId);
+        }
+        return;
+    }
+
+    // Если пользователь уже в админ-режиме
+    if (adminSession && adminSession.mode === 'admin') {
+        console.log(`[VK TEXT] Admin mode active, forwarding to admin handler`);
+        const { handleAdminCommand } = sharedFunctions;
+        if (handleAdminCommand) {
+            await handleAdminCommand(chatId, text, vkApi);
+        } else {
+            console.error('[VK TEXT] handleAdminCommand not found');
+            await vkApi.sendMessage({
+                chatId,
+                text: '❌ Ошибка: админ-обработчик не найден',
+            });
+        }
+        return;
+    }
+
+    // Обычное текстовое сообщение пользователя
+    console.log(`[VK TEXT] User text: "${text}"`);
     const { checkUserHasPaidAccess } = sharedFunctions;
     const hasAccess = checkUserHasPaidAccess ? await checkUserHasPaidAccess(chatId) : false;
 
@@ -428,37 +478,59 @@ async function handleTextMessage(chatId, text, vkApi) {
 
     await vkApi.sendKeyboard({
         chatId,
-        text: `📝 Я получил ваше сообщение.
-
-Что хотите сделать дальше?`,
+        text: `📝 Я получил ваше сообщение.\n\nЧто хотите сделать дальше?`,
         buttons,
     });
 }
-
-// ============================================================
-// ОБРАБОТКА CALLBACK
-// ============================================================
-
 async function handleCallback(chatId, payload, vkApi) {
     console.log(`[VK CALLBACK] chatId=${chatId}, payload=${payload}`);
 
-    if (payload === 'admin_panel' || payload === 'admin_login') {
-        const { showAdminLogin } = sharedFunctions;
-        if (showAdminLogin) {
-            await showAdminLogin(chatId, vkApi);
-        }
-        return;
-    }
-
+    // 👇 СНАЧАЛА ПРОВЕРЯЕМ АДМИН-СЕССИЮ
     const adminSession = adminSessions.get(chatId);
+    
+    // Если пользователь уже в админ-режиме — ВСЕ callback идут в админ-обработчик
     if (adminSession && adminSession.mode === 'admin') {
+        console.log(`[VK CALLBACK] Admin mode active, forwarding to admin handler`);
         const { handleAdminCallback } = sharedFunctions;
         if (handleAdminCallback) {
             await handleAdminCallback(chatId, payload, vkApi);
+        } else {
+            console.error('[VK CALLBACK] handleAdminCallback not found');
+            await vkApi.sendMessage({
+                chatId,
+                text: '❌ Ошибка: админ-обработчик не найден',
+            });
         }
         return;
     }
 
+    // Если пользователь вводит пароль
+    if (adminSession && adminSession.mode === 'awaiting_password') {
+        console.log(`[VK CALLBACK] Awaiting password, ignoring callback`);
+        await vkApi.sendMessage({
+            chatId,
+            text: '⏳ Введите пароль администратора сообщением.',
+        });
+        return;
+    }
+
+    // 👇 ТОЛЬКО ПОСЛЕ ПРОВЕРКИ АДМИН-СЕССИИ — обрабатываем вход
+    if (payload === 'admin_panel' || payload === 'admin_login') {
+        console.log(`[VK CALLBACK] Admin login requested`);
+        const { showAdminLogin } = sharedFunctions;
+        if (showAdminLogin) {
+            await showAdminLogin(chatId, vkApi);
+        } else {
+            await vkApi.sendMessage({
+                chatId,
+                text: `🔐 Админ-панель\n\nВведите /admin для входа.`,
+            });
+        }
+        return;
+    }
+
+    // Остальные обработчики (пользовательские)
+    console.log(`[VK CALLBACK] User callback: ${payload}`);
     const handlers = {
         'show_courses': async () => {
             const { showCourses } = sharedFunctions;
@@ -514,19 +586,115 @@ async function handleCallback(chatId, payload, vkApi) {
         text: `✅ Вы выбрали: ${payload}`,
     });
 }
-
 // ============================================================
 // ПОКАЗ АДМИН-ЛОГИНА
 // ============================================================
 
 async function showAdminLogin(chatId, vkApi) {
-    const { showAdminLogin } = sharedFunctions;
-    if (showAdminLogin) {
-        await showAdminLogin(chatId, vkApi);
-    } else {
+    console.log(`[VK] showAdminLogin called for ${chatId}`);
+    
+    // Проверяем, не залогинен ли уже
+    const session = adminSessions.get(chatId);
+    if (session && session.mode === 'admin') {
+        const { showAdminDashboard } = sharedFunctions;
+        if (showAdminDashboard) {
+            await showAdminDashboard(chatId, vkApi);
+        } else {
+            await vkApi.sendMessage({
+                chatId,
+                text: '✅ Вы уже авторизованы как администратор.\n\nИспользуйте кнопки меню.',
+            });
+        }
+        return;
+    }
+
+    // Запрашиваем пароль
+    adminSessions.set(chatId, { mode: 'awaiting_password' });
+    
+    await vkApi.sendKeyboard({
+        chatId,
+        text: `🔐 **Введите пароль администратора**\n\nОтправьте пароль сообщением.`,
+        buttons: [
+            [{ text: '❌ Отмена', payload: 'show_courses' }]
+        ],
+    });
+}
+
+// ============================================================
+// 👇 ДОБАВЬТЕ ФУНКЦИЮ СЮДА (ПОСЛЕ showAdminLogin)
+// ============================================================
+
+async function handleAdminPassword(chatId, password, vkApi) {
+    console.log(`[VK] handleAdminPassword called for ${chatId}`);
+    
+    try {
+        // Находим админа в БД
+        const bcrypt = require('bcryptjs');
+        let admin = null;
+        
+        // Пробуем через PostgreSQL
+        if (pgConnected && pgClient) {
+            const result = await pgClient.query('SELECT * FROM admins');
+            for (const a of result.rows) {
+                if (await bcrypt.compare(password, a.password_hash)) {
+                    admin = a;
+                    break;
+                }
+            }
+        } else {
+            // Fallback на JSON
+            const database = require('../database');
+            const admins = database.readTable('admins');
+            for (const a of admins) {
+                if (await bcrypt.compare(password, a.password_hash)) {
+                    admin = a;
+                    break;
+                }
+            }
+        }
+        
+        if (!admin) {
+            adminSessions.delete(chatId);
+            await vkApi.sendMessage({
+                chatId,
+                text: '❌ **Неверный пароль!** Попробуйте снова через /admin',
+                parseMode: 'markdown',
+            });
+            return;
+        }
+        
+        // Сохраняем сессию
+        adminSessions.set(chatId, {
+            mode: 'admin',
+            adminId: admin.id,
+            login: admin.login,
+            role: admin.role,
+            context: 'dashboard'
+        });
+        
         await vkApi.sendMessage({
             chatId,
-            text: `🔐 Админ-панель\n\nВведите /admin для входа.`,
+            text: `✅ **Добро пожаловать в админ-панель, ${admin.login}!**`,
+            parseMode: 'markdown',
+        });
+        
+        // Показываем админ-дашборд
+        const { showAdminDashboard } = sharedFunctions;
+        if (showAdminDashboard) {
+            await showAdminDashboard(chatId, vkApi);
+        } else {
+            await vkApi.sendMessage({
+                chatId,
+                text: '❌ Ошибка: админ-дашборд не найден',
+            });
+        }
+        
+    } catch (error) {
+        console.error('[VK] Error handling admin password:', error);
+        adminSessions.delete(chatId);
+        await vkApi.sendMessage({
+            chatId,
+            text: '❌ Ошибка при проверке пароля. Попробуйте позже.',
         });
     }
 }
@@ -596,4 +764,6 @@ module.exports = {
     handleCallback,
     adminSessions,
     setSharedFunctions,
+    setPGClient,           // 👇 ДОБАВЬТЕ СЮДА
+    handleAdminPassword,   // 👇 ДОБАВЬТЕ СЮДА
 };
