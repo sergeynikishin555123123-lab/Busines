@@ -753,6 +753,7 @@ async function handleAdminCommand(chatId, text, vkApi) {
     
     const context = session.context || '';
     
+    // ШАГ 1: Ввод названия урока
     if (context === 'creating_lesson') {
         session.lessonTitle = text;
         session.context = 'creating_lesson_desc';
@@ -763,6 +764,7 @@ async function handleAdminCommand(chatId, text, vkApi) {
         return;
     }
     
+    // ШАГ 2: Ввод описания урока → создание и переход к редактированию
     if (context === 'creating_lesson_desc') {
         const title = session.lessonTitle;
         const description = text;
@@ -791,56 +793,61 @@ async function handleAdminCommand(chatId, text, vkApi) {
             platform: platform,
         });
         
-        session.context = 'dashboard';
+        session.context = 'editing_lesson';
         session.lessonId = lesson.id;
         
         await vkApi.sendMessage({
             chatId,
             text: `✅ **Урок VK создан!**\n\n📖 ${lesson.title}\n\nТеперь вы можете:\n• Загрузить видео\n• Добавить файл\n• Создать тест\n• Настроить доступ`,
         });
-        await showAdminDashboard(chatId, vkApi);
+        
+        // ВАЖНО: Показываем меню редактирования урока, а не дашборд
+        await handleAdminEditLessonVk(chatId, lesson.id, vkApi);
         return;
     }
     
+    // ШАГ 3: Изменение названия урока
     if (context === 'editing_lesson_title') {
         const lessonId = session.lessonId;
         if (lessonId) {
             await lessonService.updateLesson(lessonId, { title: text });
-            session.context = 'dashboard';
+            session.context = 'editing_lesson';
             await vkApi.sendMessage({
                 chatId,
                 text: `✅ Название обновлено: "${text}"`,
             });
-            await showAdminDashboard(chatId, vkApi);
+            await handleAdminEditLessonVk(chatId, lessonId, vkApi);
         }
         return;
     }
     
+    // ШАГ 4: Изменение описания урока
     if (context === 'editing_lesson_desc') {
         const lessonId = session.lessonId;
         if (lessonId) {
             await lessonService.updateLesson(lessonId, { description: text });
-            session.context = 'dashboard';
+            session.context = 'editing_lesson';
             await vkApi.sendMessage({
                 chatId,
                 text: '✅ Описание обновлено.',
             });
-            await showAdminDashboard(chatId, vkApi);
+            await handleAdminEditLessonVk(chatId, lessonId, vkApi);
         }
         return;
     }
     
+    // ШАГ 5: Создание теста (текстовый ввод)
     if (context === 'editing_test') {
         await handleTestCreation(chatId, text, vkApi);
         return;
     }
     
+    // Если ничего не подошло
     await vkApi.sendMessage({
         chatId,
         text: '❓ Неизвестная команда. Используйте кнопки меню.',
     });
 }
-
 // ============================================================
 // ПОЛНЫЙ ОБРАБОТЧИК АДМИН-CALLBACK
 // ============================================================
@@ -871,16 +878,16 @@ async function handleAdminCallback(chatId, payload, vkApi) {
         return;
     }
     
-    // Создание урока
-    if (payload === 'admin_create_lesson') {
-        session.context = 'creating_lesson';
-        session.platform = 'vk';
-        await vkApi.sendMessage({
-            chatId,
-            text: '📝 **Создание урока VK**\n\nВведите название урока:',
-        });
-        return;
-    }
+   if (payload === 'admin_create_lesson') {
+    session.context = 'creating_lesson';
+    session.platform = 'vk';
+    session.lessonTitle = null;
+    await vkApi.sendMessage({
+        chatId,
+        text: '📝 **Создание урока VK**\n\nВведите название урока:',
+    });
+    return;
+}
     
     // Список уроков для редактирования
     if (payload === 'admin_edit_lessons') {
