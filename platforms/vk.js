@@ -306,10 +306,6 @@ class VKAPI {
 
 const adminSessions = new Map();
 
-// ============================================================
-// ОБРАБОТКА СООБЩЕНИЙ
-// ============================================================
-
 async function handleMessageNew(message) {
     try {
         const userId = String(
@@ -319,11 +315,21 @@ async function handleMessageNew(message) {
             message.object?.message?.from_id
         );
         const text = message.message?.text || message.text || '';
-        const attachments = message.message?.attachments || message.attachments || [];
+        
+        // ВАЖНО: правильно извлекаем вложения
+        let attachments = [];
+        if (message.message?.attachments) {
+            attachments = message.message.attachments;
+        } else if (message.attachments) {
+            attachments = message.attachments;
+        } else if (message.object?.message?.attachments) {
+            attachments = message.object.message.attachments;
+        }
+        
         let payload = null;
 
         console.log(`[VK HANDLER] Message from ${userId}: "${text}"`);
-        console.log(`[VK HANDLER] Attachments: ${attachments.length}`);
+        console.log(`[VK HANDLER] Attachments: ${attachments.length}`, JSON.stringify(attachments, null, 2));
 
         if (message.message?.payload) {
             try {
@@ -378,7 +384,6 @@ async function handleMessageNew(message) {
         } else if (text.startsWith('/admin')) {
             await showAdminLogin(userId, vkApi);
         } else {
-            // Проверяем, есть ли админ-сессия для текстовых команд в админке
             const adminSession = adminSessions.get(userId);
             if (adminSession && adminSession.mode === 'admin') {
                 await handleAdminCommand(userId, text, vkApi);
@@ -1221,13 +1226,12 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
         console.log(`[VK ADMIN] Processing ${attachments.length} attachment(s) for lesson ${lessonId}`);
         
         for (const attachment of attachments) {
-            console.log('[VK ADMIN] Attachment:', JSON.stringify(attachment, null, 2));
+            console.log('[VK ADMIN] Full attachment:', JSON.stringify(attachment, null, 2));
             
-            // VK вложения имеют структуру: { type: 'video', video: { owner_id, video_id, access_key } }
             const type = attachment.type;
             
             // ============================================================
-            // ОБРАБОТКА ВИДЕО
+            // СЛУЧАЙ 1: ВИДЕО как video (пришло через кнопку "Видео")
             // ============================================================
             if (type === 'video' && attachment.video) {
                 const video = attachment.video;
@@ -1235,9 +1239,10 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
                 const videoId = video.video_id;
                 const accessKey = video.access_key || '';
                 
-                console.log(`[VK ADMIN] Video: owner_id=${ownerId}, video_id=${videoId}`);
+                console.log(`[VK ADMIN] Video type: owner_id=${ownerId}, video_id=${videoId}`);
                 
                 if (ownerId && videoId) {
+                    // Сохраняем видео
                     const fileDataToSave = {
                         filename: video.title || 'video',
                         originalname: video.title || 'video',
@@ -1253,7 +1258,6 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
                         platform: 'vk'
                     };
                     
-                    // Удаляем старое видео
                     const existingFiles = await lessonService.getLessonFiles(lessonId);
                     const oldVideo = existingFiles.find(f => f.type === 'video' && (f.platform === 'vk' || !f.platform));
                     if (oldVideo) {
@@ -1265,7 +1269,7 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
                     
                     await vkApi.sendMessage({
                         chatId,
-                        text: `✅ **Видео VK загружено!**\n\n📹 Видео сохранено.`,
+                        text: `✅ **Видео VK загружено!**\n\n📹 ${video.title || 'Видео'}\n\nТеперь урок содержит видео.`,
                     });
                     
                     await handleAdminEditLessonVk(chatId, lessonId, vkApi);
@@ -1274,17 +1278,87 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
             }
             
             // ============================================================
-            // ОБРАБОТКА ФАЙЛОВ (ДОКУМЕНТЫ)
+            // СЛУЧАЙ 2: ВИДЕО как doc (пришло как файл .mp4, .mov и т.д.)
             // ============================================================
             if (type === 'doc' && attachment.doc) {
                 const doc = attachment.doc;
-                const docUrl = doc.url || doc.preview?.photo?.src || '';
+                const docUrl = doc.url || '';
                 const fileName = doc.title || 'file';
+                const fileExt = doc.ext || '';
+                const isVideo = ['mp4', 'mov', 'avi', 'webm', 'mkv', 'm4v', '3gp'].includes(fileExt.toLowerCase());
                 
-                console.log(`[VK ADMIN] Document: ${fileName}, url: ${docUrl}`);
+                console.log(`[VK ADMIN] Doc: ${fileName}, ext: ${fileExt}, isVideo: ${isVideo}`);
+                console.log(`[VK ADMIN] Doc URL: ${docUrl}`);
                 
+                // Если это видео-файл - обрабатываем как видео
+                if (isVideo && docUrl) {
+                    // Отправляем ссылку на видео
+                    await vkApi.sendMessage({
+                        chatId,
+                        text: `⏳ **Загрузка видео в VK...**\n\nЭто может занять несколько минут.`,
+                    });
+                    
+                    try {
+                        // Скачиваем видео
+                        const response = await axios.get(docUrl, {
+                            responseType: 'arraybuffer',
+                            timeout: 600000, // 10 минут
+                        });
+                        
+                        const tempDir = path.join('/tmp', 'vk_uploads');
+                        if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+                        
+                        const tempPath = path.join(tempDir, `${Date.now()}-${fileName}`);
+                        fs.writeFileSync(tempPath, Buffer.from(response.data));
+                        
+                        // Загружаем в VK
+                        const vkApiClient = new VKAPI();
+                        const vkResult = await vkApiClient.uploadPrivateVideo(tempPath, 'Урок VK');
+                        
+                        fs.unlinkSync(tempPath);
+                        
+                        const fileDataToSave = {
+                            filename: fileName,
+                            originalname: fileName,
+                            size: response.data.length,
+                            mimetype: 'video/mp4',
+                            path: `video${vkResult.owner_id}_${vkResult.video_id}`,
+                            token: null,
+                            vk_owner_id: vkResult.owner_id,
+                            vk_video_id: vkResult.video_id,
+                            vk_access_key: vkResult.access_key || null,
+                            is_max_uploaded: true,
+                            type: 'video',
+                            platform: 'vk'
+                        };
+                        
+                        const existingFiles = await lessonService.getLessonFiles(lessonId);
+                        const oldVideo = existingFiles.find(f => f.type === 'video' && (f.platform === 'vk' || !f.platform));
+                        if (oldVideo) {
+                            await lessonService.deleteLessonFile(oldVideo.id);
+                        }
+                        
+                        await lessonService.addLessonFile(lessonId, fileDataToSave);
+                        
+                        await vkApi.sendMessage({
+                            chatId,
+                            text: `✅ **Видео VK загружено!**\n\n📹 ${fileName}\n\nТеперь урок содержит видео.`,
+                        });
+                        
+                        await handleAdminEditLessonVk(chatId, lessonId, vkApi);
+                        return;
+                    } catch (error) {
+                        console.error('[VK ADMIN] Video upload error:', error);
+                        await vkApi.sendMessage({
+                            chatId,
+                            text: `❌ Ошибка загрузки видео: ${error.message}`,
+                        });
+                        return;
+                    }
+                }
+                
+                // Если это НЕ видео - обрабатываем как обычный файл
                 if (docUrl) {
-                    // Отправляем ссылку на файл
                     await vkApi.sendMessage({
                         chatId,
                         text: `📎 **Файл VK**\n\n${fileName}\n${docUrl}`,
@@ -1315,11 +1389,10 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
             }
             
             // ============================================================
-            // ОБРАБОТКА ФОТОГРАФИЙ
+            // СЛУЧАЙ 3: ФОТОГРАФИИ
             // ============================================================
             if (type === 'photo' && attachment.photo) {
                 const photo = attachment.photo;
-                // Берем самое большое фото
                 const sizes = photo.sizes || [];
                 const largest = sizes.reduce((a, b) => (a.width || 0) > (b.width || 0) ? a : b, {});
                 const photoUrl = largest.url || photo.src || '';
@@ -1360,7 +1433,7 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
         
         await vkApi.sendMessage({
             chatId,
-            text: '❌ Не удалось обработать вложение. Отправьте видео или файл как вложение.',
+            text: '❌ Не удалось обработать вложение.\n\n📌 Для загрузки видео:\n1. Нажмите "📎" (прикрепить)\n2. Выберите "Файл"\n3. Выберите видеофайл (.mp4, .mov)\n\nИли просто отправьте видео через кнопку "Видео" в интерфейсе VK.',
         });
     } catch (error) {
         console.error('[VK ADMIN] Error handling attachment:', error);
