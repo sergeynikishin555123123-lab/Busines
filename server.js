@@ -838,6 +838,10 @@ async function handleMessageCallback(update) {
 // VK МОДУЛЬ
 // ============================================================
 
+// ============================================================
+// VK МОДУЛЬ
+// ============================================================
+
 const vkModule = require('./platforms/vk');
 
 // Передаем общие функции в VK модуль
@@ -849,6 +853,27 @@ vkModule.setSharedFunctions({
     handleTestAnswer,
     handleBuyAccess,
     handlePaymentCheck,
+    // ДОБАВЛЯЕМ НЕДОСТАЮЩИЕ ФУНКЦИИ ДЛЯ АДМИН-ПАНЕЛИ
+    showAdminLogin: async (chatId, api) => {
+        // Используем функцию из server.js
+        await showAdminLogin(chatId, api);
+    },
+    showAdminDashboard: async (chatId, api) => {
+        await showAdminDashboard(chatId, api);
+    },
+    handleAdminCommand: async (chatId, text, api) => {
+        await handleAdminCommand(chatId, text, api);
+    },
+    handleAdminCallback: async (chatId, payload, api) => {
+        await handleAdminCallback(chatId, payload, api);
+    },
+    handleAdminAttachment: async (chatId, attachments, api) => {
+        await handleAdminAttachment(chatId, attachments, api);
+    },
+    handleAdminPassword: async (chatId, password, api) => {
+        await handleAdminPassword(chatId, password, api);
+    },
+    adminSessions: adminSessions,
 });
 
 // ============================================================
