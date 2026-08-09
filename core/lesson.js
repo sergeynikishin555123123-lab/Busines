@@ -123,26 +123,27 @@ class LessonService {
         }
     }
     
-    async createLesson(data) {
-        const lessons = await database.readTable('lessons');
-        const lesson = {
-            id: database.generateId(),
-            course_id: data.courseId,
-            title: data.title,
-            description: data.description || '',
-            video_url: data.videoUrl || '',
-            video_token: data.videoToken || '',
-            order_number: parseInt(data.orderNumber) || 0,
-            is_free: data.isFree || false,
-            created_at: database.now(),
-            updated_at: database.now(),
-        };
-        lessons.push(lesson);
-        await database.writeTable('lessons', lessons);
-        logger.info(`Lesson created: ${lesson.id}, course: ${data.courseId}`);
-        return lesson;
-    }
-    
+// core/lesson.js
+async createLesson(data) {
+    const lessons = await database.readTable('lessons');
+    const lesson = {
+        id: database.generateId(),
+        course_id: data.courseId,
+        title: data.title,
+        description: data.description || '',
+        video_url: data.videoUrl || '',
+        video_token: data.videoToken || '',
+        order_number: parseInt(data.orderNumber) || 0,
+        is_free: data.isFree || false,
+        platform: data.platform || 'max',  // <-- ДОБАВЛЯЕМ ЭТУ СТРОКУ
+        created_at: database.now(),
+        updated_at: database.now(),
+    };
+    lessons.push(lesson);
+    await database.writeTable('lessons', lessons);
+    logger.info(`Lesson created: ${lesson.id}, course: ${data.courseId}, platform: ${lesson.platform}`);
+    return lesson;
+}
     async updateLesson(lessonId, data) {
         const lessons = await database.readTable('lessons');
         const index = lessons.findIndex(l => l.id === lessonId);
