@@ -840,6 +840,8 @@ async function handleMessageCallback(update) {
 
 // В server.js, в блоке настройки VK модуля:
 
+// В server.js, в блоке настройки VK модуля:
+
 const vkModule = require('./platforms/vk');
 
 // Передаем общие функции в VK модуль
