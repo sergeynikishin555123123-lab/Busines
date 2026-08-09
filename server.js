@@ -844,37 +844,42 @@ async function handleMessageCallback(update) {
 
 const vkModule = require('./platforms/vk');
 
-// Передаем общие функции в VK модуль (ВСЕ ФУНКЦИИ ДЛЯ VK)
 vkModule.setSharedFunctions({
     checkUserHasPaidAccess,
     showCourses,
-    sendLessonToUser,
+    sendLessonToUser: async (chatId, lessonId, api) => {
+        // Используем специальную функцию для VK с отправкой видео как вложения
+        if (api.constructor.name === 'VKAPI' || typeof api.sendVideoByToken !== 'function') {
+            await vkModule.sendLessonToUserVk(chatId, lessonId, api);
+        } else {
+            // Для MAX используем старую функцию
+            await sendLessonToUser(chatId, lessonId, api);
+        }
+    },
     showTest,
     handleTestAnswer,
     handleBuyAccess,
     handlePaymentCheck,
-    // Функции для админ-панели VK
     showAdminLogin: async (chatId, api) => {
-        await showAdminLoginVk(chatId, api);
+        await vkModule.showAdminLogin(chatId, api);
     },
     showAdminDashboard: async (chatId, api) => {
-        await showAdminDashboardVk(chatId, api);
+        await vkModule.showAdminDashboard(chatId, api);
     },
     handleAdminCommand: async (chatId, text, api) => {
-        await handleAdminCommandVk(chatId, text, api);
+        await vkModule.handleAdminCommand(chatId, text, api);
     },
     handleAdminCallback: async (chatId, payload, api) => {
-        await handleAdminCallbackVk(chatId, payload, api);
+        await vkModule.handleAdminCallback(chatId, payload, api);
     },
     handleAdminAttachment: async (chatId, attachments, api) => {
-        await handleAdminAttachmentVk(chatId, attachments, api);
+        await vkModule.handleAdminAttachmentVk(chatId, attachments, api);
     },
     handleAdminPassword: async (chatId, password, api) => {
-        await handleAdminPasswordVk(chatId, password, api);
+        await vkModule.handleAdminPassword(chatId, password, api);
     },
     adminSessions: adminSessionsVk,
 });
-
 // ============================================================
 // АДМИН-ФУНКЦИИ ДЛЯ MAX
 // ============================================================
