@@ -790,6 +790,12 @@ async function showAdminDashboard(chatId, vkApi) {
             users = (database.readTable('users') || []).filter(u => u.platform === 'vk');
         }
         
+        // Если нет уроков с platform 'vk', показываем все уроки для статистики
+        if (lessons.length === 0) {
+            const allLessons = database.readTable('lessons') || [];
+            lessons = allLessons;
+        }
+        
         const text = `🔐 **Админ-панель VK**\n\n` +
             `👤 ${session.login} (${session.role})\n` +
             `📚 Курсов VK: ${courses.length}\n` +
@@ -813,7 +819,6 @@ async function showAdminDashboard(chatId, vkApi) {
         });
     }
 }
-
 // ============================================================
 // ОБРАБОТКА АДМИН-КОМАНД (ИСПРАВЛЕННАЯ - БЕЗ ПЕРЕСКАКИВАНИЯ)
 // ============================================================
@@ -840,47 +845,45 @@ async function handleAdminCommand(chatId, text, vkApi) {
         return;
     }
     
-    // ШАГ 2: Ввод описания → СОЗДАНИЕ → ПЕРЕХОД К РЕДАКТИРОВАНИЮ (не на дашборд!)
     if (context === 'creating_lesson_desc') {
-        const title = session.lessonTitle;
-        const description = text;
-        const platform = session.platform || 'vk';
-        
-        let courses = await courseService.getAllCourses(false);
-        let courseId = courses?.find(c => c.platform === 'vk')?.id;
-        
-        if (!courseId) {
-            const course = await courseService.createCourse({
-                title: 'Основной курс VK',
-                description: 'Все уроки для VK',
-                price: 0,
-                isActive: true,
-                platform: platform,
-            });
-            courseId = course.id;
-        }
-        
-        const lesson = await lessonService.createLesson({
-            courseId: courseId,
-            title: title,
-            description: description,
-            orderNumber: 0,
-            isFree: true,
+    const title = session.lessonTitle;
+    const description = text;
+    const platform = session.platform || 'vk';
+    
+    let courses = await courseService.getAllCourses(false);
+    let courseId = courses?.find(c => c.platform === 'vk')?.id;
+    
+    if (!courseId) {
+        const course = await courseService.createCourse({
+            title: 'Основной курс VK',
+            description: 'Все уроки для VK',
+            price: 0,
+            isActive: true,
             platform: platform,
         });
-        
-        session.context = 'editing_lesson';  // <-- ВАЖНО: не dashboard!
-        session.lessonId = lesson.id;
-        
-        await vkApi.sendMessage({
-            chatId,
-            text: `✅ **Урок VK создан!**\n\n📖 ${lesson.title}\n\nТеперь вы можете:\n• Загрузить видео\n• Добавить файл\n• Создать тест\n• Настроить доступ`,
-        });
-        
-        // Показываем меню редактирования урока, а не дашборд
-        await handleAdminEditLessonVk(chatId, lesson.id, vkApi);
-        return;
+        courseId = course.id;
     }
+    
+    const lesson = await lessonService.createLesson({
+        courseId: courseId,
+        title: title,
+        description: description,
+        orderNumber: 0,
+        isFree: true,
+        platform: platform,  // <-- Убедитесь, что это поле передается
+    });
+    
+    session.context = 'editing_lesson';
+    session.lessonId = lesson.id;
+    
+    await vkApi.sendMessage({
+        chatId,
+        text: `✅ **Урок VK создан!**\n\n📖 ${lesson.title}\n\nТеперь вы можете:\n• Загрузить видео\n• Добавить файл\n• Создать тест\n• Настроить доступ`,
+    });
+    
+    await handleAdminEditLessonVk(chatId, lesson.id, vkApi);
+    return;
+}
     
     // ШАГ 3: Изменение названия
     if (context === 'editing_lesson_title') {
@@ -966,56 +969,67 @@ async function handleAdminCallback(chatId, payload, vkApi) {
         return;
     }
     
-    // Список уроков для редактирования
-    if (payload === 'admin_edit_lessons') {
-        try {
-            let allLessons = database.readTable('lessons') || [];
-            if (!Array.isArray(allLessons)) {
-                allLessons = [];
-            }
-            
-            let lessons = allLessons.filter(l => l.platform === 'vk');
-            
-            if (lessons.length === 0) {
-                await vkApi.sendKeyboard({
-                    chatId,
-                    text: '📝 Нет созданных уроков VK.\n\nНажмите "📖 Создать урок VK" чтобы добавить первый урок!',
-                    buttons: [
-                        [{ text: '📖 Создать урок VK', payload: 'admin_create_lesson' }],
-                        [{ text: '⬅️ Назад', payload: 'admin_back' }]
-                    ]
-                });
-                return;
-            }
-            
-            let text = '📝 **Редактирование уроков VK**\n\nВыберите урок для редактирования:\n\n';
-            const buttons = [];
-            
-            for (const lesson of lessons) {
-                if (!lesson || !lesson.id) continue;
-                const title = lesson.title || 'Без названия';
-                const isFree = lesson.is_free ? '🆓' : '🔒';
-                text += `📖 ${title} ${isFree}\n`;
-                buttons.push([
-                    { 
-                        text: `✏️ ${title.substring(0, 25)}`, 
-                        payload: `admin_edit_lesson_${lesson.id}` 
-                    }
-                ]);
-            }
-            
-            buttons.push([{ text: '⬅️ Назад', payload: 'admin_back' }]);
-            
-            await vkApi.sendKeyboard({ chatId, text, buttons });
-        } catch (error) {
-            console.error('[VK] Error in admin_edit_lessons:', error);
-            await vkApi.sendMessage({
-                chatId,
-                text: `❌ Ошибка при загрузке уроков: ${error.message}`,
-            });
+  if (payload === 'admin_edit_lessons') {
+    try {
+        let allLessons = database.readTable('lessons') || [];
+        if (!Array.isArray(allLessons)) {
+            allLessons = [];
         }
-        return;
+        
+        console.log(`[VK] Всего уроков в БД: ${allLessons.length}`);
+        console.log('[VK] Уроки:', JSON.stringify(allLessons.map(l => ({ id: l.id, title: l.title, platform: l.platform })), null, 2));
+        
+        // Показываем ВСЕ уроки, а не только с platform === 'vk'
+        // Если нет уроков с platform 'vk', показываем все уроки
+        let lessons = allLessons.filter(l => l.platform === 'vk');
+        
+        // Если нет уроков с platform 'vk', показываем все уроки (для обратной совместимости)
+        if (lessons.length === 0) {
+            lessons = allLessons;
+            console.log('[VK] Нет уроков с platform="vk", показываем все уроки');
+        }
+        
+        if (lessons.length === 0) {
+            await vkApi.sendKeyboard({
+                chatId,
+                text: '📝 Нет созданных уроков.\n\nНажмите "📖 Создать урок VK" чтобы добавить первый урок!',
+                buttons: [
+                    [{ text: '📖 Создать урок VK', payload: 'admin_create_lesson' }],
+                    [{ text: '⬅️ Назад', payload: 'admin_back' }]
+                ]
+            });
+            return;
+        }
+        
+        let text = '📝 **Редактирование уроков VK**\n\nВыберите урок для редактирования:\n\n';
+        const buttons = [];
+        
+        for (const lesson of lessons) {
+            if (!lesson || !lesson.id) continue;
+            const title = lesson.title || 'Без названия';
+            const isFree = lesson.is_free ? '🆓' : '🔒';
+            const platform = lesson.platform || 'max';
+            text += `📖 ${title} ${isFree} (${platform})\n`;
+            buttons.push([
+                { 
+                    text: `✏️ ${title.substring(0, 25)}`, 
+                    payload: `admin_edit_lesson_${lesson.id}` 
+                }
+            ]);
+        }
+        
+        buttons.push([{ text: '⬅️ Назад', payload: 'admin_back' }]);
+        
+        await vkApi.sendKeyboard({ chatId, text, buttons });
+    } catch (error) {
+        console.error('[VK] Error in admin_edit_lessons:', error);
+        await vkApi.sendMessage({
+            chatId,
+            text: `❌ Ошибка при загрузке уроков: ${error.message}`,
+        });
     }
+    return;
+}
     
     // Редактирование конкретного урока
     if (payload.startsWith('admin_edit_lesson_')) {
