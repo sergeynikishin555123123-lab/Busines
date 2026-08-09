@@ -838,21 +838,18 @@ async function handleMessageCallback(update) {
     }
 }
 
-// ============================================================
-// VK МОДУЛЬ
-// ============================================================
+// В server.js, в блоке настройки VK модуля:
 
 const vkModule = require('./platforms/vk');
 
+// Передаем общие функции в VK модуль
 vkModule.setSharedFunctions({
     checkUserHasPaidAccess,
     showCourses,
     sendLessonToUser: async (chatId, lessonId, api) => {
-        // Используем специальную функцию для VK с отправкой видео как вложения
         if (api.constructor.name === 'VKAPI' || typeof api.sendVideoByToken !== 'function') {
             await vkModule.sendLessonToUserVk(chatId, lessonId, api);
         } else {
-            // Для MAX используем старую функцию
             await sendLessonToUser(chatId, lessonId, api);
         }
     },
