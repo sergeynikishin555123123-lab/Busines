@@ -1589,7 +1589,7 @@ async function sendLessonToUserVk(chatId, lessonId, vkApi) {
 }
 
 // ============================================================
-// ОБРАБОТКА СОЗДАНИЯ ТЕСТА
+// ОБРАБОТКА СОЗДАНИЯ ТЕСТА (ПОШАГОВО ДЛЯ VK)
 // ============================================================
 
 async function handleTestCreation(chatId, text, vkApi) {
@@ -1601,59 +1601,105 @@ async function handleTestCreation(chatId, text, vkApi) {
         }
 
         const lessonId = session.lessonId;
-        const lines = text.split('\n').filter(l => l.trim());
-
-        let question = '';
-        const answers = [];
-
-        for (const line of lines) {
-            if (line.toLowerCase().startsWith('вопрос:')) {
-                question = line.replace(/^вопрос:\s*/i, '').trim();
-            } else if (/^\d+[\.\)]\s*/.test(line)) {
-                const answerText = line.replace(/^\d+[\.\)]\s*/, '').trim();
-                const isCorrect = answerText.toLowerCase().includes('(правильный)') || 
-                                answerText.toLowerCase().includes('(верный)') ||
-                                answerText.endsWith('✅');
-                const cleanAnswer = answerText
-                    .replace(/\s*\(правильный\)\s*/i, '')
-                    .replace(/\s*\(верный\)\s*/i, '')
-                    .replace(/\s*✅\s*$/, '')
-                    .trim();
-                if (cleanAnswer) {
-                    answers.push({ text: cleanAnswer, isCorrect });
-                }
-            }
-        }
-
-        if (!question || answers.length < 2) {
+        const context = session.context || '';
+        
+        // ШАГ 1: Ввод вопроса
+        if (context === 'editing_test_question') {
+            session.testQuestion = text;
+            session.testAnswers = [];
+            session.context = 'editing_test_answers';
+            session.answerIndex = 1;
+            
             await vkApi.sendMessage({
                 chatId,
-                text: '❌ Неверный формат. Нужно: вопрос и минимум 2 варианта ответа.\n\nПример:\nВопрос: Что такое 2+2?\n1. 3\n2. 4 (правильный)\n3. 5\n4. 6',
+                text: `📝 **Вопрос:** ${text}\n\nВведите вариант ответа #1 (чтобы отметить правильный, поставьте * в конце):\n\n*Например: 4 (правильный)* или *4**`,
             });
             return;
         }
-
-        await lessonService.createTest(lessonId, {
-            question: question,
-            answers: answers
-        });
-
-        session.context = 'editing_lesson';
+        
+        // ШАГ 2: Ввод ответов
+        if (context === 'editing_test_answers') {
+            // Проверяем, не хочет ли пользователь завершить
+            const lowerText = text.toLowerCase().trim();
+            if (lowerText === 'готово' || lowerText === 'done' || lowerText === 'конец') {
+                if (session.testAnswers.length < 2) {
+                    await vkApi.sendMessage({
+                        chatId,
+                        text: `⚠️ Нужно минимум 2 варианта ответа. Добавьте еще варианты.\n\nТекущий ответ #${session.testAnswers.length + 1}:`,
+                    });
+                    return;
+                }
+                
+                // Проверяем, есть ли правильный ответ
+                const hasCorrect = session.testAnswers.some(a => a.isCorrect);
+                if (!hasCorrect) {
+                    // Если нет правильного, делаем первый правильным
+                    session.testAnswers[0].isCorrect = true;
+                }
+                
+                // Сохраняем тест
+                const result = await lessonService.createTest(lessonId, {
+                    question: session.testQuestion,
+                    answers: session.testAnswers,
+                });
+                
+                session.context = 'editing_lesson';
+                
+                let answerText = result.answers.map((a, i) => {
+                    return `${i + 1}. ${a.answer} ${a.is_correct ? '✅' : ''}`;
+                }).join('\n');
+                
+                await vkApi.sendMessage({
+                    chatId,
+                    text: `✅ **Тест VK сохранен!**\n\n📝 Вопрос: ${result.question}\n\n📋 Варианты ответов:\n${answerText}`,
+                });
+                
+                await handleAdminEditLessonVk(chatId, lessonId, vkApi);
+                return;
+            }
+            
+            // Добавляем ответ
+            const isCorrect = text.endsWith('*');
+            const cleanAnswer = isCorrect ? text.slice(0, -1).trim() : text.trim();
+            
+            if (!cleanAnswer) {
+                await vkApi.sendMessage({
+                    chatId,
+                    text: `⚠️ Пустой ответ. Введите текст ответа #${session.testAnswers.length + 1}:`,
+                });
+                return;
+            }
+            
+            session.testAnswers.push({
+                text: cleanAnswer,
+                isCorrect: isCorrect,
+            });
+            
+            const correctMark = isCorrect ? ' ✅ (правильный)' : '';
+            const answerNum = session.testAnswers.length;
+            
+            await vkApi.sendMessage({
+                chatId,
+                text: `✅ Ответ #${answerNum} добавлен: "${cleanAnswer}"${correctMark}\n\nВведите вариант ответа #${answerNum + 1} (или "готово" чтобы завершить):\n\n*Чтобы отметить правильный ответ, поставьте * в конце*`,
+            });
+            return;
+        }
+        
+        // Если что-то пошло не так
         await vkApi.sendMessage({
             chatId,
-            text: `✅ **Тест VK сохранен!**\n\nВопрос: ${question}\nКоличество ответов: ${answers.length}`,
+            text: '❌ Неизвестная команда. Используйте кнопки меню.',
         });
-        
-        await handleAdminEditLessonVk(chatId, lessonId, vkApi);
     } catch (error) {
         console.error('[VK TEST] Error:', error);
+        session.context = 'editing_lesson';
         await vkApi.sendMessage({
             chatId,
             text: `❌ Ошибка: ${error.message}`,
         });
+        await handleAdminEditLessonVk(chatId, lessonId, vkApi);
     }
 }
-
 // ============================================================
 // ВЕБХУК ОБРАБОТЧИК
 // ============================================================
