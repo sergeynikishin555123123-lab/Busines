@@ -969,7 +969,7 @@ async function handleAdminCallback(chatId, payload, vkApi) {
         return;
     }
     
-  if (payload === 'admin_edit_lessons') {
+ if (payload === 'admin_edit_lessons') {
     try {
         let allLessons = database.readTable('lessons') || [];
         if (!Array.isArray(allLessons)) {
