@@ -123,7 +123,6 @@ class LessonService {
         }
     }
     
-// core/lesson.js
 async createLesson(data) {
     const lessons = await database.readTable('lessons');
     const lesson = {
@@ -135,7 +134,7 @@ async createLesson(data) {
         video_token: data.videoToken || '',
         order_number: parseInt(data.orderNumber) || 0,
         is_free: data.isFree || false,
-        platform: data.platform || 'max',  // <-- ДОБАВЛЯЕМ ЭТУ СТРОКУ
+        platform: data.platform || 'max',  // <-- ДОБАВЛЯЕМ
         created_at: database.now(),
         updated_at: database.now(),
     };
