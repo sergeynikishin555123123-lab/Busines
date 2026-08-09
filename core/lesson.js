@@ -1,4 +1,4 @@
-// core/lesson.js - ПОЛНАЯ ВЕРСИЯ С ПОДДЕРЖКОЙ VK
+// core/lesson.js - ПОЛНАЯ ВЕРСИЯ С ПОДДЕРЖКОЙ VK И PLATFORM
 
 const database = require('../database');
 const logger = require('../logger');
@@ -8,9 +8,20 @@ const crypto = require('crypto');
 
 class LessonService {
     
+    // Гарантирует массив
+    async _ensureArray(tableName) {
+        let data = await database.readTable(tableName);
+        if (!Array.isArray(data)) {
+            console.log(`[LESSON] ${tableName} is not an array, reinitializing...`);
+            data = [];
+            await database.writeTable(tableName, data);
+        }
+        return data;
+    }
+    
     async getLessonById(lessonId) {
-        const lessons = await database.readTable('lessons');
-        const courses = await database.readTable('courses');
+        const lessons = await this._ensureArray('lessons');
+        const courses = await this._ensureArray('courses');
         const lesson = lessons.find(l => l.id === lessonId);
         if (!lesson) return null;
         const course = courses.find(c => c.id === lesson.course_id);
@@ -24,7 +35,7 @@ class LessonService {
         try {
             const lesson = await this.getLessonById(lessonId);
             if (!lesson) return null;
-            const allFiles = await database.readTable('lesson_files');
+            const allFiles = await this._ensureArray('lesson_files');
             const files = allFiles.filter(f => f.lesson_id === lessonId);
             const test = await this.getLessonTest(lessonId);
             return {
@@ -40,8 +51,8 @@ class LessonService {
     
     async getLessonTest(lessonId) {
         try {
-            const tests = await database.readTable('tests');
-            const answers = await database.readTable('test_answers');
+            const tests = await this._ensureArray('tests');
+            const answers = await this._ensureArray('test_answers');
             const test = tests.find(t => String(t.lesson_id) === String(lessonId));
             if (!test) return null;
             const testAnswers = answers
@@ -63,8 +74,8 @@ class LessonService {
     
     async getTestById(testId) {
         try {
-            const tests = await database.readTable('tests');
-            const answers = await database.readTable('test_answers');
+            const tests = await this._ensureArray('tests');
+            const answers = await this._ensureArray('test_answers');
             const test = tests.find(t => String(t.id) === String(testId));
             if (!test) return null;
             const testAnswers = answers
@@ -86,15 +97,15 @@ class LessonService {
     
     async checkTestAnswer(testId, answerId, userId) {
         try {
-            const answers = await database.readTable('test_answers');
-            const tests = await database.readTable('tests');
+            const answers = await this._ensureArray('test_answers');
+            const tests = await this._ensureArray('tests');
             const answer = answers.find(a => a.id === answerId);
             if (!answer) throw new Error('Ответ не найден');
             const test = tests.find(t => t.id === testId);
             if (!test) throw new Error('Тест не найден');
             const isCorrect = answer.is_correct === true;
             if (isCorrect) {
-                const progress = await database.readTable('progress');
+                const progress = await this._ensureArray('progress');
                 const existing = progress.find(p => p.user_id === userId && p.lesson_id === test.lesson_id);
                 if (existing) {
                     existing.status = 'completed';
@@ -123,28 +134,29 @@ class LessonService {
         }
     }
     
-async createLesson(data) {
-    const lessons = await database.readTable('lessons');
-    const lesson = {
-        id: database.generateId(),
-        course_id: data.courseId,
-        title: data.title,
-        description: data.description || '',
-        video_url: data.videoUrl || '',
-        video_token: data.videoToken || '',
-        order_number: parseInt(data.orderNumber) || 0,
-        is_free: data.isFree || false,
-        platform: data.platform || 'max',  // <-- ДОБАВЛЯЕМ
-        created_at: database.now(),
-        updated_at: database.now(),
-    };
-    lessons.push(lesson);
-    await database.writeTable('lessons', lessons);
-    logger.info(`Lesson created: ${lesson.id}, course: ${data.courseId}, platform: ${lesson.platform}`);
-    return lesson;
-}
+    async createLesson(data) {
+        const lessons = await this._ensureArray('lessons');
+        const lesson = {
+            id: database.generateId(),
+            course_id: data.courseId,
+            title: data.title,
+            description: data.description || '',
+            video_url: data.videoUrl || '',
+            video_token: data.videoToken || '',
+            order_number: parseInt(data.orderNumber) || 0,
+            is_free: data.isFree || false,
+            platform: data.platform || 'max',
+            created_at: database.now(),
+            updated_at: database.now(),
+        };
+        lessons.push(lesson);
+        await database.writeTable('lessons', lessons);
+        logger.info(`Lesson created: ${lesson.id}, course: ${data.courseId}, platform: ${lesson.platform}`);
+        return lesson;
+    }
+    
     async updateLesson(lessonId, data) {
-        const lessons = await database.readTable('lessons');
+        const lessons = await this._ensureArray('lessons');
         const index = lessons.findIndex(l => l.id === lessonId);
         if (index === -1) return null;
         if (data.title !== undefined) lessons[index].title = data.title;
@@ -153,6 +165,7 @@ async createLesson(data) {
         if (data.videoToken !== undefined) lessons[index].video_token = data.videoToken;
         if (data.orderNumber !== undefined) lessons[index].order_number = parseInt(data.orderNumber);
         if (data.isFree !== undefined) lessons[index].is_free = data.isFree;
+        if (data.platform !== undefined) lessons[index].platform = data.platform;
         lessons[index].updated_at = database.now();
         await database.writeTable('lessons', lessons);
         logger.info(`Lesson updated: ${lessonId}`);
@@ -160,12 +173,12 @@ async createLesson(data) {
     }
     
     async deleteLesson(lessonId) {
-        let lessons = await database.readTable('lessons');
-        let files = await database.readTable('lesson_files');
-        let tests = await database.readTable('tests');
-        let answers = await database.readTable('test_answers');
-        let progress = await database.readTable('progress');
-        let views = await database.readTable('lesson_views');
+        let lessons = await this._ensureArray('lessons');
+        let files = await this._ensureArray('lesson_files');
+        let tests = await this._ensureArray('tests');
+        let answers = await this._ensureArray('test_answers');
+        let progress = await this._ensureArray('progress');
+        let views = await this._ensureArray('lesson_views');
         
         const lessonFiles = files.filter(f => f.lesson_id === lessonId);
         for (const file of lessonFiles) {
@@ -201,19 +214,25 @@ async createLesson(data) {
     }
     
     async getLessonsByCourse(courseId) {
-        const lessons = await database.readTable('lessons');
+        const lessons = await this._ensureArray('lessons');
         return lessons
             .filter(l => l.course_id === courseId)
             .sort((a, b) => a.order_number - b.order_number);
     }
     
-    // ============================================================
-    // ОБНОВЛЕННЫЙ МЕТОД addLessonFile С ПОДДЕРЖКОЙ VK
-    // ============================================================
+    async getLessonFiles(lessonId) {
+        try {
+            const files = await this._ensureArray('lesson_files');
+            return files.filter(f => f.lesson_id === lessonId);
+        } catch (error) {
+            logger.error({ err: error, lessonId }, 'Failed to get lesson files');
+            return [];
+        }
+    }
     
     async addLessonFile(lessonId, fileData) {
         try {
-            const files = await database.readTable('lesson_files');
+            const files = await this._ensureArray('lesson_files');
             
             let fileHash = '';
             if (fileData.path && !fileData.is_max_uploaded && fs.existsSync(fileData.path)) {
@@ -233,7 +252,6 @@ async createLesson(data) {
             
             const isMaxUploaded = fileData.is_max_uploaded || !!fileData.token;
             
-            // 👇 РАСШИРЕННЫЙ ОБЪЕКТ С ПОДДЕРЖКОЙ VK
             const file = {
                 id: database.generateId(),
                 lesson_id: lessonId,
@@ -245,13 +263,13 @@ async createLesson(data) {
                 path: fileData.path || fileData.token || '',
                 url: fileData.url || null,
                 token: fileData.token || null,
-                // 👇 НОВЫЕ ПОЛЯ ДЛЯ VK
                 vk_owner_id: fileData.vk_owner_id || null,
                 vk_video_id: fileData.vk_video_id || null,
                 vk_access_key: fileData.vk_access_key || null,
                 is_max_uploaded: isMaxUploaded,
                 hash: fileHash,
                 duration: fileData.duration || null,
+                platform: fileData.platform || 'max',
                 created_at: database.now(),
             };
             
@@ -265,19 +283,9 @@ async createLesson(data) {
         }
     }
     
-    async getLessonFiles(lessonId) {
-        try {
-            const files = await database.readTable('lesson_files');
-            return files.filter(f => f.lesson_id === lessonId);
-        } catch (error) {
-            logger.error({ err: error, lessonId }, 'Failed to get lesson files');
-            return [];
-        }
-    }
-    
     async deleteLessonFile(fileId) {
         try {
-            let files = await database.readTable('lesson_files');
+            let files = await this._ensureArray('lesson_files');
             const file = files.find(f => f.id === fileId);
             if (file) {
                 if (file.path && fs.existsSync(file.path) && !file.is_max_uploaded) {
@@ -295,8 +303,8 @@ async createLesson(data) {
     }
     
     async createTest(lessonId, testData) {
-        let tests = await database.readTable('tests');
-        let answers = await database.readTable('test_answers');
+        let tests = await this._ensureArray('tests');
+        let answers = await this._ensureArray('test_answers');
         
         const existingTest = tests.find(t => t.lesson_id === lessonId);
         if (existingTest) {
@@ -308,6 +316,7 @@ async createLesson(data) {
             id: database.generateId(),
             lesson_id: lessonId,
             question: testData.question || 'Проверьте свои знания',
+            created_at: database.now(),
         };
         tests.push(test);
         
@@ -319,6 +328,7 @@ async createLesson(data) {
                     test_id: test.id,
                     answer: answer.text.trim(),
                     is_correct: answer.isCorrect || false,
+                    created_at: database.now(),
                 });
                 addedCount++;
             }
@@ -335,18 +345,16 @@ async createLesson(data) {
     
     async updateTest(testId, testData) {
         try {
-            let tests = await database.readTable('tests');
-            let answers = await database.readTable('test_answers');
+            let tests = await this._ensureArray('tests');
+            let answers = await this._ensureArray('test_answers');
             
             const testIndex = tests.findIndex(t => t.id === testId);
             if (testIndex === -1) throw new Error('Test not found');
             
             tests[testIndex].question = testData.question || tests[testIndex].question;
             
-            // Удаляем старые ответы
             answers = answers.filter(a => a.test_id !== testId);
             
-            // Добавляем новые
             let addedCount = 0;
             for (const answer of testData.answers || []) {
                 if (answer.text && answer.text.trim()) {
@@ -355,6 +363,7 @@ async createLesson(data) {
                         test_id: testId,
                         answer: answer.text.trim(),
                         is_correct: answer.isCorrect || false,
+                        created_at: database.now(),
                     });
                     addedCount++;
                 }
@@ -375,8 +384,8 @@ async createLesson(data) {
     
     async deleteTest(testId) {
         try {
-            let tests = await database.readTable('tests');
-            let answers = await database.readTable('test_answers');
+            let tests = await this._ensureArray('tests');
+            let answers = await this._ensureArray('test_answers');
             
             answers = answers.filter(a => a.test_id !== testId);
             tests = tests.filter(t => t.id !== testId);
@@ -392,8 +401,8 @@ async createLesson(data) {
     }
     
     async getFreeLessons() {
-        const lessons = await database.readTable('lessons');
-        const files = await database.readTable('lesson_files');
+        const lessons = await this._ensureArray('lessons');
+        const files = await this._ensureArray('lesson_files');
         const freeLessons = lessons.filter(l => l.is_free === true);
         return freeLessons.map(l => ({
             ...l,
@@ -402,8 +411,8 @@ async createLesson(data) {
     }
     
     async getAllLessons() {
-        const lessons = await database.readTable('lessons');
-        const files = await database.readTable('lesson_files');
+        const lessons = await this._ensureArray('lessons');
+        const files = await this._ensureArray('lesson_files');
         return lessons.map(l => ({
             ...l,
             files: files.filter(f => f.lesson_id === l.id),
