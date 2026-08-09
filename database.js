@@ -1,4 +1,4 @@
-// database.js - ИСПРАВЛЕННАЯ ВЕРСИЯ С ПОДДЕРЖКОЙ PLATFORM
+// database.js - ПОЛНАЯ ПРОДАКШЕН ВЕРСИЯ С POSTGRESQL + VK ПОЛЯ + PLATFORM
 
 const fs = require('fs');
 const path = require('path');
