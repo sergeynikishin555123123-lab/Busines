@@ -170,7 +170,7 @@ class VKAPI {
     }
 
     // ============================================================
-    // ОТПРАВКА ВИДЕО ПО ID (ГЛАВНЫЙ МЕТОД ДЛЯ VK)
+    // ОТПРАВКА ВИДЕО ПО ID
     // ============================================================
 
     async sendVideoById({ chatId, ownerId, videoId, accessKey = '', caption = '', parseMode = 'html' }) {
@@ -214,16 +214,13 @@ class VKAPI {
                 throw new Error(`Video too large: ${fileSizeInMB.toFixed(2)} MB (max 250 MB)`);
             }
 
-            // ШАГ 1: Получаем сервер для загрузки
             console.log('[VK] Getting upload server...');
             const uploadResponse = await this.client.post('/video.save', null, {
                 params: {
                     group_id: this.groupId,
                     access_token: this.token,
                     v: this.apiVersion,
-                    // ВАЖНО: НЕ публикуем на стене
                     wallpost: 0,
-                    // Приватное видео
                     privacy_view: 'only_me',
                 }
             });
@@ -237,7 +234,6 @@ class VKAPI {
             const uploadUrl = uploadData.upload_url;
             console.log(`[VK] Upload URL: ${uploadUrl}`);
             
-            // ШАГ 2: Загружаем файл
             console.log('[VK] Uploading video...');
             const formData = new FormData();
             formData.append('video_file', fs.createReadStream(filePath));
@@ -253,7 +249,6 @@ class VKAPI {
             
             console.log('[VK] Upload response received');
             
-            // ШАГ 3: Сохраняем видео
             console.log('[VK] Saving video...');
             const data = uploadResult.data;
             
@@ -268,9 +263,7 @@ class VKAPI {
                     video_file: data.video_file,
                     name: lessonTitle || 'Урок',
                     description: 'Видео доступно через бота',
-                    // НЕ публикуем на стене
                     wallpost: 0,
-                    // Только для просмотра через бота
                     privacy_view: 'only_me',
                     access_token: this.token,
                     v: this.apiVersion,
@@ -426,9 +419,6 @@ async function handleMessageNew(message) {
             return;
         }
 
-        // ============================================================
-        // ОБРАБОТКА ВЛОЖЕНИЙ (ВИДЕО/ФАЙЛЫ) ДЛЯ АДМИНКИ
-        // ============================================================
         if (attachments.length > 0) {
             const adminSession = adminSessions.get(userId);
             if (adminSession && adminSession.mode === 'admin') {
@@ -824,6 +814,10 @@ async function showAdminDashboard(chatId, vkApi) {
     }
 }
 
+// ============================================================
+// ОБРАБОТКА АДМИН-КОМАНД (ИСПРАВЛЕННАЯ - БЕЗ ПЕРЕСКАКИВАНИЯ)
+// ============================================================
+
 async function handleAdminCommand(chatId, text, vkApi) {
     console.log(`[VK ADMIN COMMAND] ${chatId}: "${text}"`);
     
@@ -835,6 +829,7 @@ async function handleAdminCommand(chatId, text, vkApi) {
     
     const context = session.context || '';
     
+    // ШАГ 1: Ввод названия урока
     if (context === 'creating_lesson') {
         session.lessonTitle = text;
         session.context = 'creating_lesson_desc';
@@ -845,6 +840,7 @@ async function handleAdminCommand(chatId, text, vkApi) {
         return;
     }
     
+    // ШАГ 2: Ввод описания → СОЗДАНИЕ → ПЕРЕХОД К РЕДАКТИРОВАНИЮ (не на дашборд!)
     if (context === 'creating_lesson_desc') {
         const title = session.lessonTitle;
         const description = text;
@@ -873,45 +869,50 @@ async function handleAdminCommand(chatId, text, vkApi) {
             platform: platform,
         });
         
-        session.context = 'dashboard';
+        session.context = 'editing_lesson';  // <-- ВАЖНО: не dashboard!
         session.lessonId = lesson.id;
         
         await vkApi.sendMessage({
             chatId,
             text: `✅ **Урок VK создан!**\n\n📖 ${lesson.title}\n\nТеперь вы можете:\n• Загрузить видео\n• Добавить файл\n• Создать тест\n• Настроить доступ`,
         });
-        await showAdminDashboard(chatId, vkApi);
+        
+        // Показываем меню редактирования урока, а не дашборд
+        await handleAdminEditLessonVk(chatId, lesson.id, vkApi);
         return;
     }
     
+    // ШАГ 3: Изменение названия
     if (context === 'editing_lesson_title') {
         const lessonId = session.lessonId;
         if (lessonId) {
             await lessonService.updateLesson(lessonId, { title: text });
-            session.context = 'dashboard';
+            session.context = 'editing_lesson';
             await vkApi.sendMessage({
                 chatId,
                 text: `✅ Название обновлено: "${text}"`,
             });
-            await showAdminDashboard(chatId, vkApi);
+            await handleAdminEditLessonVk(chatId, lessonId, vkApi);
         }
         return;
     }
     
+    // ШАГ 4: Изменение описания
     if (context === 'editing_lesson_desc') {
         const lessonId = session.lessonId;
         if (lessonId) {
             await lessonService.updateLesson(lessonId, { description: text });
-            session.context = 'dashboard';
+            session.context = 'editing_lesson';
             await vkApi.sendMessage({
                 chatId,
                 text: '✅ Описание обновлено.',
             });
-            await showAdminDashboard(chatId, vkApi);
+            await handleAdminEditLessonVk(chatId, lessonId, vkApi);
         }
         return;
     }
     
+    // ШАГ 5: Создание теста
     if (context === 'editing_test') {
         await handleTestCreation(chatId, text, vkApi);
         return;
@@ -957,6 +958,7 @@ async function handleAdminCallback(chatId, payload, vkApi) {
     if (payload === 'admin_create_lesson') {
         session.context = 'creating_lesson';
         session.platform = 'vk';
+        session.lessonTitle = null;
         await vkApi.sendMessage({
             chatId,
             text: '📝 **Создание урока VK**\n\nВведите название урока:',
@@ -1053,7 +1055,7 @@ async function handleAdminCallback(chatId, payload, vkApi) {
         session.context = 'uploading_video';
         await vkApi.sendMessage({
             chatId,
-            text: '🎬 **Загрузка видео VK**\n\nОтправьте видео файлом в этот чат.\n\nВидео будет загружено в сообщество и станет доступно пользователям VK.\n\n📌 Видео НЕ будет опубликовано на стене.\n\nПоддерживаются: MP4, MOV, WEBM\nМаксимальный размер: 250MB',
+            text: '🎬 **Загрузка видео VK**\n\nОтправьте видео файлом в этот чат.\n\n📌 Видео будет загружено в сообщество.\n📌 НЕ будет опубликовано на стене.\n\nПоддерживаются: MP4, MOV, WEBM\nМаксимальный размер: 250MB',
         });
         return;
     }
@@ -1241,7 +1243,7 @@ async function handleAdminEditLessonVk(chatId, lessonId, vkApi) {
 }
 
 // ============================================================
-// ОБРАБОТКА ВЛОЖЕНИЙ В VK (ЗАГРУЗКА ВИДЕО/ФАЙЛОВ)
+// ОБРАБОТКА ВЛОЖЕНИЙ В VK (ИСПРАВЛЕННАЯ - ВИДЕО.id ВМЕСТО video_id)
 // ============================================================
 
 async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
@@ -1268,21 +1270,22 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
         console.log(`[VK ADMIN] Processing ${attachments.length} attachment(s) for lesson ${lessonId}`);
         
         for (const attachment of attachments) {
-            console.log('[VK ADMIN] Attachment:', JSON.stringify(attachment, null, 2));
+            console.log('[VK ADMIN] Full attachment:', JSON.stringify(attachment, null, 2));
             
             const type = attachment.type;
             
             // ============================================================
-            // ОБРАБОТКА ВИДЕО (через кнопку "Видео" в VK)
+            // ОБРАБОТКА ВИДЕО (ИСПРАВЛЕННАЯ)
             // ============================================================
             if (type === 'video' && attachment.video) {
                 const video = attachment.video;
+                // ВАЖНО: VK присылает id, а не video_id!
                 const ownerId = video.owner_id;
-                const videoId = video.video_id;
+                const videoId = video.id;  // <-- ИСПРАВЛЕНО: video.id вместо video.video_id
                 const accessKey = video.access_key || '';
                 const title = video.title || 'Видео';
                 
-                console.log(`[VK ADMIN] Video: owner_id=${ownerId}, video_id=${videoId}, title=${title}`);
+                console.log(`[VK ADMIN] Video: owner_id=${ownerId}, id=${videoId}, title=${title}`);
                 
                 if (ownerId && videoId) {
                     // Сохраняем видео в БД
@@ -1313,7 +1316,7 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
                     
                     await vkApi.sendMessage({
                         chatId,
-                        text: `✅ **Видео VK загружено!**\n\n📹 ${title}\n\nВидео сохранено в уроке.`,
+                        text: `✅ **Видео VK сохранено!**\n\n📹 ${title}\n\nВидео сохранено в уроке.`,
                     });
                     
                     await handleAdminEditLessonVk(chatId, lessonId, vkApi);
@@ -1334,7 +1337,6 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
                 console.log(`[VK ADMIN] Doc: ${fileName}, ext: ${fileExt}, isVideo: ${isVideo}`);
                 console.log(`[VK ADMIN] Doc URL: ${docUrl}`);
                 
-                // Если это видео-файл - загружаем в VK
                 if (isVideo && docUrl) {
                     await vkApi.sendMessage({
                         chatId,
@@ -1342,7 +1344,6 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
                     });
                     
                     try {
-                        // Скачиваем видео
                         const response = await axios.get(docUrl, {
                             responseType: 'arraybuffer',
                             timeout: 600000,
@@ -1354,7 +1355,6 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
                         const tempPath = path.join(tempDir, `${Date.now()}-${fileName}`);
                         fs.writeFileSync(tempPath, Buffer.from(response.data));
                         
-                        // Загружаем в VK (без публикации на стене)
                         const vkApiClient = new VKAPI();
                         const vkResult = await vkApiClient.uploadPrivateVideo(tempPath, 'Урок VK');
                         
@@ -1385,7 +1385,7 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
                         
                         await vkApi.sendMessage({
                             chatId,
-                            text: `✅ **Видео VK загружено!**\n\n📹 ${fileName}\n\nВидео сохранено в уроке.\n\n📌 Видео НЕ опубликовано на стене сообщества.`,
+                            text: `✅ **Видео VK загружено в сообщество!**\n\n📹 ${fileName}\n\n📌 Видео НЕ опубликовано на стене.\n\nТеперь видео доступно всем пользователям бота.`,
                         });
                         
                         await handleAdminEditLessonVk(chatId, lessonId, vkApi);
@@ -1488,6 +1488,132 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
 }
 
 // ============================================================
+// ОТПРАВКА УРОКА ПОЛЬЗОВАТЕЛЮ (С ВИДЕО КАК ВЛОЖЕНИЕ)
+// ============================================================
+
+async function sendLessonToUserVk(chatId, lessonId, vkApi) {
+    try {
+        console.log(`[VK LESSON] Sending lesson ${lessonId} to ${chatId}`);
+        
+        const lesson = await lessonService.getLessonWithFiles(lessonId);
+        if (!lesson) {
+            await vkApi.sendMessage({
+                chatId,
+                text: '❌ Урок не найден',
+            });
+            return;
+        }
+        
+        if (!lesson.is_free) {
+            const hasAccess = await sharedFunctions.checkUserHasPaidAccess(chatId);
+            if (!hasAccess) {
+                await vkApi.sendKeyboard({
+                    chatId: chatId,
+                    text: `🔒 **Этот урок платный**\n\n"${lesson.title}" доступен только после покупки полного курса.\n\n💳 Купите доступ чтобы открыть все уроки!`,
+                    buttons: [
+                        [{ text: '💳 Купить доступ', payload: 'buy_access' }],
+                        [{ text: '📚 Назад к урокам', payload: 'show_courses' }]
+                    ],
+                });
+                return;
+            }
+        }
+        
+        const files = await lessonService.getLessonFiles(lessonId);
+        const videoFile = files.find(f => f.type === 'video' && (f.platform === 'vk' || !f.platform));
+        const otherFiles = files.filter(f => f.type !== 'video' && (f.platform === 'vk' || !f.platform));
+        
+        // 1. Отправляем описание
+        await vkApi.sendMessage({
+            chatId,
+            text: `📖 **${lesson.title}**\n\n${lesson.description || 'Нет описания'}`,
+        });
+        
+        // 2. Отправляем видео как ВЛОЖЕНИЕ
+        if (videoFile) {
+            try {
+                const ownerId = videoFile.vk_owner_id;
+                const videoId = videoFile.vk_video_id;
+                const accessKey = videoFile.vk_access_key || '';
+                
+                if (ownerId && videoId) {
+                    console.log(`[VK LESSON] Sending video: video${ownerId}_${videoId}`);
+                    
+                    let attachment = `video${ownerId}_${videoId}`;
+                    if (accessKey) {
+                        attachment += `_${accessKey}`;
+                    }
+                    
+                    await vkApi.sendMessage({
+                        chatId,
+                        text: `🎬 **${lesson.title}**\n\n${lesson.description || ''}`,
+                        attachments: [attachment],
+                    });
+                    
+                    console.log(`[VK LESSON] ✅ Video sent as attachment: ${attachment}`);
+                } else {
+                    await vkApi.sendMessage({
+                        chatId,
+                        text: `📖 **${lesson.title}**\n\n${lesson.description || ''}\n\n⚠️ Видео недоступно.`,
+                    });
+                }
+            } catch (error) {
+                console.error('[VK LESSON] Failed to send video:', error.message);
+                await vkApi.sendMessage({
+                    chatId,
+                    text: `📖 **${lesson.title}**\n\n${lesson.description || ''}\n\n⚠️ Видео недоступно.`,
+                });
+            }
+        }
+        
+        // 3. Отправляем файлы
+        for (const file of otherFiles) {
+            try {
+                const fileUrl = file.url || file.path || '';
+                if (fileUrl) {
+                    await vkApi.sendMessage({
+                        chatId,
+                        text: `📎 **${file.original_name || file.filename}**\n${fileUrl}`,
+                    });
+                }
+                console.log(`[VK LESSON] ✅ File sent: ${file.original_name || file.filename}`);
+            } catch (error) {
+                console.error('[VK LESSON] Failed to send file:', error.message);
+            }
+        }
+        
+        // 4. Отправляем тест
+        const test = await lessonService.getLessonTest(lessonId);
+        if (test && test.answers && test.answers.length > 0) {
+            await vkApi.sendKeyboard({
+                chatId: chatId,
+                text: `📝 **Проверь себя!**\n\nПройти тест по уроку "${lesson.title}"`,
+                buttons: [
+                    [{ text: '✅ Проверить себя', payload: `test_${test.id}` }],
+                    [{ text: '📚 Назад к урокам', payload: 'show_courses' }]
+                ],
+            });
+        } else {
+            await vkApi.sendKeyboard({
+                chatId: chatId,
+                text: `✅ Урок завершён!\n\nВы изучили "${lesson.title}"`,
+                buttons: [
+                    [{ text: '📚 Назад к урокам', payload: 'show_courses' }]
+                ],
+            });
+        }
+        
+        console.log(`[VK LESSON] ✅ Lesson ${lessonId} sent to ${chatId}`);
+    } catch (error) {
+        console.error('[VK LESSON] Error sending lesson:', error);
+        await vkApi.sendMessage({
+            chatId,
+            text: '❌ Ошибка при загрузке урока.',
+        });
+    }
+}
+
+// ============================================================
 // ОБРАБОТКА СОЗДАНИЯ ТЕСТА
 // ============================================================
 
@@ -1549,134 +1675,6 @@ async function handleTestCreation(chatId, text, vkApi) {
         await vkApi.sendMessage({
             chatId,
             text: `❌ Ошибка: ${error.message}`,
-        });
-    }
-}
-
-// ============================================================
-// ОТПРАВКА УРОКА ПОЛЬЗОВАТЕЛЮ (С ВИДЕО КАК ВЛОЖЕНИЕ)
-// ============================================================
-
-async function sendLessonToUserVk(chatId, lessonId, vkApi) {
-    try {
-        console.log(`[VK LESSON] Sending lesson ${lessonId} to ${chatId}`);
-        
-        const lesson = await lessonService.getLessonWithFiles(lessonId);
-        if (!lesson) {
-            await vkApi.sendMessage({
-                chatId,
-                text: '❌ Урок не найден',
-            });
-            return;
-        }
-        
-        // Проверка доступа
-        if (!lesson.is_free) {
-            const hasAccess = await sharedFunctions.checkUserHasPaidAccess(chatId);
-            if (!hasAccess) {
-                await vkApi.sendKeyboard({
-                    chatId: chatId,
-                    text: `🔒 **Этот урок платный**\n\n"${lesson.title}" доступен только после покупки полного курса.\n\n💳 Купите доступ чтобы открыть все уроки!`,
-                    buttons: [
-                        [{ text: '💳 Купить доступ', payload: 'buy_access' }],
-                        [{ text: '📚 Назад к урокам', payload: 'show_courses' }]
-                    ],
-                });
-                return;
-            }
-        }
-        
-        const files = await lessonService.getLessonFiles(lessonId);
-        const videoFile = files.find(f => f.type === 'video' && (f.platform === 'vk' || !f.platform));
-        const otherFiles = files.filter(f => f.type !== 'video' && (f.platform === 'vk' || !f.platform));
-        
-        // 1. Отправляем описание урока
-        await vkApi.sendMessage({
-            chatId,
-            text: `📖 **${lesson.title}**\n\n${lesson.description || 'Нет описания'}`,
-        });
-        
-        // 2. Отправляем видео как ВЛОЖЕНИЕ (плеер в чате)
-        if (videoFile) {
-            try {
-                const ownerId = videoFile.vk_owner_id;
-                const videoId = videoFile.vk_video_id;
-                const accessKey = videoFile.vk_access_key || '';
-                
-                if (ownerId && videoId) {
-                    console.log(`[VK LESSON] Sending video: video${ownerId}_${videoId}`);
-                    
-                    let attachment = `video${ownerId}_${videoId}`;
-                    if (accessKey) {
-                        attachment += `_${accessKey}`;
-                    }
-                    
-                    await vkApi.sendMessage({
-                        chatId,
-                        text: `🎬 **${lesson.title}**\n\n${lesson.description || ''}`,
-                        attachments: [attachment],
-                    });
-                    
-                    console.log(`[VK LESSON] ✅ Video sent as attachment: ${attachment}`);
-                } else {
-                    // Если нет VK ID - пробуем загрузить из локального файла
-                    await vkApi.sendMessage({
-                        chatId,
-                        text: `📖 **${lesson.title}**\n\n${lesson.description || ''}\n\n⚠️ Видео недоступно.`,
-                    });
-                }
-            } catch (error) {
-                console.error('[VK LESSON] Failed to send video:', error.message);
-                await vkApi.sendMessage({
-                    chatId,
-                    text: `📖 **${lesson.title}**\n\n${lesson.description || ''}\n\n⚠️ Видео недоступно.`,
-                });
-            }
-        }
-        
-        // 3. Отправляем файлы
-        for (const file of otherFiles) {
-            try {
-                const fileUrl = file.url || file.path || '';
-                if (fileUrl) {
-                    await vkApi.sendMessage({
-                        chatId,
-                        text: `📎 **${file.original_name || file.filename}**\n${fileUrl}`,
-                    });
-                }
-                console.log(`[VK LESSON] ✅ File sent: ${file.original_name || file.filename}`);
-            } catch (error) {
-                console.error('[VK LESSON] Failed to send file:', error.message);
-            }
-        }
-        
-        // 4. Отправляем тест
-        const test = await lessonService.getLessonTest(lessonId);
-        if (test && test.answers && test.answers.length > 0) {
-            await vkApi.sendKeyboard({
-                chatId: chatId,
-                text: `📝 **Проверь себя!**\n\nПройти тест по уроку "${lesson.title}"`,
-                buttons: [
-                    [{ text: '✅ Проверить себя', payload: `test_${test.id}` }],
-                    [{ text: '📚 Назад к урокам', payload: 'show_courses' }]
-                ],
-            });
-        } else {
-            await vkApi.sendKeyboard({
-                chatId: chatId,
-                text: `✅ Урок завершён!\n\nВы изучили "${lesson.title}"`,
-                buttons: [
-                    [{ text: '📚 Назад к урокам', payload: 'show_courses' }]
-                ],
-            });
-        }
-        
-        console.log(`[VK LESSON] ✅ Lesson ${lessonId} sent to ${chatId}`);
-    } catch (error) {
-        console.error('[VK LESSON] Error sending lesson:', error);
-        await vkApi.sendMessage({
-            chatId,
-            text: '❌ Ошибка при загрузке урока.',
         });
     }
 }
