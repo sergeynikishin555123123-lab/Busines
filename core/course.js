@@ -1,30 +1,34 @@
-// core/course.js - ИСПРАВЛЕННАЯ ВЕРСИЯ
+// core/course.js - ИСПРАВЛЕННАЯ ВЕРСИЯ С ПОДДЕРЖКОЙ PLATFORM
 
 const database = require('../database');
 const logger = require('../logger');
 
 class CourseService {
 
-    // core/course.js - ДОБАВИТЬ ПРОВЕРКИ
-
-async getAllCourses(activeOnly = false) {
-    try {
-        let courses = await database.readTable('courses');
-        // Убеждаемся что это массив
-        if (!Array.isArray(courses)) {
-            courses = [];
+    async _ensureArray(tableName) {
+        let data = await database.readTable(tableName);
+        if (!Array.isArray(data)) {
+            console.log(`[COURSE] ${tableName} is not an array, reinitializing...`);
+            data = [];
+            await database.writeTable(tableName, data);
         }
-        const filtered = activeOnly ? courses.filter(c => c.is_active !== false) : courses;
-        return filtered.sort((a, b) => (a.order_number || 0) - (b.order_number || 0));
-    } catch (error) {
-        console.error('[COURSE] Error in getAllCourses:', error);
-        return [];
+        return data;
     }
-}
+
+    async getAllCourses(activeOnly = false) {
+        try {
+            let courses = await this._ensureArray('courses');
+            const filtered = activeOnly ? courses.filter(c => c.is_active !== false) : courses;
+            return filtered.sort((a, b) => (a.order_number || 0) - (b.order_number || 0));
+        } catch (error) {
+            console.error('[COURSE] Error in getAllCourses:', error);
+            return [];
+        }
+    }
+    
     async getCourseById(courseId) {
         try {
-            const courses = await database.readTable('courses');
-            if (!Array.isArray(courses)) return null;
+            const courses = await this._ensureArray('courses');
             return courses.find(c => c.id === courseId) || null;
         } catch (error) {
             console.error('[COURSE] Error in getCourseById:', error);
@@ -34,8 +38,7 @@ async getAllCourses(activeOnly = false) {
 
     async getCourseLessons(courseId) {
         try {
-            const lessons = await database.readTable('lessons');
-            if (!Array.isArray(lessons)) return [];
+            const lessons = await this._ensureArray('lessons');
             return lessons
                 .filter(l => l.course_id === courseId)
                 .sort((a, b) => (a.order_number || 0) - (b.order_number || 0));
@@ -47,11 +50,8 @@ async getAllCourses(activeOnly = false) {
 
     async getFreeLessons() {
         try {
-            const lessons = await database.readTable('lessons');
-            const courses = await database.readTable('courses');
-            
-            if (!Array.isArray(lessons)) return [];
-            if (!Array.isArray(courses)) return [];
+            const lessons = await this._ensureArray('lessons');
+            const courses = await this._ensureArray('courses');
             
             return lessons
                 .filter(l => l.is_free === true)
@@ -75,11 +75,8 @@ async getAllCourses(activeOnly = false) {
 
     async getPaidLessons() {
         try {
-            const lessons = await database.readTable('lessons');
-            const courses = await database.readTable('courses');
-            
-            if (!Array.isArray(lessons)) return [];
-            if (!Array.isArray(courses)) return [];
+            const lessons = await this._ensureArray('lessons');
+            const courses = await this._ensureArray('courses');
             
             return lessons
                 .filter(l => l.is_free !== true)
@@ -103,11 +100,8 @@ async getAllCourses(activeOnly = false) {
 
     async getUserFullCourseAccess(userId) {
         try {
-            const access = await database.readTable('user_course_access');
-            const courses = await database.readTable('courses');
-            
-            if (!Array.isArray(access)) return [];
-            if (!Array.isArray(courses)) return [];
+            const access = await this._ensureArray('user_course_access');
+            const courses = await this._ensureArray('courses');
             
             return access
                 .filter(a => a.user_id === userId)
@@ -130,8 +124,7 @@ async getAllCourses(activeOnly = false) {
 
     async checkUserCourseAccess(userId, courseId) {
         try {
-            const access = await database.readTable('user_course_access');
-            if (!Array.isArray(access)) return false;
+            const access = await this._ensureArray('user_course_access');
             return access.some(a => a.user_id === userId && a.course_id === courseId);
         } catch (error) {
             console.error('[COURSE] Error in checkUserCourseAccess:', error);
@@ -141,19 +134,7 @@ async getAllCourses(activeOnly = false) {
 
     async grantCourseAccess(userId, courseId) {
         try {
-            const access = await database.readTable('user_course_access');
-            if (!Array.isArray(access)) {
-                // Если не массив, создаем новый
-                const newAccess = [{
-                    id: database.generateId(),
-                    user_id: userId,
-                    course_id: courseId,
-                    granted_at: database.now(),
-                    expires_at: null,
-                }];
-                await database.writeTable('user_course_access', newAccess);
-                return newAccess[0];
-            }
+            const access = await this._ensureArray('user_course_access');
             
             const existing = access.find(a => a.user_id === userId && a.course_id === courseId);
             if (existing) return existing;
@@ -178,8 +159,7 @@ async getAllCourses(activeOnly = false) {
 
     async revokeCourseAccess(userId, courseId) {
         try {
-            let access = await database.readTable('user_course_access');
-            if (!Array.isArray(access)) return true;
+            let access = await this._ensureArray('user_course_access');
             access = access.filter(a => !(a.user_id === userId && a.course_id === courseId));
             await database.writeTable('user_course_access', access);
             logger.info(`Course access revoked: user=${userId}, course=${courseId}`);
@@ -192,24 +172,7 @@ async getAllCourses(activeOnly = false) {
 
     async createCourse(data) {
         try {
-            const courses = await database.readTable('courses');
-            if (!Array.isArray(courses)) {
-                // Если не массив, создаем новый
-                const course = {
-                    id: database.generateId(),
-                    title: data.title,
-                    description: data.description || '',
-                    price: parseFloat(data.price) || 0,
-                    image_url: data.imageUrl || '',
-                    is_active: data.isActive !== undefined ? data.isActive : true,
-                    order_number: parseInt(data.orderNumber) || 0,
-                    created_at: database.now(),
-                    updated_at: database.now(),
-                };
-                await database.writeTable('courses', [course]);
-                logger.info(`Course created: ${course.id}, title: ${course.title}`);
-                return course;
-            }
+            const courses = await this._ensureArray('courses');
             
             const course = {
                 id: database.generateId(),
@@ -219,6 +182,7 @@ async getAllCourses(activeOnly = false) {
                 image_url: data.imageUrl || '',
                 is_active: data.isActive !== undefined ? data.isActive : true,
                 order_number: parseInt(data.orderNumber) || 0,
+                platform: data.platform || 'max',
                 created_at: database.now(),
                 updated_at: database.now(),
             };
@@ -235,8 +199,7 @@ async getAllCourses(activeOnly = false) {
 
     async updateCourse(courseId, data) {
         try {
-            const courses = await database.readTable('courses');
-            if (!Array.isArray(courses)) return null;
+            const courses = await this._ensureArray('courses');
             
             const index = courses.findIndex(c => c.id === courseId);
             if (index === -1) return null;
@@ -247,6 +210,7 @@ async getAllCourses(activeOnly = false) {
             if (data.imageUrl !== undefined) courses[index].image_url = data.imageUrl;
             if (data.isActive !== undefined) courses[index].is_active = data.isActive;
             if (data.orderNumber !== undefined) courses[index].order_number = parseInt(data.orderNumber);
+            if (data.platform !== undefined) courses[index].platform = data.platform;
             
             courses[index].updated_at = database.now();
             await database.writeTable('courses', courses);
@@ -261,29 +225,19 @@ async getAllCourses(activeOnly = false) {
 
     async deleteCourse(courseId) {
         try {
-            let courses = await database.readTable('courses');
-            let lessons = await database.readTable('lessons');
-            let lessonFiles = await database.readTable('lesson_files');
-            let tests = await database.readTable('tests');
-            let testAnswers = await database.readTable('test_answers');
-            let access = await database.readTable('user_course_access');
+            let courses = await this._ensureArray('courses');
+            let lessons = await this._ensureArray('lessons');
+            let lessonFiles = await this._ensureArray('lesson_files');
+            let tests = await this._ensureArray('tests');
+            let testAnswers = await this._ensureArray('test_answers');
+            let access = await this._ensureArray('user_course_access');
             
-            if (!Array.isArray(courses)) courses = [];
-            if (!Array.isArray(lessons)) lessons = [];
-            if (!Array.isArray(lessonFiles)) lessonFiles = [];
-            if (!Array.isArray(tests)) tests = [];
-            if (!Array.isArray(testAnswers)) testAnswers = [];
-            if (!Array.isArray(access)) access = [];
-            
-            // Находим уроки курса
             const courseLessons = lessons.filter(l => l.course_id === courseId);
             
-            // Удаляем файлы уроков
             for (const lesson of courseLessons) {
                 const files = lessonFiles.filter(f => f.lesson_id === lesson.id);
                 lessonFiles = lessonFiles.filter(f => f.lesson_id !== lesson.id);
                 
-                // Удаляем тесты уроков
                 const test = tests.find(t => t.lesson_id === lesson.id);
                 if (test) {
                     testAnswers = testAnswers.filter(a => a.test_id !== test.id);
@@ -291,13 +245,8 @@ async getAllCourses(activeOnly = false) {
                 }
             }
             
-            // Удаляем уроки
             lessons = lessons.filter(l => l.course_id !== courseId);
-            
-            // Удаляем доступы к курсу
             access = access.filter(a => a.course_id !== courseId);
-            
-            // Удаляем курс
             courses = courses.filter(c => c.id !== courseId);
             
             await database.writeTable('courses', courses);
@@ -317,8 +266,7 @@ async getAllCourses(activeOnly = false) {
 
     async getPaidCourses() {
         try {
-            const courses = await database.readTable('courses');
-            if (!Array.isArray(courses)) return [];
+            const courses = await this._ensureArray('courses');
             return courses
                 .filter(c => c.price > 0 && c.is_active !== false)
                 .sort((a, b) => (a.order_number || 0) - (b.order_number || 0));
@@ -330,8 +278,7 @@ async getAllCourses(activeOnly = false) {
 
     async getFreeCourses() {
         try {
-            const courses = await database.readTable('courses');
-            if (!Array.isArray(courses)) return [];
+            const courses = await this._ensureArray('courses');
             return courses
                 .filter(c => c.price === 0 && c.is_active !== false)
                 .sort((a, b) => (a.order_number || 0) - (b.order_number || 0));
@@ -344,11 +291,8 @@ async getAllCourses(activeOnly = false) {
     async getCourseStats(courseId) {
         try {
             const lessons = await this.getCourseLessons(courseId);
-            const views = await database.readTable('lesson_views');
-            const progress = await database.readTable('progress');
-            
-            if (!Array.isArray(views)) return { totalLessons: 0, totalViews: 0, completedLessons: 0, purchasers: 0 };
-            if (!Array.isArray(progress)) return { totalLessons: 0, totalViews: 0, completedLessons: 0, purchasers: 0 };
+            const views = await this._ensureArray('lesson_views');
+            const progress = await this._ensureArray('progress');
             
             let totalViews = 0;
             let completedLessons = 0;
@@ -360,8 +304,8 @@ async getAllCourses(activeOnly = false) {
                 completedLessons += completed.length;
             }
             
-            const access = await database.readTable('user_course_access');
-            const purchasers = Array.isArray(access) ? access.filter(a => a.course_id === courseId).length : 0;
+            const access = await this._ensureArray('user_course_access');
+            const purchasers = access.filter(a => a.course_id === courseId).length;
             
             return {
                 totalLessons: lessons.length,
