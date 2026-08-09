@@ -1,4 +1,4 @@
-// database.js - ПОЛНАЯ ПРОДАКШЕН ВЕРСИЯ С POSTGRESQL + VK ПОЛЯ
+// database.js - ИСПРАВЛЕННАЯ ВЕРСИЯ С ПОДДЕРЖКОЙ PLATFORM
 
 const fs = require('fs');
 const path = require('path');
@@ -95,6 +95,30 @@ const TABLE_MAP = {
 };
 
 // ============================================================
+// ПОЛУЧЕНИЕ КОЛОНОК ДЛЯ ТАБЛИЦЫ (для PostgreSQL)
+// ============================================================
+
+function getTableColumns(tableName) {
+    // Определяем колонки для каждой таблицы
+    const columns = {
+        users: ['id', 'platform_user_id', 'platform', 'first_name', 'last_name', 'username', 'chat_id', 'email', 'phone', 'created_at', 'updated_at'],
+        admins: ['id', 'login', 'password_hash', 'role', 'platform_user_id', 'created_at'],
+        courses: ['id', 'title', 'description', 'price', 'image_url', 'is_active', 'order_number', 'platform', 'created_at', 'updated_at'],
+        lessons: ['id', 'course_id', 'title', 'description', 'video_url', 'video_token', 'order_number', 'is_free', 'platform', 'created_at', 'updated_at'],
+        lesson_files: ['id', 'lesson_id', 'type', 'filename', 'original_name', 'size', 'mime_type', 'path', 'url', 'token', 'vk_owner_id', 'vk_video_id', 'vk_access_key', 'is_max_uploaded', 'hash', 'duration', 'platform', 'created_at'],
+        tests: ['id', 'lesson_id', 'question', 'created_at'],
+        test_answers: ['id', 'test_id', 'answer', 'is_correct', 'created_at'],
+        progress: ['id', 'user_id', 'lesson_id', 'status', 'test_passed', 'last_position', 'completed_at', 'created_at', 'updated_at'],
+        lesson_views: ['id', 'user_id', 'lesson_id', 'view_count', 'first_viewed_at', 'last_viewed_at'],
+        user_course_access: ['id', 'user_id', 'course_id', 'granted_at', 'expires_at'],
+        payments: ['id', 'user_id', 'amount', 'currency', 'status', 'payment_gateway', 'gateway_payment_id', 'gateway_payment_url', 'meta_data', 'created_at', 'updated_at'],
+        notifications: ['id', 'user_id', 'type', 'title', 'message', 'is_read', 'data', 'created_at'],
+        user_actions: ['id', 'user_id', 'action', 'data', 'created_at'],
+    };
+    return columns[tableName] || [];
+}
+
+// ============================================================
 // ЧТЕНИЕ ДАННЫХ (с приоритетом PostgreSQL)
 // ============================================================
 
@@ -164,8 +188,31 @@ async function writeTablePG(tableName, data) {
         return;
     }
 
-    // Получаем колонки из первой записи
-    const columns = Object.keys(data[0]);
+    // Получаем колонки для этой таблицы
+    const columns = getTableColumns(realTable);
+    if (columns.length === 0) {
+        // Если колонки не определены, используем ключи из первой записи
+        const keys = Object.keys(data[0]);
+        await writeTablePGFallback(realTable, data, keys);
+        return;
+    }
+
+    // Фильтруем данные только по существующим колонкам
+    const filteredData = data.map(row => {
+        const filtered = {};
+        for (const col of columns) {
+            if (row[col] !== undefined) {
+                filtered[col] = row[col];
+            }
+        }
+        return filtered;
+    });
+
+    if (filteredData.length === 0) {
+        await pgClient.query(`TRUNCATE ${realTable} RESTART IDENTITY CASCADE`);
+        return;
+    }
+
     const columnNames = columns.join(', ');
     
     // Создаем временную таблицу для данных
@@ -175,9 +222,9 @@ async function writeTablePG(tableName, data) {
     await pgClient.query(`CREATE TEMP TABLE ${tempTable} (LIKE ${realTable} INCLUDING ALL)`);
     
     // Вставляем данные во временную таблицу
-    for (const row of data) {
+    for (const row of filteredData) {
         const placeholders = columns.map((_, i) => `$${i + 1}`).join(', ');
-        const values = columns.map(col => row[col]);
+        const values = columns.map(col => row[col] !== undefined ? row[col] : null);
         await pgClient.query(
             `INSERT INTO ${tempTable} (${columnNames}) VALUES (${placeholders})`,
             values
@@ -194,6 +241,45 @@ async function writeTablePG(tableName, data) {
     `);
     
     // Удаляем временную таблицу
+    await pgClient.query(`DROP TABLE ${tempTable}`);
+}
+
+// ============================================================
+// FALLBACK ЗАПИСЬ В POSTGRESQL (если колонки не определены)
+// ============================================================
+
+async function writeTablePGFallback(tableName, data, columns) {
+    if (!data || data.length === 0) {
+        await pgClient.query(`TRUNCATE ${tableName} RESTART IDENTITY CASCADE`);
+        return;
+    }
+
+    const columnNames = columns.join(', ');
+    const tempTable = `temp_${tableName}_${Date.now()}`;
+    
+    // Создаем временную таблицу
+    const createColumns = columns.map(col => `${col} TEXT`).join(', ');
+    await pgClient.query(`CREATE TEMP TABLE ${tempTable} (${createColumns})`);
+    
+    // Вставляем данные
+    for (const row of data) {
+        const placeholders = columns.map((_, i) => `$${i + 1}`).join(', ');
+        const values = columns.map(col => row[col] !== undefined ? String(row[col]) : null);
+        await pgClient.query(
+            `INSERT INTO ${tempTable} (${columnNames}) VALUES (${placeholders})`,
+            values
+        );
+    }
+    
+    // Очищаем основную таблицу
+    await pgClient.query(`TRUNCATE ${tableName} RESTART IDENTITY CASCADE`);
+    
+    // Копируем данные
+    await pgClient.query(`
+        INSERT INTO ${tableName} (${columnNames})
+        SELECT ${columnNames} FROM ${tempTable}
+    `);
+    
     await pgClient.query(`DROP TABLE ${tempTable}`);
 }
 
