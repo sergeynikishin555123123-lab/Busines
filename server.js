@@ -179,7 +179,6 @@ async function initPostgreSQLTables() {
     try {
         console.log('[POSTGRES] Creating tables...');
 
-        // Таблица пользователей
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS users (
                 id VARCHAR(36) PRIMARY KEY,
@@ -196,7 +195,6 @@ async function initPostgreSQLTables() {
             )
         `);
 
-        // Таблица администраторов
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS admins (
                 id VARCHAR(36) PRIMARY KEY,
@@ -208,7 +206,6 @@ async function initPostgreSQLTables() {
             )
         `);
 
-        // Таблица курсов
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS courses (
                 id VARCHAR(36) PRIMARY KEY,
@@ -218,12 +215,12 @@ async function initPostgreSQLTables() {
                 image_url TEXT,
                 is_active BOOLEAN DEFAULT TRUE,
                 order_number INTEGER DEFAULT 0,
+                platform VARCHAR(50) DEFAULT 'max',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         `);
 
-        // Таблица уроков
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS lessons (
                 id VARCHAR(36) PRIMARY KEY,
@@ -234,12 +231,12 @@ async function initPostgreSQLTables() {
                 video_token TEXT,
                 order_number INTEGER DEFAULT 0,
                 is_free BOOLEAN DEFAULT FALSE,
+                platform VARCHAR(50) DEFAULT 'max',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         `);
 
-        // Таблица lesson_files с полями для VK
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS lesson_files (
                 id VARCHAR(36) PRIMARY KEY,
@@ -258,11 +255,11 @@ async function initPostgreSQLTables() {
                 is_max_uploaded BOOLEAN DEFAULT FALSE,
                 hash TEXT,
                 duration INTEGER,
+                platform VARCHAR(50) DEFAULT 'max',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         `);
 
-        // Таблица тестов
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS tests (
                 id VARCHAR(36) PRIMARY KEY,
@@ -272,7 +269,6 @@ async function initPostgreSQLTables() {
             )
         `);
 
-        // Таблица ответов на тесты
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS test_answers (
                 id VARCHAR(36) PRIMARY KEY,
@@ -283,7 +279,6 @@ async function initPostgreSQLTables() {
             )
         `);
 
-        // Таблица прогресса
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS progress (
                 id VARCHAR(36) PRIMARY KEY,
@@ -299,7 +294,6 @@ async function initPostgreSQLTables() {
             )
         `);
 
-        // Таблица платежей
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS payments (
                 id VARCHAR(36) PRIMARY KEY,
@@ -316,7 +310,6 @@ async function initPostgreSQLTables() {
             )
         `);
 
-        // Таблица доступа к курсам
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS user_course_access (
                 id VARCHAR(36) PRIMARY KEY,
@@ -328,7 +321,6 @@ async function initPostgreSQLTables() {
             )
         `);
 
-        // Таблица просмотров уроков
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS lesson_views (
                 id VARCHAR(36) PRIMARY KEY,
@@ -341,7 +333,6 @@ async function initPostgreSQLTables() {
             )
         `);
 
-        // Таблица уведомлений
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS notifications (
                 id VARCHAR(36) PRIMARY KEY,
@@ -355,7 +346,6 @@ async function initPostgreSQLTables() {
             )
         `);
 
-        // Таблица сессий
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS "session" (
                 sid VARCHAR(255) NOT NULL COLLATE "default",
@@ -369,13 +359,15 @@ async function initPostgreSQLTables() {
             CREATE INDEX IF NOT EXISTS IDX_session_expire ON "session" (expire)
         `);
 
-        // Миграции: добавляем колонки для VK если их нет
         console.log('[POSTGRES] Running migrations...');
         try {
+            await pgClient.query(`ALTER TABLE lessons ADD COLUMN IF NOT EXISTS platform VARCHAR(50) DEFAULT 'max'`);
+            await pgClient.query(`ALTER TABLE courses ADD COLUMN IF NOT EXISTS platform VARCHAR(50) DEFAULT 'max'`);
+            await pgClient.query(`ALTER TABLE lesson_files ADD COLUMN IF NOT EXISTS platform VARCHAR(50) DEFAULT 'max'`);
             await pgClient.query(`ALTER TABLE lesson_files ADD COLUMN IF NOT EXISTS vk_owner_id VARCHAR(50)`);
             await pgClient.query(`ALTER TABLE lesson_files ADD COLUMN IF NOT EXISTS vk_video_id VARCHAR(50)`);
             await pgClient.query(`ALTER TABLE lesson_files ADD COLUMN IF NOT EXISTS vk_access_key VARCHAR(50)`);
-            console.log('[POSTGRES] ✅ Migrations applied: vk_* columns added to lesson_files');
+            console.log('[POSTGRES] ✅ Migrations applied: platform and vk_* columns added');
         } catch (migrationError) {
             console.warn('[POSTGRES] Migration warning:', migrationError.message);
         }
@@ -620,8 +612,8 @@ const paymentService = require('./core/payment');
 // РАЗДЕЛЬНЫЕ СЕССИИ ДЛЯ MAX И VK
 // ============================================================
 
-const adminSessionsMax = new Map(); // Сессии для MAX
-const adminSessionsVk = new Map();  // Сессии для VK
+const adminSessionsMax = new Map();
+const adminSessionsVk = new Map();
 
 // ============================================================
 // ФУНКЦИЯ ПРОВЕРКИ ДОСТУПА ПОЛЬЗОВАТЕЛЯ
@@ -838,336 +830,252 @@ async function handleMessageCallback(update) {
     }
 }
 
-// В server.js, в блоке настройки VK модуля:
-
-// В server.js, в блоке настройки VK модуля:
+// ============================================================
+// ПОДКЛЮЧЕНИЕ VK МОДУЛЯ
+// ============================================================
 
 const vkModule = require('./platforms/vk');
 
-// Передаем общие функции в VK модуль
 vkModule.setSharedFunctions({
     checkUserHasPaidAccess,
-    showCourses,
+    showCourses: async (chatId, api) => {
+        await showCoursesVk(chatId, api);
+    },
     sendLessonToUser: async (chatId, lessonId, api) => {
-        if (api.constructor.name === 'VKAPI' || typeof api.sendVideoByToken !== 'function') {
-            await vkModule.sendLessonToUserVk(chatId, lessonId, api);
-        } else {
-            await sendLessonToUser(chatId, lessonId, api);
-        }
+        await vkModule.sendLessonToUserVk(chatId, lessonId, api);
     },
-    showTest,
-    handleTestAnswer,
-    handleBuyAccess,
-    handlePaymentCheck,
-    showAdminLogin: async (chatId, api) => {
-        await vkModule.showAdminLogin(chatId, api);
+    showTest: async (chatId, testId, api) => {
+        await showTestVk(chatId, testId, api);
     },
-    showAdminDashboard: async (chatId, api) => {
-        await vkModule.showAdminDashboard(chatId, api);
+    handleTestAnswer: async (chatId, testId, answerId, api) => {
+        await handleTestAnswerVk(chatId, testId, answerId, api);
     },
-    handleAdminCommand: async (chatId, text, api) => {
-        await vkModule.handleAdminCommand(chatId, text, api);
+    handleBuyAccess: async (chatId, api) => {
+        await handleBuyAccessVk(chatId, api);
     },
-    handleAdminCallback: async (chatId, payload, api) => {
-        await vkModule.handleAdminCallback(chatId, payload, api);
-    },
-    handleAdminAttachment: async (chatId, attachments, api) => {
-        await vkModule.handleAdminAttachmentVk(chatId, attachments, api);
-    },
-    handleAdminPassword: async (chatId, password, api) => {
-        await vkModule.handleAdminPassword(chatId, password, api);
+    handlePaymentCheck: async (chatId, paymentId, api) => {
+        await handlePaymentCheckVk(chatId, paymentId, api);
     },
     adminSessions: adminSessionsVk,
 });
+
 // ============================================================
-// АДМИН-ФУНКЦИИ ДЛЯ MAX
+// ФУНКЦИИ ДЛЯ VK
 // ============================================================
 
-async function showAdminLoginMax(chatId, api) {
+async function showCoursesVk(chatId, api) {
     try {
-        const session = adminSessionsMax.get(chatId);
-        if (session && session.mode === 'admin') {
-            await showAdminDashboardMax(chatId, api);
-            return;
-        }
+        const hasAccess = await checkUserHasPaidAccess(chatId);
+        const platform = 'vk';
         
-        await api.sendKeyboard({
-            chatId: chatId,
-            text: `🔐 **Админ-панель MAX**\n\nВойдите для управления контентом.`,
-            buttons: [
-                [{ type: 'callback', text: '🔐 Войти', payload: 'admin_login' }],
-                [{ type: 'callback', text: '❓ Помощь', payload: 'show_help' }]
-            ],
-            parseMode: 'markdown',
-        });
-    } catch (error) {
-        console.error('[ADMIN MAX] Error showing login:', error);
-    }
-}
-
-async function handleAdminPasswordMax(chatId, password, api) {
-    try {
-        let admin = null;
-        let admins = [];
-        
-        if (pgConnected && pgClient) {
-            const result = await pgClient.query('SELECT * FROM admins');
-            admins = result.rows || [];
+        let allLessons;
+        if (hasAccess) {
+            allLessons = await lessonService.getAllLessons();
         } else {
-            admins = database.readTable('admins') || [];
+            allLessons = await lessonService.getFreeLessons();
         }
         
-        if (admins.length === 0) {
-            await api.sendMessage({
-                chatId: chatId,
-                text: '❌ Администраторы не найдены. Обратитесь к разработчику.',
-                parseMode: 'markdown',
-            });
-            adminSessionsMax.delete(chatId);
+        allLessons = (allLessons || []).filter(l => l.platform === platform || !l.platform);
+        
+        if (!allLessons || allLessons.length === 0) {
+            const text = hasAccess
+                ? '📚 **Уроки**\n\nПока нет уроков. Загляните позже!'
+                : '📚 **Бесплатные уроки**\n\nПока нет бесплатных уроков.\n\n💳 Купите доступ к полному курсу!';
+            
+            const buttons = hasAccess
+                ? [[{ text: '❓ Помощь', payload: 'show_help' }]]
+                : [
+                    [{ text: '💳 Купить доступ', payload: 'buy_access' }],
+                    [{ text: '❓ Помощь', payload: 'show_help' }]
+                  ];
+            
+            await api.sendKeyboard({ chatId, text, buttons });
             return;
         }
         
-        for (const a of admins) {
-            if (a.password_hash && await bcrypt.compare(password, a.password_hash)) {
-                admin = a;
-                break;
+        let text = hasAccess
+            ? '📚 **Все уроки**\n\n'
+            : '📚 **Бесплатные уроки**\n\n';
+        
+        const buttons = [];
+        
+        for (const lesson of allLessons) {
+            const icon = '📖';
+            const isFree = lesson.is_free ? '🆓' : '🔒';
+            
+            text += `${icon} **${lesson.title}** ${isFree}\n`;
+            if (lesson.description) {
+                text += ` ${lesson.description.substring(0, 50)}${lesson.description.length > 50 ? '...' : ''}\n`;
             }
+            text += '\n';
+            
+            buttons.push([
+                {
+                    text: `${icon} ${lesson.title.substring(0, 25)}`,
+                    payload: `lesson_${lesson.id}`
+                }
+            ]);
         }
         
-        if (!admin) {
-            adminSessionsMax.delete(chatId);
-            await api.sendMessage({
-                chatId: chatId,
-                text: `❌ **Неверный пароль!** Попробуйте снова через /admin`,
-                parseMode: 'markdown',
-            });
-            return;
+        if (!hasAccess) {
+            buttons.push([{ text: '💳 Купить доступ', payload: 'buy_access' }]);
         }
+        buttons.push([{ text: '❓ Помощь', payload: 'show_help' }]);
         
-        adminSessionsMax.set(chatId, {
-            mode: 'admin',
-            adminId: admin.id,
-            login: admin.login,
-            role: admin.role,
-            context: 'dashboard',
-            platform: 'max'
-        });
-        
-        await api.sendMessage({
-            chatId: chatId,
-            text: `✅ **Добро пожаловать в админ-панель MAX, ${admin.login}!**`,
-            parseMode: 'markdown',
-        });
-        
-        await showAdminDashboardMax(chatId, api);
+        await api.sendKeyboard({ chatId, text: text + 'Выберите урок:', buttons });
     } catch (error) {
-        console.error('[ADMIN MAX] Error handling password:', error);
-        adminSessionsMax.delete(chatId);
+        console.error('[VK COURSES] Error:', error);
         await api.sendMessage({
             chatId: chatId,
-            text: '❌ Ошибка при проверке пароля. Попробуйте позже.',
-            parseMode: 'markdown',
+            text: '❌ Ошибка при загрузке уроков',
         });
     }
 }
 
-async function showAdminDashboardMax(chatId, api) {
+async function showTestVk(chatId, testId, api) {
     try {
-        const session = adminSessionsMax.get(chatId);
-        if (!session || session.mode !== 'admin') {
-            await showAdminLoginMax(chatId, api);
+        const test = await lessonService.getTestById(testId);
+        if (!test) {
+            await api.sendMessage({
+                chatId: chatId,
+                text: '❌ Тест не найден',
+            });
             return;
         }
         
-        let courses = [], lessons = [], users = [], payments = [], paidUsers = 0;
-        
-        if (pgConnected && pgClient) {
-            const coursesRes = await pgClient.query('SELECT * FROM courses');
-            courses = coursesRes.rows || [];
-            const lessonsRes = await pgClient.query('SELECT * FROM lessons');
-            lessons = lessonsRes.rows || [];
-            const usersRes = await pgClient.query('SELECT * FROM users');
-            users = usersRes.rows || [];
-            const paymentsRes = await pgClient.query('SELECT * FROM payments WHERE status = $1', ['success']);
-            payments = paymentsRes.rows || [];
-            paidUsers = payments.length;
-        } else {
-            courses = await courseService.getAllCourses(false);
-            lessons = database.readTable('lessons') || [];
-            users = database.readTable('users') || [];
-            payments = database.readTable('payments') || [];
-            paidUsers = payments.filter(p => p.status === 'success').length;
+        if (!test.answers || test.answers.length === 0) {
+            await api.sendMessage({
+                chatId: chatId,
+                text: '❌ У теста нет вариантов ответов',
+            });
+            return;
         }
         
-        const text = `🔐 **Админ-панель MAX**\n\n` +
-            `👤 ${session.login}\n` +
-            `📚 Курсов: ${courses.length}\n` +
-            `📖 Уроков: ${lessons.length}\n` +
-            `👥 Пользователей: ${users.length}\n` +
-            `💳 Купили доступ: ${paidUsers}\n\n` +
-            `Выберите действие:`;
+        const text = `📝 **${test.question || 'Проверьте знания'}**\n\nВыберите правильный ответ:`;
         
-        const buttons = [
-            [{ type: 'callback', text: '➕ Создать урок MAX', payload: 'admin_create_lesson' }],
-            [{ type: 'callback', text: '📝 Редактировать уроки MAX', payload: 'admin_edit_lessons' }],
-            [{ type: 'callback', text: '📊 Статистика', payload: 'admin_stats' }],
-            [{ type: 'callback', text: '🚪 Выйти', payload: 'admin_logout' }]
-        ];
+        const buttons = [];
+        const shuffledAnswers = [...test.answers].sort(() => Math.random() - 0.5);
+        
+        for (const answer of shuffledAnswers) {
+            buttons.push([
+                {
+                    text: answer.answer || 'Вариант',
+                    payload: `test_answer_${testId}_${answer.id}`
+                }
+            ]);
+        }
+        
+        buttons.push([{
+            text: '⬅️ Назад к уроку',
+            payload: `lesson_${test.lesson_id}`
+        }]);
+        
+        await api.sendKeyboard({ chatId, text, buttons });
+    } catch (error) {
+        console.error('[VK TEST] Error showing test:', error);
+        await api.sendMessage({
+            chatId: chatId,
+            text: '❌ Ошибка при загрузке теста',
+        });
+    }
+}
+
+async function handleTestAnswerVk(chatId, testId, answerId, api) {
+    try {
+        const result = await lessonService.checkTestAnswer(testId, answerId, chatId);
+        const test = await lessonService.getTestById(testId);
+        const selectedAnswer = test?.answers?.find(a => a.id === answerId);
+        
+        if (result.correct) {
+            await api.sendMessage({
+                chatId: chatId,
+                text: `✅ **Правильно!** 🎉\n\nОтличная работа! Вы успешно прошли тест.`,
+            });
+            await showCoursesVk(chatId, api);
+        } else {
+            await api.sendMessage({
+                chatId: chatId,
+                text: `❌ **Неправильно.**\n\nВаш ответ: ${selectedAnswer?.answer || 'Неизвестно'}\nПопробуйте еще раз!`,
+            });
+            await showTestVk(chatId, testId, api);
+        }
+    } catch (error) {
+        console.error('[VK TEST] Error handling answer:', error);
+        await api.sendMessage({
+            chatId: chatId,
+            text: '❌ Ошибка при проверке ответа.',
+        });
+    }
+}
+
+async function handleBuyAccessVk(chatId, api) {
+    try {
+        const user = await userService.getUserByPlatformId(chatId);
+        
+        const payment = await paymentService.createPayment(
+            user?.id || chatId,
+            999,
+            'RUB',
+            'manual'
+        );
+        
+        let text = `💳 **Купить доступ к полному курсу**\n\n` +
+            `💰 Стоимость: 999 руб.\n` +
+            `🆔 Платеж: ${payment.id}\n\n` +
+            `Для оплаты переведите 999 руб на карту:\n` +
+            `**XXXX XXXX XXXX XXXX**\n\n` +
+            `После оплаты нажмите кнопку "Я оплатил(а)"\n` +
+            `Укажите номер платежа: ${payment.id}`;
         
         await api.sendKeyboard({
             chatId: chatId,
             text: text,
-            buttons: buttons,
-            parseMode: 'markdown',
-        });
-    } catch (error) {
-        console.error('[ADMIN MAX] Error showing dashboard:', error);
-    }
-}
-
-// ============================================================
-// АДМИН-ФУНКЦИИ ДЛЯ VK (ВЫЗЫВАЮТСЯ ИЗ vk.js)
-// ============================================================
-
-async function showAdminLoginVk(chatId, api) {
-    try {
-        const session = adminSessionsVk.get(chatId);
-        if (session && session.mode === 'admin') {
-            await showAdminDashboardVk(chatId, api);
-            return;
-        }
-        
-        await api.sendKeyboard({
-            chatId: chatId,
-            text: `🔐 **Админ-панель VK**\n\nВойдите для управления контентом.`,
             buttons: [
-                [{ text: '🔐 Войти', payload: 'admin_login' }],
-                [{ text: '❓ Помощь', payload: 'show_help' }]
+                [{ text: '✅ Я оплатил(а)', payload: `payment_check_${payment.id}` }],
+                [{ text: '📚 Назад к урокам', payload: 'show_courses' }]
             ],
         });
     } catch (error) {
-        console.error('[ADMIN VK] Error showing login:', error);
-    }
-}
-
-async function handleAdminPasswordVk(chatId, password, api) {
-    try {
-        let admin = null;
-        let admins = [];
-        
-        if (pgConnected && pgClient) {
-            const result = await pgClient.query('SELECT * FROM admins');
-            admins = result.rows || [];
-        } else {
-            admins = database.readTable('admins') || [];
-        }
-        
-        if (admins.length === 0) {
-            await api.sendMessage({
-                chatId: chatId,
-                text: '❌ Администраторы не найдены. Обратитесь к разработчику.',
-            });
-            adminSessionsVk.delete(chatId);
-            return;
-        }
-        
-        for (const a of admins) {
-            if (a.password_hash && await bcrypt.compare(password, a.password_hash)) {
-                admin = a;
-                break;
-            }
-        }
-        
-        if (!admin) {
-            adminSessionsVk.delete(chatId);
-            await api.sendMessage({
-                chatId: chatId,
-                text: '❌ **Неверный пароль!** Попробуйте снова через /admin',
-            });
-            return;
-        }
-        
-        adminSessionsVk.set(chatId, {
-            mode: 'admin',
-            adminId: admin.id,
-            login: admin.login,
-            role: admin.role,
-            context: 'dashboard',
-            platform: 'vk',
-            created_at: Date.now()
-        });
-        
+        console.error('[VK PAYMENT] Error:', error);
         await api.sendMessage({
             chatId: chatId,
-            text: `✅ **Добро пожаловать в админ-панель VK, ${admin.login}!**`,
-        });
-        
-        await showAdminDashboardVk(chatId, api);
-    } catch (error) {
-        console.error('[ADMIN VK] Error handling password:', error);
-        adminSessionsVk.delete(chatId);
-        await api.sendMessage({
-            chatId: chatId,
-            text: '❌ Ошибка при проверке пароля. Попробуйте позже.',
+            text: '❌ Ошибка при оформлении покупки',
         });
     }
 }
 
-async function showAdminDashboardVk(chatId, api) {
+async function handlePaymentCheckVk(chatId, paymentId, api) {
     try {
-        const session = adminSessionsVk.get(chatId);
-        if (!session || session.mode !== 'admin') {
-            await showAdminLoginVk(chatId, api);
-            return;
-        }
+        const result = await paymentService.checkPaymentStatus(paymentId);
         
-        let courses = [], lessons = [], users = [];
-        
-        if (pgConnected && pgClient) {
-            try {
-                const coursesRes = await pgClient.query('SELECT * FROM courses WHERE platform = $1', ['vk']);
-                courses = coursesRes.rows || [];
-                const lessonsRes = await pgClient.query('SELECT * FROM lessons WHERE platform = $1', ['vk']);
-                lessons = lessonsRes.rows || [];
-                const usersRes = await pgClient.query('SELECT * FROM users WHERE platform = $1', ['vk']);
-                users = usersRes.rows || [];
-            } catch (e) {
-                courses = [];
-                lessons = [];
-                users = [];
-            }
+        if (result.status === 'success') {
+            await api.sendMessage({
+                chatId: chatId,
+                text: `✅ **Оплата подтверждена!**\n\nДоступ к курсам открыт. Начинайте обучение! 📚`,
+            });
+            await showCoursesVk(chatId, api);
+        } else if (result.status === 'pending') {
+            await api.sendMessage({
+                chatId: chatId,
+                text: `⏳ **Платеж в обработке...**\n\nПожалуйста, подождите или проверьте позже.`,
+            });
         } else {
-            courses = (await courseService.getAllCourses(false)).filter(c => c.platform === 'vk');
-            lessons = (database.readTable('lessons') || []).filter(l => l.platform === 'vk');
-            users = (database.readTable('users') || []).filter(u => u.platform === 'vk');
+            await api.sendMessage({
+                chatId: chatId,
+                text: `❌ **Платеж не прошел**\n\nПопробуйте еще раз или свяжитесь с поддержкой.`,
+            });
         }
-        
-        const text = `🔐 **Админ-панель VK**\n\n` +
-            `👤 ${session.login} (${session.role})\n` +
-            `📚 Курсов VK: ${courses.length}\n` +
-            `📖 Уроков VK: ${lessons.length}\n` +
-            `👥 Пользователей VK: ${users.length}\n\n` +
-            `Выберите действие:`;
-        
-        const buttons = [
-            [{ text: '📖 Создать урок VK', payload: 'admin_create_lesson' }],
-            [{ text: '📝 Редактировать уроки VK', payload: 'admin_edit_lessons' }],
-            [{ text: '📊 Статистика VK', payload: 'admin_stats' }],
-            [{ text: '🚪 Выйти', payload: 'admin_logout' }]
-        ];
-        
-        await api.sendKeyboard({ chatId, text, buttons });
     } catch (error) {
-        console.error('[ADMIN VK] Error showing dashboard:', error);
+        console.error('[VK PAYMENT] Check error:', error);
         await api.sendMessage({
             chatId: chatId,
-            text: '❌ Ошибка при загрузке админ-панели VK: ' + error.message,
+            text: '❌ Ошибка при проверке оплаты',
         });
     }
 }
 
 // ============================================================
-// ОБЩИЕ КОМАНДЫ
+// ОБЩИЕ КОМАНДЫ ДЛЯ MAX
 // ============================================================
 
 async function handleStartCommand(chatId, userId, text, api) {
@@ -1228,10 +1136,7 @@ async function handleTextMessage(chatId, userId, text, api) {
 async function showCourses(chatId, api) {
     try {
         const hasAccess = await checkUserHasPaidAccess(chatId);
-        
-        // Определяем платформу
-        const isVK = api.constructor.name === 'VKAPI' || typeof api.sendVideoByToken !== 'function';
-        const platform = isVK ? 'vk' : 'max';
+        const platform = 'max';
         
         let allLessons;
         if (hasAccess) {
@@ -1240,7 +1145,6 @@ async function showCourses(chatId, api) {
             allLessons = await lessonService.getFreeLessons();
         }
         
-        // Фильтруем по платформе
         allLessons = (allLessons || []).filter(l => l.platform === platform || !l.platform);
         
         if (!allLessons || allLessons.length === 0) {
@@ -1271,8 +1175,7 @@ async function showCourses(chatId, api) {
         const buttons = [];
         
         for (const lesson of allLessons) {
-            const hasContent = lesson.files && lesson.files.length > 0;
-            const icon = hasContent ? '📖' : '📝';
+            const icon = '📖';
             const isFree = lesson.is_free ? '🆓' : '🔒';
             
             text += `${icon} **${lesson.title}** ${isFree}\n`;
@@ -1344,70 +1247,38 @@ async function sendLessonToUser(chatId, lessonId, api) {
         const videoFile = lesson.files?.find(f => f.type === 'video');
         const otherFiles = lesson.files?.filter(f => f.type !== 'video') || [];
         
-        const isVK = api.constructor.name === 'VKAPI' || typeof api.sendVideoByToken !== 'function';
-        
-        // 1. Отправляем описание урока
-        if (!videoFile) {
-            await api.sendMessage({
-                chatId: chatId,
-                text: `📖 **${lesson.title}**\n\n${lesson.description || 'Нет описания'}`,
-                parseMode: 'markdown',
-            });
-        }
+        await api.sendMessage({
+            chatId: chatId,
+            text: `📖 **${lesson.title}**\n\n${lesson.description || 'Нет описания'}`,
+            parseMode: 'markdown',
+        });
 
-        // 2. Отправляем видео
         if (videoFile) {
             try {
-                if (isVK) {
-                    const ownerId = videoFile.vk_owner_id;
-                    const videoId = videoFile.vk_video_id;
-                    const accessKey = videoFile.vk_access_key;
-                    
-                    if (ownerId && videoId) {
-                        const attachment = accessKey 
-                            ? `video${ownerId}_${videoId}_${accessKey}`
-                            : `video${ownerId}_${videoId}`;
-                        
-                        await api.sendMessage({
-                            chatId: chatId,
-                            text: `🎬 **${lesson.title}**\n\n${lesson.description || ''}`,
-                            attachments: [attachment],
-                            parseMode: 'markdown',
-                        });
-                        console.log(`[LESSON] ✅ Video sent to VK: ${attachment}`);
-                    } else {
-                        await api.sendMessage({
-                            chatId: chatId,
-                            text: `📖 **${lesson.title}**\n\n${lesson.description || ''}\n\n⚠️ Видео недоступно в VK.`,
-                            parseMode: 'markdown',
-                        });
-                    }
+                if (videoFile.token && api.sendVideoByToken) {
+                    await api.sendVideoByToken({
+                        chatId: chatId,
+                        token: videoFile.token,
+                        caption: `🎬 **${lesson.title}**\n\n${lesson.description || ''}`,
+                        parseMode: 'markdown',
+                    });
+                    console.log(`[LESSON] ✅ Video sent to MAX by token`);
+                } else if (videoFile.path && fs.existsSync(videoFile.path)) {
+                    const maxApi = new MaxAPI();
+                    const token = await maxApi.uploadFile(videoFile.path, 'video');
+                    await api.sendVideoByToken({
+                        chatId: chatId,
+                        token: token,
+                        caption: `🎬 **${lesson.title}**\n\n${lesson.description || ''}`,
+                        parseMode: 'markdown',
+                    });
+                    console.log(`[LESSON] ✅ Video uploaded and sent to MAX`);
                 } else {
-                    if (videoFile.token && api.sendVideoByToken) {
-                        await api.sendVideoByToken({
-                            chatId: chatId,
-                            token: videoFile.token,
-                            caption: `🎬 **${lesson.title}**\n\n${lesson.description || ''}`,
-                            parseMode: 'markdown',
-                        });
-                        console.log(`[LESSON] ✅ Video sent to MAX by token`);
-                    } else if (videoFile.path && fs.existsSync(videoFile.path)) {
-                        const maxApi = new MaxAPI();
-                        const token = await maxApi.uploadFile(videoFile.path, 'video');
-                        await api.sendVideoByToken({
-                            chatId: chatId,
-                            token: token,
-                            caption: `🎬 **${lesson.title}**\n\n${lesson.description || ''}`,
-                            parseMode: 'markdown',
-                        });
-                        console.log(`[LESSON] ✅ Video uploaded and sent to MAX`);
-                    } else {
-                        await api.sendMessage({
-                            chatId: chatId,
-                            text: `📖 **${lesson.title}**\n\n${lesson.description || ''}\n\n⚠️ Видео недоступно.`,
-                            parseMode: 'markdown',
-                        });
-                    }
+                    await api.sendMessage({
+                        chatId: chatId,
+                        text: `📖 **${lesson.title}**\n\n${lesson.description || ''}\n\n⚠️ Видео недоступно.`,
+                        parseMode: 'markdown',
+                    });
                 }
             } catch (error) {
                 console.error('[LESSON] Failed to send video:', error.message);
@@ -1419,36 +1290,24 @@ async function sendLessonToUser(chatId, lessonId, api) {
             }
         }
         
-        // 3. Отправляем файлы
         for (const file of otherFiles) {
             try {
-                if (isVK) {
-                    const fileUrl = file.url || file.path || '';
-                    if (fileUrl) {
-                        await api.sendMessage({
-                            chatId: chatId,
-                            text: `📎 **${file.original_name || file.filename}**\n${fileUrl}`,
-                            parseMode: 'markdown',
-                        });
-                    }
-                } else {
-                    if (file.token && api.sendFileByToken) {
-                        await api.sendFileByToken({
-                            chatId: chatId,
-                            token: file.token,
-                            caption: `📎 **${file.original_name || file.filename}**`,
-                            parseMode: 'markdown',
-                        });
-                    } else if (file.path && fs.existsSync(file.path)) {
-                        const maxApi = new MaxAPI();
-                        const token = await maxApi.uploadFile(file.path, 'file');
-                        await api.sendFileByToken({
-                            chatId: chatId,
-                            token: token,
-                            caption: `📎 **${file.original_name || file.filename}**`,
-                            parseMode: 'markdown',
-                        });
-                    }
+                if (file.token && api.sendFileByToken) {
+                    await api.sendFileByToken({
+                        chatId: chatId,
+                        token: file.token,
+                        caption: `📎 **${file.original_name || file.filename}**`,
+                        parseMode: 'markdown',
+                    });
+                } else if (file.path && fs.existsSync(file.path)) {
+                    const maxApi = new MaxAPI();
+                    const token = await maxApi.uploadFile(file.path, 'file');
+                    await api.sendFileByToken({
+                        chatId: chatId,
+                        token: token,
+                        caption: `📎 **${file.original_name || file.filename}**`,
+                        parseMode: 'markdown',
+                    });
                 }
                 console.log(`[LESSON] ✅ File sent: ${file.original_name || file.filename}`);
             } catch (error) {
@@ -1456,7 +1315,6 @@ async function sendLessonToUser(chatId, lessonId, api) {
             }
         }
         
-        // 4. Отправляем тест
         const test = await lessonService.getLessonTest(lessonId);
         if (test && test.answers && test.answers.length > 0) {
             await api.sendKeyboard({
@@ -1492,8 +1350,6 @@ async function sendLessonToUser(chatId, lessonId, api) {
 
 async function showTest(chatId, testId, api) {
     try {
-        console.log(`[TEST] showTest called with testId: ${testId}`);
-        
         const test = await lessonService.getTestById(testId);
         if (!test) {
             await api.sendMessage({
@@ -1552,8 +1408,6 @@ async function showTest(chatId, testId, api) {
 
 async function handleTestAnswer(chatId, testId, answerId, api) {
     try {
-        console.log(`[TEST] handleTestAnswer: testId=${testId}, answerId=${answerId}`);
-        
         const result = await lessonService.checkTestAnswer(testId, answerId, chatId);
         const test = await lessonService.getTestById(testId);
         const selectedAnswer = test?.answers?.find(a => a.id === answerId);
@@ -1669,49 +1523,148 @@ async function showHelp(chatId, api) {
 }
 
 // ============================================================
-// АДМИН-КОМАНДЫ ДЛЯ MAX (ПОЛНЫЙ РЕДАКТОР)
+// АДМИН-ФУНКЦИИ ДЛЯ MAX
 // ============================================================
 
-async function handleAdminCommandMax(chatId, text, api) {
+async function showAdminLoginMax(chatId, api) {
     try {
         const session = adminSessionsMax.get(chatId);
-        if (!session) return;
-        
-        console.log(`[ADMIN MAX] Command: ${text}`);
-        
-        if (session.context === 'creating_lesson') {
-            await handleAdminLessonCreateStep2Max(chatId, text, api);
+        if (session && session.mode === 'admin') {
+            await showAdminDashboardMax(chatId, api);
             return;
         }
         
-        if (session.context === 'creating_lesson_description') {
-            await handleAdminLessonCreateStep3Max(chatId, text, api);
+        await api.sendKeyboard({
+            chatId: chatId,
+            text: `🔐 **Админ-панель MAX**\n\nВойдите для управления контентом.`,
+            buttons: [
+                [{ type: 'callback', text: '🔐 Войти', payload: 'admin_login' }],
+                [{ type: 'callback', text: '❓ Помощь', payload: 'show_help' }]
+            ],
+            parseMode: 'markdown',
+        });
+    } catch (error) {
+        console.error('[ADMIN MAX] Error showing login:', error);
+    }
+}
+
+async function handleAdminPasswordMax(chatId, password, api) {
+    try {
+        let admin = null;
+        let admins = [];
+        
+        if (pgConnected && pgClient) {
+            const result = await pgClient.query('SELECT * FROM admins');
+            admins = result.rows || [];
+        } else {
+            admins = database.readTable('admins') || [];
+        }
+        
+        if (admins.length === 0) {
+            await api.sendMessage({
+                chatId: chatId,
+                text: '❌ Администраторы не найдены. Обратитесь к разработчику.',
+                parseMode: 'markdown',
+            });
+            adminSessionsMax.delete(chatId);
             return;
         }
         
-        if (session.context === 'editing_lesson_title') {
-            await handleAdminLessonEditTitleMax(chatId, text, api);
+        for (const a of admins) {
+            if (a.password_hash && await bcrypt.compare(password, a.password_hash)) {
+                admin = a;
+                break;
+            }
+        }
+        
+        if (!admin) {
+            adminSessionsMax.delete(chatId);
+            await api.sendMessage({
+                chatId: chatId,
+                text: `❌ **Неверный пароль!** Попробуйте снова через /admin`,
+                parseMode: 'markdown',
+            });
             return;
         }
         
-        if (session.context === 'editing_lesson_desc') {
-            await handleAdminLessonEditDescMax(chatId, text, api);
-            return;
-        }
+        adminSessionsMax.set(chatId, {
+            mode: 'admin',
+            adminId: admin.id,
+            login: admin.login,
+            role: admin.role,
+            context: 'dashboard',
+            platform: 'max'
+        });
         
-        if (session.context === 'creating_test_question') {
-            await handleAdminTestQuestionMax(chatId, text, api);
-            return;
-        }
-        
-        if (session.context === 'creating_test_answers') {
-            await handleAdminTestAnswersMax(chatId, text, api);
-            return;
-        }
+        await api.sendMessage({
+            chatId: chatId,
+            text: `✅ **Добро пожаловать в админ-панель MAX, ${admin.login}!**`,
+            parseMode: 'markdown',
+        });
         
         await showAdminDashboardMax(chatId, api);
     } catch (error) {
-        console.error('[ADMIN MAX] Error in admin command:', error);
+        console.error('[ADMIN MAX] Error handling password:', error);
+        adminSessionsMax.delete(chatId);
+        await api.sendMessage({
+            chatId: chatId,
+            text: '❌ Ошибка при проверке пароля. Попробуйте позже.',
+            parseMode: 'markdown',
+        });
+    }
+}
+
+async function showAdminDashboardMax(chatId, api) {
+    try {
+        const session = adminSessionsMax.get(chatId);
+        if (!session || session.mode !== 'admin') {
+            await showAdminLoginMax(chatId, api);
+            return;
+        }
+        
+        let courses = [], lessons = [], users = [], payments = [], paidUsers = 0;
+        
+        if (pgConnected && pgClient) {
+            const coursesRes = await pgClient.query('SELECT * FROM courses');
+            courses = coursesRes.rows || [];
+            const lessonsRes = await pgClient.query('SELECT * FROM lessons');
+            lessons = lessonsRes.rows || [];
+            const usersRes = await pgClient.query('SELECT * FROM users');
+            users = usersRes.rows || [];
+            const paymentsRes = await pgClient.query('SELECT * FROM payments WHERE status = $1', ['success']);
+            payments = paymentsRes.rows || [];
+            paidUsers = payments.length;
+        } else {
+            courses = await courseService.getAllCourses(false);
+            lessons = await database.readTable('lessons') || [];
+            users = await database.readTable('users') || [];
+            payments = await database.readTable('payments') || [];
+            paidUsers = payments.filter(p => p.status === 'success').length;
+        }
+        
+        const text = `🔐 **Админ-панель MAX**\n\n` +
+            `👤 ${session.login}\n` +
+            `📚 Курсов: ${courses.length}\n` +
+            `📖 Уроков: ${lessons.length}\n` +
+            `👥 Пользователей: ${users.length}\n` +
+            `💳 Купили доступ: ${paidUsers}\n\n` +
+            `Выберите действие:`;
+        
+        const buttons = [
+            [{ type: 'callback', text: '➕ Создать урок MAX', payload: 'admin_create_lesson' }],
+            [{ type: 'callback', text: '📝 Редактировать уроки MAX', payload: 'admin_edit_lessons' }],
+            [{ type: 'callback', text: '📊 Статистика', payload: 'admin_stats' }],
+            [{ type: 'callback', text: '🚪 Выйти', payload: 'admin_logout' }]
+        ];
+        
+        await api.sendKeyboard({
+            chatId: chatId,
+            text: text,
+            buttons: buttons,
+            parseMode: 'markdown',
+        });
+    } catch (error) {
+        console.error('[ADMIN MAX] Error showing dashboard:', error);
     }
 }
 
@@ -1852,9 +1805,191 @@ async function handleAdminCallbackMax(chatId, payload, api) {
     }
 }
 
-// ============================================================
-// ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ MAX АДМИНКИ
-// ============================================================
+async function handleAdminCommandMax(chatId, text, api) {
+    try {
+        const session = adminSessionsMax.get(chatId);
+        if (!session) return;
+        
+        console.log(`[ADMIN MAX] Command: ${text}`);
+        
+        if (session.context === 'creating_lesson') {
+            session.lessonTitle = text;
+            session.context = 'creating_lesson_description';
+            await api.sendMessage({
+                chatId: chatId,
+                text: `📝 **Создание урока MAX: "${text}"**\n\nВведите описание урока:`,
+                parseMode: 'markdown',
+            });
+            return;
+        }
+        
+        if (session.context === 'creating_lesson_description') {
+            const title = session.lessonTitle;
+            const description = text;
+            const platform = 'max';
+            
+            let courses = await courseService.getAllCourses(false);
+            let courseId = courses?.find(c => c.platform === 'max')?.id;
+            
+            if (!courseId) {
+                const course = await courseService.createCourse({
+                    title: 'Основной курс MAX',
+                    description: 'Все уроки для MAX',
+                    price: 0,
+                    isActive: true,
+                    platform: platform,
+                });
+                courseId = course.id;
+            }
+            
+            const lesson = await lessonService.createLesson({
+                courseId: courseId,
+                title: title,
+                description: description,
+                orderNumber: 0,
+                isFree: true,
+                platform: platform,
+            });
+            
+            session.context = 'editing_lesson';
+            session.lessonId = lesson.id;
+            
+            await api.sendMessage({
+                chatId: chatId,
+                text: `✅ **Урок MAX создан!**\n\n📖 ${lesson.title}\n\nТеперь вы можете:\n• Загрузить видео\n• Добавить файл\n• Создать тест\n• Настроить доступ`,
+                parseMode: 'markdown',
+            });
+            
+            await showAdminLessonDetailMax(chatId, lesson.id, api);
+            return;
+        }
+        
+        if (session.context === 'editing_lesson_title') {
+            const lessonId = session.lessonId;
+            if (lessonId) {
+                await lessonService.updateLesson(lessonId, { title: text });
+                session.context = 'editing_lesson';
+                await api.sendMessage({
+                    chatId: chatId,
+                    text: `✅ Название обновлено: "${text}"`,
+                    parseMode: 'markdown',
+                });
+                await showAdminLessonDetailMax(chatId, lessonId, api);
+            }
+            return;
+        }
+        
+        if (session.context === 'editing_lesson_desc') {
+            const lessonId = session.lessonId;
+            if (lessonId) {
+                await lessonService.updateLesson(lessonId, { description: text });
+                session.context = 'editing_lesson';
+                await api.sendMessage({
+                    chatId: chatId,
+                    text: '✅ Описание обновлено.',
+                    parseMode: 'markdown',
+                });
+                await showAdminLessonDetailMax(chatId, lessonId, api);
+            }
+            return;
+        }
+        
+        if (session.context === 'uploading_video') {
+            await api.sendMessage({
+                chatId: chatId,
+                text: '📎 Отправьте видео как вложение (файл).',
+                parseMode: 'markdown',
+            });
+            return;
+        }
+        
+        if (session.context === 'uploading_file') {
+            await api.sendMessage({
+                chatId: chatId,
+                text: '📎 Отправьте файл как вложение.',
+                parseMode: 'markdown',
+            });
+            return;
+        }
+        
+        if (session.context === 'creating_test_question') {
+            session.testQuestion = text;
+            session.context = 'creating_test_answers';
+            session.testAnswers = [];
+            await api.sendMessage({
+                chatId: chatId,
+                text: `📝 **Вопрос:** ${text}\n\nВведите вариант ответа #1 (или "готово" чтобы завершить):\n\n*Чтобы отметить правильный ответ, добавьте в конце "*"*`,
+                parseMode: 'markdown',
+            });
+            return;
+        }
+        
+        if (session.context === 'creating_test_answers') {
+            if (text.toLowerCase() === 'готово' || text.toLowerCase() === 'done') {
+                if (session.testAnswers.length < 2) {
+                    await api.sendMessage({
+                        chatId: chatId,
+                        text: `⚠️ Нужно минимум 2 варианта ответа. Добавьте еще варианты.`,
+                        parseMode: 'markdown',
+                    });
+                    return;
+                }
+                
+                await lessonService.createTest(session.lessonId, {
+                    question: session.testQuestion,
+                    answers: session.testAnswers,
+                });
+                
+                session.context = 'editing_lesson';
+                
+                await api.sendMessage({
+                    chatId: chatId,
+                    text: `✅ **Тест MAX создан!**\n\nВопрос: ${session.testQuestion}\nВариантов: ${session.testAnswers.length}`,
+                    parseMode: 'markdown',
+                });
+                
+                await showAdminLessonDetailMax(chatId, session.lessonId, api);
+                return;
+            }
+            
+            const isCorrect = text.endsWith('*');
+            const answerText = isCorrect ? text.slice(0, -1).trim() : text.trim();
+            
+            if (!answerText) {
+                await api.sendMessage({
+                    chatId: chatId,
+                    text: `⚠️ Введите текст ответа.`,
+                    parseMode: 'markdown',
+                });
+                return;
+            }
+            
+            session.testAnswers.push({
+                text: answerText,
+                isCorrect: isCorrect,
+            });
+            
+            const index = session.testAnswers.length;
+            const correctMark = isCorrect ? ' ✅ (правильный)' : '';
+            
+            await api.sendMessage({
+                chatId: chatId,
+                text: `✅ Ответ #${index} добавлен: "${answerText}"${correctMark}\n\nВведите вариант ответа #${index + 1} (или "готово" чтобы завершить):`,
+                parseMode: 'markdown',
+            });
+            return;
+        }
+        
+        await showAdminDashboardMax(chatId, api);
+    } catch (error) {
+        console.error('[ADMIN MAX] Error in admin command:', error);
+        await api.sendMessage({
+            chatId: chatId,
+            text: `❌ Ошибка: ${error.message}`,
+            parseMode: 'markdown',
+        });
+    }
+}
 
 async function handleAdminEditLessonsMax(chatId, api) {
     try {
@@ -1918,8 +2053,9 @@ async function showAdminLessonDetailMax(chatId, lessonId, api) {
             return;
         }
         
-        const hasVideo = lesson.files?.find(f => f.type === 'video');
-        const hasFile = lesson.files?.find(f => f.type === 'file');
+        const files = await lessonService.getLessonFiles(lessonId);
+        const hasVideo = files.find(f => f.type === 'video');
+        const hasFile = files.find(f => f.type === 'file');
         
         let text = `📝 **Редактирование урока MAX**\n\n`;
         text += `📖 **${lesson.title}**\n\n`;
@@ -1955,144 +2091,6 @@ async function showAdminLessonDetailMax(chatId, lessonId, api) {
     }
 }
 
-async function handleAdminLessonCreateStep2Max(chatId, title, api) {
-    try {
-        const session = adminSessionsMax.get(chatId);
-        if (!session) {
-            await api.sendMessage({ chatId: chatId, text: '❌ Сессия потеряна', parseMode: 'markdown' });
-            return;
-        }
-        
-        if (!session.courseId) {
-            const courses = await courseService.getAllCourses(false);
-            if (courses.length === 0) {
-                const course = await courseService.createCourse({
-                    title: 'Основной курс MAX',
-                    description: 'Все уроки для MAX',
-                    price: 999,
-                    isActive: true,
-                    platform: 'max'
-                });
-                session.courseId = course.id;
-            } else {
-                session.courseId = courses[0].id;
-            }
-        }
-        
-        session.context = 'creating_lesson_description';
-        session.lessonTitle = title;
-        
-        await api.sendMessage({
-            chatId: chatId,
-            text: `📝 **Создание урока MAX: "${title}"**\n\nВведите описание урока:`,
-            parseMode: 'markdown',
-        });
-    } catch (error) {
-        console.error('[ADMIN MAX] Error in lesson create step 2:', error);
-    }
-}
-
-async function handleAdminLessonCreateStep3Max(chatId, description, api) {
-    try {
-        const session = adminSessionsMax.get(chatId);
-        if (!session || !session.courseId || !session.lessonTitle) {
-            await api.sendMessage({
-                chatId: chatId,
-                text: '❌ Сессия потеряна',
-                parseMode: 'markdown'
-            });
-            return;
-        }
-        
-        const lesson = await lessonService.createLesson({
-            courseId: session.courseId,
-            title: session.lessonTitle,
-            description: description || '',
-            orderNumber: 0,
-            isFree: true,
-            platform: 'max'
-        });
-        
-        session.context = 'dashboard';
-        session.lessonId = lesson.id;
-        
-        await api.sendMessage({
-            chatId: chatId,
-            text: `✅ **Урок MAX создан!**\n\n📖 ${lesson.title}\n\nТеперь вы можете:\n• Загрузить видео\n• Добавить файл\n• Создать тест\n• Настроить доступ`,
-            parseMode: 'markdown',
-        });
-        
-        await showAdminLessonDetailMax(chatId, lesson.id, api);
-    } catch (error) {
-        console.error('[ADMIN MAX] Error in lesson create step 3:', error);
-        await api.sendMessage({
-            chatId: chatId,
-            text: `❌ Ошибка: ${error.message}`,
-            parseMode: 'markdown',
-        });
-    }
-}
-
-async function handleAdminLessonEditTitleMax(chatId, text, api) {
-    try {
-        const session = adminSessionsMax.get(chatId);
-        const lessonId = session.lessonId;
-        
-        if (!lessonId) {
-            await api.sendMessage({ chatId: chatId, text: '❌ Ошибка: урок не найден', parseMode: 'markdown' });
-            return;
-        }
-        
-        await lessonService.updateLesson(lessonId, { title: text });
-        session.context = 'dashboard';
-        
-        await api.sendMessage({
-            chatId: chatId,
-            text: `✅ Название урока MAX обновлено на: "${text}"`,
-            parseMode: 'markdown',
-        });
-        
-        await showAdminLessonDetailMax(chatId, lessonId, api);
-    } catch (error) {
-        console.error('[ADMIN MAX] Error updating lesson title:', error);
-        await api.sendMessage({
-            chatId: chatId,
-            text: `❌ Ошибка: ${error.message}`,
-            parseMode: 'markdown',
-        });
-    }
-}
-
-async function handleAdminLessonEditDescMax(chatId, text, api) {
-    try {
-        const session = adminSessionsMax.get(chatId);
-        const lessonId = session.lessonId;
-        
-        if (!lessonId) {
-            await api.sendMessage({ chatId: chatId, text: '❌ Ошибка: урок не найден', parseMode: 'markdown' });
-            return;
-        }
-        
-        await lessonService.updateLesson(lessonId, { description: text });
-        session.context = 'dashboard';
-        
-        await api.sendMessage({
-            chatId: chatId,
-            text: `✅ Описание урока MAX обновлено.`,
-            parseMode: 'markdown',
-        });
-        
-        await showAdminLessonDetailMax(chatId, lessonId, api);
-    } catch (error) {
-        console.error('[ADMIN MAX] Error updating lesson description:', error);
-        await api.sendMessage({
-            chatId: chatId,
-            text: `❌ Ошибка: ${error.message}`,
-            parseMode: 'markdown',
-        });
-    }
-}
-
 async function handleAdminEditTestMax(chatId, lessonId, api) {
     try {
         const session = adminSessionsMax.get(chatId);
@@ -2115,95 +2113,6 @@ async function handleAdminEditTestMax(chatId, lessonId, api) {
     }
 }
 
-async function handleAdminTestQuestionMax(chatId, text, api) {
-    try {
-        const session = adminSessionsMax.get(chatId);
-        session.testQuestion = text;
-        session.context = 'creating_test_answers';
-        session.testAnswers = [];
-        session.answerIndex = 0;
-        
-        await api.sendMessage({
-            chatId: chatId,
-            text: `📝 **Вопрос:** ${text}\n\nВведите вариант ответа #1 (или "готово" чтобы завершить):\n\n*Чтобы отметить правильный ответ, добавьте в конце "*"*`,
-            parseMode: 'markdown',
-        });
-    } catch (error) {
-        console.error('[ADMIN MAX] Error in test question:', error);
-        await api.sendMessage({
-            chatId: chatId,
-            text: `❌ Ошибка: ${error.message}`,
-            parseMode: 'markdown',
-        });
-    }
-}
-
-async function handleAdminTestAnswersMax(chatId, text, api) {
-    try {
-        const session = adminSessionsMax.get(chatId);
-        
-        if (text.toLowerCase() === 'готово' || text.toLowerCase() === 'done') {
-            if (session.testAnswers.length < 2) {
-                await api.sendMessage({
-                    chatId: chatId,
-                    text: `⚠️ Нужно минимум 2 варианта ответа. Добавьте еще варианты.`,
-                    parseMode: 'markdown',
-                });
-                return;
-            }
-            
-            await lessonService.createTest(session.lessonId, {
-                question: session.testQuestion,
-                answers: session.testAnswers,
-            });
-            
-            session.context = 'dashboard';
-            
-            await api.sendMessage({
-                chatId: chatId,
-                text: `✅ **Тест MAX создан!**\n\nВопрос: ${session.testQuestion}\nВариантов: ${session.testAnswers.length}`,
-                parseMode: 'markdown',
-            });
-            
-            await showAdminLessonDetailMax(chatId, session.lessonId, api);
-            return;
-        }
-        
-        const isCorrect = text.endsWith('*');
-        const answerText = isCorrect ? text.slice(0, -1).trim() : text.trim();
-        
-        if (!answerText) {
-            await api.sendMessage({
-                chatId: chatId,
-                text: `⚠️ Введите текст ответа.`,
-                parseMode: 'markdown',
-            });
-            return;
-        }
-        
-        session.testAnswers.push({
-            text: answerText,
-            isCorrect: isCorrect,
-        });
-        
-        const index = session.testAnswers.length;
-        const correctMark = isCorrect ? ' ✅ (правильный)' : '';
-        
-        await api.sendMessage({
-            chatId: chatId,
-            text: `✅ Ответ #${index} добавлен: "${answerText}"${correctMark}\n\nВведите вариант ответа #${index + 1} (или "готово" чтобы завершить):`,
-            parseMode: 'markdown',
-        });
-    } catch (error) {
-        console.error('[ADMIN MAX] Error in test answers:', error);
-        await api.sendMessage({
-            chatId: chatId,
-            text: `❌ Ошибка: ${error.message}`,
-            parseMode: 'markdown',
-        });
-    }
-}
-
 async function handleAdminUploadVideoMax(chatId, lessonId, api) {
     try {
         const session = adminSessionsMax.get(chatId);
@@ -2212,12 +2121,9 @@ async function handleAdminUploadVideoMax(chatId, lessonId, api) {
             session.lessonId = lessonId;
         }
         
-        const files = await lessonService.getLessonFiles(lessonId);
-        const existingVideo = files.find(f => f.type === 'video');
-        
         await api.sendMessage({
             chatId: chatId,
-            text: `🎬 **${existingVideo ? 'Заменить' : 'Загрузить'} видео MAX**\n\nОтправьте видео файлом в этот чат.\n\nПоддерживаются: MP4, MOV, WEBM\nМаксимальный размер: 250MB`,
+            text: `🎬 **Загрузить видео MAX**\n\nОтправьте видео файлом в этот чат.\n\nПоддерживаются: MP4, MOV, WEBM\nМаксимальный размер: 250MB`,
             parseMode: 'markdown',
         });
     } catch (error) {
@@ -2356,11 +2262,11 @@ async function showAdminStatsMax(chatId, api) {
             const progressRes = await pgClient.query('SELECT * FROM progress');
             progress = progressRes.rows || [];
         } else {
-            users = (database.readTable('users') || []).filter(u => u.platform === 'max');
-            lessons = (database.readTable('lessons') || []).filter(l => l.platform === 'max');
+            users = (await database.readTable('users') || []).filter(u => u.platform === 'max');
+            lessons = (await database.readTable('lessons') || []).filter(l => l.platform === 'max');
             courses = (await courseService.getAllCourses(false)).filter(c => c.platform === 'max');
-            payments = (database.readTable('payments') || []).filter(p => p.status === 'success');
-            progress = (database.readTable('progress') || []).filter(p => p.status === 'completed');
+            payments = (await database.readTable('payments') || []).filter(p => p.status === 'success');
+            progress = (await database.readTable('progress') || []).filter(p => p.status === 'completed');
         }
         
         const text = `📊 **Статистика MAX**\n\n` +
@@ -2386,15 +2292,6 @@ async function showAdminStatsMax(chatId, api) {
         });
     }
 }
-
-// ============================================================
-// АДМИН-КОМАНДЫ ДЛЯ VK (ВЫЗЫВАЮТСЯ ИЗ vk.js)
-// ============================================================
-
-// Эти функции будут вызываться из vk.js, но их реализация в server.js
-// для единого управления данными
-
-// Они уже определены в vk.js, но мы передаем их через sharedFunctions
 
 // ============================================================
 // РОУТЫ
@@ -2712,14 +2609,12 @@ const HOST = '0.0.0.0';
 console.log(`[STARTUP] Starting on ${HOST}:${PORT}...`);
 
 (async function start() {
-    // Подключаем PostgreSQL
     try {
         await connectPostgreSQL();
     } catch (error) {
         console.warn('[STARTUP] PostgreSQL connection failed, using JSON storage');
     }
     
-    // Устанавливаем клиент в database
     try {
         database.setPGClient(pgClient, pgConnected);
         console.log(`[DB] PostgreSQL client set: ${pgConnected ? '✅ connected' : '⚠️ fallback'}`);
@@ -2727,7 +2622,6 @@ console.log(`[STARTUP] Starting on ${HOST}:${PORT}...`);
         console.warn('[DB] Could not set PG client:', error.message);
     }
     
-    // Устанавливаем клиент в VK модуль
     try {
         vkModule.setPGClient(pgClient, pgConnected);
         console.log(`[VK] PostgreSQL client set: ${pgConnected ? '✅ connected' : '⚠️ fallback'}`);
@@ -2735,7 +2629,6 @@ console.log(`[STARTUP] Starting on ${HOST}:${PORT}...`);
         console.warn('[VK] Could not set PG client:', error.message);
     }
     
-    // Создаем админа
     await ensureAdmin();
     
     const server = app.listen(PORT, HOST, () => {
