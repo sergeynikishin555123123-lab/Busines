@@ -1,4 +1,4 @@
-// core/lesson.js - ПОЛНАЯ ВЕРСИЯ С ПОДДЕРЖКОЙ VK И PLATFORM
+// core/lesson.js - ДОБАВЛЯЕМ МЕТОДЫ ДЛЯ ПОШАГОВОГО СОЗДАНИЯ ТЕСТА
 
 const database = require('../database');
 const logger = require('../logger');
@@ -133,6 +133,302 @@ class LessonService {
             throw error;
         }
     }
+    
+    // ============================================================
+    // ПОШАГОВОЕ СОЗДАНИЕ ТЕСТА (ДЛЯ VK И MAX)
+    // ============================================================
+    
+    // Начать создание теста - сохраняем вопрос
+    async startTestCreation(lessonId, question) {
+        const testData = {
+            lessonId: lessonId,
+            question: question,
+            answers: [],
+            step: 'answers', // 'question' -> 'answers' -> 'done'
+        };
+        return testData;
+    }
+    
+    // Добавить ответ к тесту
+    // Возвращает: { done: boolean, test: object, answerIndex: number, totalAnswers: number }
+    async addTestAnswer(testData, answerText) {
+        const isCorrect = answerText.endsWith('*');
+        const cleanAnswer = isCorrect ? answerText.slice(0, -1).trim() : answerText.trim();
+        
+        if (!cleanAnswer) {
+            throw new Error('Пустой ответ');
+        }
+        
+        testData.answers.push({
+            text: cleanAnswer,
+            isCorrect: isCorrect,
+        });
+        
+        return {
+            done: false,
+            answerIndex: testData.answers.length,
+            totalAnswers: testData.answers.length,
+            hasCorrect: testData.answers.some(a => a.isCorrect),
+        };
+    }
+    
+    // Завершить создание теста и сохранить в БД
+    async finishTestCreation(testData) {
+        if (testData.answers.length < 2) {
+            throw new Error('Минимум 2 варианта ответа');
+        }
+        
+        // Проверяем, есть ли правильный ответ
+        const hasCorrect = testData.answers.some(a => a.isCorrect);
+        if (!hasCorrect) {
+            // Если нет правильного, делаем первый правильным
+            testData.answers[0].isCorrect = true;
+        }
+        
+        return await this.createTest(testData.lessonId, {
+            question: testData.question,
+            answers: testData.answers,
+        });
+    }
+    
+    // ============================================================
+    // СОЗДАНИЕ ТЕСТА ИЗ ТЕКСТА (ДЛЯ MAX - ОДНИМ СООБЩЕНИЕМ)
+    // ============================================================
+    
+    parseTestFromText(text) {
+        const lines = text.split('\n').filter(l => l.trim());
+        
+        let question = '';
+        const answers = [];
+        
+        for (const line of lines) {
+            const trimmed = line.trim();
+            
+            if (trimmed.toLowerCase().startsWith('вопрос:') || trimmed.toLowerCase().startsWith('вопрос ')) {
+                question = trimmed.replace(/^вопрос:\s*/i, '').replace(/^вопрос\s*/i, '').trim();
+                continue;
+            }
+            
+            const answerMatch = trimmed.match(/^(\d+)[\.\)]\s*(.+)$/);
+            if (answerMatch) {
+                const answerText = answerMatch[2].trim();
+                const isCorrect = answerText.includes('(правильный)') || 
+                                answerText.includes('(верный)') ||
+                                answerText.includes('✅') ||
+                                answerText.endsWith('*') ||
+                                answerText.includes('(правильно)');
+                
+                let cleanAnswer = answerText
+                    .replace(/\s*\(правильный\)\s*/i, '')
+                    .replace(/\s*\(верный\)\s*/i, '')
+                    .replace(/\s*\(правильно\)\s*/i, '')
+                    .replace(/\s*✅\s*$/i, '')
+                    .replace(/\s*\*\s*$/i, '')
+                    .trim();
+                
+                if (cleanAnswer) {
+                    answers.push({
+                        text: cleanAnswer,
+                        isCorrect: isCorrect,
+                    });
+                }
+                continue;
+            }
+            
+            const dashMatch = trimmed.match(/^[-–—]\s*(.+)$/);
+            if (dashMatch) {
+                const answerText = dashMatch[1].trim();
+                const isCorrect = answerText.includes('(правильный)') || 
+                                answerText.includes('(верный)') ||
+                                answerText.includes('✅') ||
+                                answerText.endsWith('*');
+                
+                let cleanAnswer = answerText
+                    .replace(/\s*\(правильный\)\s*/i, '')
+                    .replace(/\s*\(верный\)\s*/i, '')
+                    .replace(/\s*✅\s*$/i, '')
+                    .replace(/\s*\*\s*$/i, '')
+                    .trim();
+                
+                if (cleanAnswer) {
+                    answers.push({
+                        text: cleanAnswer,
+                        isCorrect: isCorrect,
+                    });
+                }
+                continue;
+            }
+            
+            if (!question && trimmed) {
+                question = trimmed;
+            }
+        }
+        
+        if (!question && lines.length > 0) {
+            const firstLine = lines[0].trim();
+            if (!/^\d+[\.\)]/.test(firstLine) && !/^[-–—]/.test(firstLine)) {
+                question = firstLine;
+                const remainingLines = lines.slice(1);
+                for (const line of remainingLines) {
+                    const trimmed = line.trim();
+                    const answerMatch = trimmed.match(/^(\d+)[\.\)]\s*(.+)$/);
+                    if (answerMatch) {
+                        const answerText = answerMatch[2].trim();
+                        const isCorrect = answerText.includes('(правильный)') || 
+                                        answerText.includes('(верный)') ||
+                                        answerText.includes('✅') ||
+                                        answerText.endsWith('*');
+                        let cleanAnswer = answerText
+                            .replace(/\s*\(правильный\)\s*/i, '')
+                            .replace(/\s*\(верный\)\s*/i, '')
+                            .replace(/\s*✅\s*$/i, '')
+                            .replace(/\s*\*\s*$/i, '')
+                            .trim();
+                        if (cleanAnswer) {
+                            answers.push({
+                                text: cleanAnswer,
+                                isCorrect: isCorrect,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        
+        return {
+            question: question || 'Проверьте свои знания',
+            answers: answers,
+        };
+    }
+    
+    async createTestFromText(lessonId, text) {
+        try {
+            const parsed = this.parseTestFromText(text);
+            
+            if (!parsed.question || parsed.answers.length < 2) {
+                throw new Error('Неверный формат теста. Нужно: вопрос и минимум 2 варианта ответа.\n\nПример:\nВопрос: Что такое 2+2?\n1. 3\n2. 4 (правильный)\n3. 5\n4. 6');
+            }
+            
+            const hasCorrect = parsed.answers.some(a => a.isCorrect);
+            if (!hasCorrect) {
+                parsed.answers[0].isCorrect = true;
+            }
+            
+            return await this.createTest(lessonId, {
+                question: parsed.question,
+                answers: parsed.answers,
+            });
+        } catch (error) {
+            console.error('[TEST] Error creating test from text:', error);
+            throw error;
+        }
+    }
+    
+    // ============================================================
+    // ОБЫЧНОЕ СОЗДАНИЕ ТЕСТА
+    // ============================================================
+    
+    async createTest(lessonId, testData) {
+        let tests = await this._ensureArray('tests');
+        let answers = await this._ensureArray('test_answers');
+        
+        const existingTest = tests.find(t => t.lesson_id === lessonId);
+        if (existingTest) {
+            answers = answers.filter(a => a.test_id !== existingTest.id);
+            tests = tests.filter(t => t.id !== existingTest.id);
+        }
+        
+        const test = {
+            id: database.generateId(),
+            lesson_id: lessonId,
+            question: testData.question || 'Проверьте свои знания',
+            created_at: database.now(),
+        };
+        tests.push(test);
+        
+        let addedCount = 0;
+        for (const answer of testData.answers || []) {
+            if (answer.text && answer.text.trim()) {
+                answers.push({
+                    id: database.generateId(),
+                    test_id: test.id,
+                    answer: answer.text.trim(),
+                    is_correct: answer.isCorrect || false,
+                    created_at: database.now(),
+                });
+                addedCount++;
+            }
+        }
+        
+        await database.writeTable('tests', tests);
+        await database.writeTable('test_answers', answers);
+        logger.info(`Test created for lesson: ${lessonId}, answers: ${addedCount}`);
+        return {
+            ...test,
+            answers: answers.filter(a => a.test_id === test.id),
+        };
+    }
+    
+    async updateTest(testId, testData) {
+        try {
+            let tests = await this._ensureArray('tests');
+            let answers = await this._ensureArray('test_answers');
+            
+            const testIndex = tests.findIndex(t => t.id === testId);
+            if (testIndex === -1) throw new Error('Test not found');
+            
+            tests[testIndex].question = testData.question || tests[testIndex].question;
+            
+            answers = answers.filter(a => a.test_id !== testId);
+            
+            let addedCount = 0;
+            for (const answer of testData.answers || []) {
+                if (answer.text && answer.text.trim()) {
+                    answers.push({
+                        id: database.generateId(),
+                        test_id: testId,
+                        answer: answer.text.trim(),
+                        is_correct: answer.isCorrect || false,
+                        created_at: database.now(),
+                    });
+                    addedCount++;
+                }
+            }
+            
+            await database.writeTable('tests', tests);
+            await database.writeTable('test_answers', answers);
+            logger.info(`Test updated: ${testId}, answers: ${addedCount}`);
+            return {
+                ...tests[testIndex],
+                answers: answers.filter(a => a.test_id === testId),
+            };
+        } catch (error) {
+            logger.error({ err: error, testId }, 'Failed to update test');
+            throw error;
+        }
+    }
+    
+    async deleteTest(testId) {
+        try {
+            let tests = await this._ensureArray('tests');
+            let answers = await this._ensureArray('test_answers');
+            
+            answers = answers.filter(a => a.test_id !== testId);
+            tests = tests.filter(t => t.id !== testId);
+            
+            await database.writeTable('tests', tests);
+            await database.writeTable('test_answers', answers);
+            logger.info(`Test deleted: ${testId}`);
+            return true;
+        } catch (error) {
+            logger.error({ err: error, testId }, 'Failed to delete test');
+            throw error;
+        }
+    }
+    
+    // ============================================================
+    // ОСТАЛЬНЫЕ МЕТОДЫ
+    // ============================================================
     
     async createLesson(data) {
         const lessons = await this._ensureArray('lessons');
@@ -298,104 +594,6 @@ class LessonService {
             return false;
         } catch (error) {
             logger.error({ err: error, fileId }, 'Failed to delete lesson file');
-            throw error;
-        }
-    }
-    
-    async createTest(lessonId, testData) {
-        let tests = await this._ensureArray('tests');
-        let answers = await this._ensureArray('test_answers');
-        
-        const existingTest = tests.find(t => t.lesson_id === lessonId);
-        if (existingTest) {
-            answers = answers.filter(a => a.test_id !== existingTest.id);
-            tests = tests.filter(t => t.id !== existingTest.id);
-        }
-        
-        const test = {
-            id: database.generateId(),
-            lesson_id: lessonId,
-            question: testData.question || 'Проверьте свои знания',
-            created_at: database.now(),
-        };
-        tests.push(test);
-        
-        let addedCount = 0;
-        for (const answer of testData.answers || []) {
-            if (answer.text && answer.text.trim()) {
-                answers.push({
-                    id: database.generateId(),
-                    test_id: test.id,
-                    answer: answer.text.trim(),
-                    is_correct: answer.isCorrect || false,
-                    created_at: database.now(),
-                });
-                addedCount++;
-            }
-        }
-        
-        await database.writeTable('tests', tests);
-        await database.writeTable('test_answers', answers);
-        logger.info(`Test created for lesson: ${lessonId}, answers: ${addedCount}`);
-        return {
-            ...test,
-            answers: answers.filter(a => a.test_id === test.id),
-        };
-    }
-    
-    async updateTest(testId, testData) {
-        try {
-            let tests = await this._ensureArray('tests');
-            let answers = await this._ensureArray('test_answers');
-            
-            const testIndex = tests.findIndex(t => t.id === testId);
-            if (testIndex === -1) throw new Error('Test not found');
-            
-            tests[testIndex].question = testData.question || tests[testIndex].question;
-            
-            answers = answers.filter(a => a.test_id !== testId);
-            
-            let addedCount = 0;
-            for (const answer of testData.answers || []) {
-                if (answer.text && answer.text.trim()) {
-                    answers.push({
-                        id: database.generateId(),
-                        test_id: testId,
-                        answer: answer.text.trim(),
-                        is_correct: answer.isCorrect || false,
-                        created_at: database.now(),
-                    });
-                    addedCount++;
-                }
-            }
-            
-            await database.writeTable('tests', tests);
-            await database.writeTable('test_answers', answers);
-            logger.info(`Test updated: ${testId}, answers: ${addedCount}`);
-            return {
-                ...tests[testIndex],
-                answers: answers.filter(a => a.test_id === testId),
-            };
-        } catch (error) {
-            logger.error({ err: error, testId }, 'Failed to update test');
-            throw error;
-        }
-    }
-    
-    async deleteTest(testId) {
-        try {
-            let tests = await this._ensureArray('tests');
-            let answers = await this._ensureArray('test_answers');
-            
-            answers = answers.filter(a => a.test_id !== testId);
-            tests = tests.filter(t => t.id !== testId);
-            
-            await database.writeTable('tests', tests);
-            await database.writeTable('test_answers', answers);
-            logger.info(`Test deleted: ${testId}`);
-            return true;
-        } catch (error) {
-            logger.error({ err: error, testId }, 'Failed to delete test');
             throw error;
         }
     }
