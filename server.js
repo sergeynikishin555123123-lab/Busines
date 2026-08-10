@@ -762,6 +762,9 @@ async function handleMessageCreated(update) {
 }
 
 // server.js - ИСПРАВЛЕННАЯ функция handleMessageCallback
+// ============================================================
+// ОБРАБОТЧИКИ СОБЫТИЙ MAX - ИСПРАВЛЕННАЯ ВЕРСИЯ
+// ============================================================
 
 async function handleMessageCallback(update) {
     console.log('[HANDLER] handleMessageCallback called');
@@ -777,7 +780,7 @@ async function handleMessageCallback(update) {
         
         const maxApi = new MaxAPI();
         
-        // ✅ ТОЛЬКО ОДНО ОБЪЯВЛЕНИЕ переменной adminSession
+        // ✅ ТОЛЬКО ОДНО ОБЪЯВЛЕНИЕ
         const adminSession = adminSessionsMax.get(chatId);
         console.log(`[HANDLER] Admin session:`, adminSession ? {
             mode: adminSession.mode,
@@ -801,7 +804,7 @@ async function handleMessageCallback(update) {
             return;
         }
         
-        // ✅ ИСПОЛЬЗУЕМ УЖЕ ПОЛУЧЕННУЮ СЕССИЮ (adminSession)
+        // ✅ ИСПОЛЬЗУЕМ УЖЕ ПОЛУЧЕНННУЮ СЕССИЮ
         if (adminSession && adminSession.mode === 'admin') {
             await handleAdminCallbackMax(chatId, payload, maxApi);
             return;
@@ -840,7 +843,6 @@ async function handleMessageCallback(update) {
         logger.error({ err: error, update }, 'Error handling message_callback');
     }
 }
-
 // ============================================================
 // ПОДКЛЮЧЕНИЕ VK МОДУЛЯ
 // ============================================================
@@ -1785,61 +1787,134 @@ async function handleAdminCallbackMax(chatId, payload, api) {
             return;
         }
         
-    // server.js - ИСПРАВЛЕННАЯ часть функции handleAdminCallbackMax (удаление урока)
+   // В функции handleAdminCallbackMax, замените блок удаления на:
 
 if (payload.startsWith('admin_lesson_delete_')) {
     const lessonId = payload.replace('admin_lesson_delete_', '');
-    const lesson = await lessonService.getLessonById(lessonId);
-    if (lesson) {
-        console.log(`[ADMIN MAX] Showing delete confirmation for: ${lesson.title} (${lessonId})`);
-        await api.sendKeyboard({
-            chatId: chatId,
-            text: `⚠️ **Удалить урок MAX "${lesson.title}"?**\n\nЭто действие нельзя отменить.`,
-            buttons: [
-                [{ type: 'callback', text: '✅ Да, удалить', payload: `admin_lesson_delete_confirm_${lessonId}` }],
-                [{ type: 'callback', text: '❌ Отмена', payload: `admin_edit_lesson_${lessonId}` }]
-            ],
-            parseMode: 'markdown',
-        });
-    } else {
+    console.log(`[ADMIN MAX] Delete request for lesson: ${lessonId}`);
+    
+    // Пробуем получить урок из разных источников
+    let lesson = null;
+    try {
+        lesson = await lessonService.getLessonById(lessonId);
+        console.log(`[ADMIN MAX] Lesson found by getLessonById:`, lesson ? lesson.title : 'NOT FOUND');
+    } catch (e) {
+        console.log(`[ADMIN MAX] getLessonById error:`, e.message);
+    }
+    
+    // Если не нашли, пробуем через БД напрямую
+    if (!lesson && pgConnected && pgClient) {
+        try {
+            const result = await pgClient.query('SELECT * FROM lessons WHERE id = $1', [lessonId]);
+            if (result.rows.length > 0) {
+                lesson = result.rows[0];
+                console.log(`[ADMIN MAX] Lesson found in PG: ${lesson.title}`);
+            }
+        } catch (e) {
+            console.log(`[ADMIN MAX] PG query error:`, e.message);
+        }
+    }
+    
+    // Если всё ещё не нашли, пробуем через JSON
+    if (!lesson) {
+        try {
+            const lessons = await database.readTable('lessons') || [];
+            lesson = lessons.find(l => l.id === lessonId);
+            if (lesson) {
+                console.log(`[ADMIN MAX] Lesson found in JSON: ${lesson.title}`);
+            }
+        } catch (e) {
+            console.log(`[ADMIN MAX] JSON read error:`, e.message);
+        }
+    }
+    
+    if (!lesson) {
+        console.log(`[ADMIN MAX] ❌ Lesson NOT FOUND: ${lessonId}`);
         await api.sendMessage({
             chatId: chatId,
-            text: `❌ Урок не найден.`,
+            text: `❌ Урок не найден. ID: ${lessonId}`,
             parseMode: 'markdown',
         });
+        await handleAdminEditLessonsMax(chatId, api);
+        return;
     }
+    
+    console.log(`[ADMIN MAX] ✅ Showing delete confirmation for: ${lesson.title} (${lessonId})`);
+    await api.sendKeyboard({
+        chatId: chatId,
+        text: `⚠️ **Удалить урок MAX "${lesson.title}"?**\n\nЭто действие нельзя отменить.`,
+        buttons: [
+            [{ type: 'callback', text: '✅ Да, удалить', payload: `admin_lesson_delete_confirm_${lessonId}` }],
+            [{ type: 'callback', text: '❌ Отмена', payload: `admin_edit_lesson_${lessonId}` }]
+        ],
+        parseMode: 'markdown',
+    });
     return;
 }
 
 if (payload.startsWith('admin_lesson_delete_confirm_')) {
     const lessonId = payload.replace('admin_lesson_delete_confirm_', '');
-    console.log(`[ADMIN MAX] ✅ CONFIRMED: Deleting lesson: ${lessonId}`);
+    console.log(`[ADMIN MAX] ✅ CONFIRMED DELETE for: ${lessonId}`);
     
     try {
-        // Проверяем существование урока
-        const lesson = await lessonService.getLessonById(lessonId);
-        if (!lesson) {
-            await api.sendMessage({ 
-                chatId: chatId, 
-                text: `❌ Урок не найден.`, 
-                parseMode: 'markdown' 
+        // Пробуем удалить через сервис
+        let deleted = false;
+        try {
+            await lessonService.deleteLesson(lessonId);
+            deleted = true;
+            console.log(`[ADMIN MAX] ✅ Deleted via lessonService`);
+        } catch (e) {
+            console.log(`[ADMIN MAX] lessonService.deleteLesson error:`, e.message);
+        }
+        
+        // Если не удалось, пробуем через PG напрямую
+        if (!deleted && pgConnected && pgClient) {
+            try {
+                // Удаляем связанные файлы
+                await pgClient.query('DELETE FROM lesson_files WHERE lesson_id = $1', [lessonId]);
+                // Удаляем связанные тесты
+                await pgClient.query('DELETE FROM test_answers WHERE test_id IN (SELECT id FROM tests WHERE lesson_id = $1)', [lessonId]);
+                await pgClient.query('DELETE FROM tests WHERE lesson_id = $1', [lessonId]);
+                // Удаляем прогресс
+                await pgClient.query('DELETE FROM progress WHERE lesson_id = $1', [lessonId]);
+                // Удаляем сам урок
+                await pgClient.query('DELETE FROM lessons WHERE id = $1', [lessonId]);
+                deleted = true;
+                console.log(`[ADMIN MAX] ✅ Deleted via PG directly`);
+            } catch (e) {
+                console.log(`[ADMIN MAX] PG delete error:`, e.message);
+            }
+        }
+        
+        // Если не удалось, пробуем через JSON
+        if (!deleted) {
+            try {
+                const lessons = await database.readTable('lessons') || [];
+                const filtered = lessons.filter(l => l.id !== lessonId);
+                await database.writeTable('lessons', filtered);
+                deleted = true;
+                console.log(`[ADMIN MAX] ✅ Deleted via JSON`);
+            } catch (e) {
+                console.log(`[ADMIN MAX] JSON delete error:`, e.message);
+            }
+        }
+        
+        if (!deleted) {
+            await api.sendMessage({
+                chatId: chatId,
+                text: `❌ Не удалось удалить урок. Попробуйте позже.`,
+                parseMode: 'markdown',
             });
+            await handleAdminEditLessonsMax(chatId, api);
             return;
         }
         
-        console.log(`[ADMIN MAX] Deleting lesson: ${lesson.title}`);
-        
-        // Удаляем урок
-        await lessonService.deleteLesson(lessonId);
-        console.log(`[ADMIN MAX] ✅ Lesson deleted successfully: ${lessonId}`);
-        
         await api.sendMessage({ 
             chatId: chatId, 
-            text: `🗑️ Урок **"${lesson.title}"** удалён.`, 
+            text: `🗑️ Урок удалён.`, 
             parseMode: 'markdown' 
         });
         
-        // Возвращаемся к списку уроков
         await handleAdminEditLessonsMax(chatId, api);
         
     } catch (error) {
