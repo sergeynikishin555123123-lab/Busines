@@ -2541,20 +2541,36 @@ app.post('/webhook/max', async (req, res) => {
 
 app.post('/webhook/vk', async (req, res) => {
     console.log('[VK WEBHOOK] ========== WEBHOOK RECEIVED ==========');
+    
     try {
         const { type, secret, object, group_id } = req.body;
         
         console.log('[VK WEBHOOK] Type:', type);
         console.log('[VK WEBHOOK] Group ID:', group_id);
+        console.log('[VK WEBHOOK] Secret present:', !!secret);
         
-        switch (type) {
-            case 'confirmation':
-                console.log('[VK WEBHOOK] Confirmation request');
-                // 👇 ДОЛЖЕН ВОЗВРАЩАТЬ ВАШ КОД ПОДТВЕРЖДЕНИЯ
-                return res.send(config.vk.confirmationToken || '34fdf432');
+        // Проверка секретного ключа (если он настроен)
+        if (secret && config.vk.secret && secret !== config.vk.secret) {
+            console.warn('[VK WEBHOOK] Invalid secret');
+            return res.status(403).send('Invalid secret');
+        }
+        
+       // В обработчике добавьте проверку secret
+case 'confirmation':
+    console.log('[VK WEBHOOK] Confirmation request');
+    // Проверяем secret если он передан
+    if (secret && secret !== config.vk.secret) {
+        console.warn('[VK WEBHOOK] Invalid secret:', secret);
+        return res.status(403).send('Invalid secret');
+    }
+    return res.status(200).send('34fdf432');
             
             case 'message_new':
-                res.send('ok');
+                console.log('[VK WEBHOOK] New message received');
+                // Сразу отвечаем VK, чтобы не было таймаута
+                res.status(200).send('ok');
+                
+                // Обрабатываем сообщение асинхронно
                 setImmediate(async () => {
                     try {
                         await vkModule.handleMessageNew(object);
@@ -2565,7 +2581,9 @@ app.post('/webhook/vk', async (req, res) => {
                 return;
             
             case 'message_event':
-                res.send('ok');
+                console.log('[VK WEBHOOK] Message event received');
+                res.status(200).send('ok');
+                
                 setImmediate(async () => {
                     try {
                         await vkModule.handleMessageEvent(object);
@@ -2577,11 +2595,12 @@ app.post('/webhook/vk', async (req, res) => {
             
             default:
                 console.log(`[VK WEBHOOK] Unhandled type: ${type}`);
-                return res.send('ok');
+                return res.status(200).send('ok');
         }
     } catch (error) {
-        console.error('[VK WEBHOOK] Error:', error);
-        return res.send('ok');
+        console.error('[VK WEBHOOK] Fatal error:', error);
+        // Всегда возвращаем 200 для VK
+        return res.status(200).send('ok');
     }
 });
 
