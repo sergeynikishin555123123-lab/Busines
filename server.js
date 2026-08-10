@@ -775,7 +775,7 @@ async function handleMessageCallback(update) {
         
         const maxApi = new MaxAPI();
         
-        // ✅ ДОБАВИТЬ ЛОГИРОВАНИЕ СЕССИИ
+        // ✅ ЛОГИРОВАНИЕ СЕССИИ (ОДИН РАЗ)
         const adminSession = adminSessionsMax.get(chatId);
         console.log(`[HANDLER] Admin session:`, adminSession ? {
             mode: adminSession.mode,
@@ -799,7 +799,7 @@ async function handleMessageCallback(update) {
             return;
         }
         
-        const adminSession = adminSessionsMax.get(chatId);
+        // ✅ ИСПОЛЬЗУЕМ УЖЕ ПОЛУЧЕННУЮ СЕССИЮ, НЕ ПЕРЕОПРЕДЕЛЯЕМ
         if (adminSession && adminSession.mode === 'admin') {
             await handleAdminCallbackMax(chatId, payload, maxApi);
             return;
@@ -1800,34 +1800,34 @@ async function handleAdminCallbackMax(chatId, payload, api) {
             return;
         }
         
-       if (payload.startsWith('admin_lesson_delete_confirm_')) {
-    const lessonId = payload.replace('admin_lesson_delete_confirm_', '');
-    console.log(`[ADMIN MAX] ✅ Deleting lesson: ${lessonId}`);
-    
-    try {
-        const lesson = await lessonService.getLessonById(lessonId);
-        console.log(`[ADMIN MAX] Lesson found:`, lesson ? lesson.title : 'NOT FOUND');
-        
-        await lessonService.deleteLesson(lessonId);
-        console.log(`[ADMIN MAX] ✅ Lesson deleted: ${lessonId}`);
-        
-        await api.sendMessage({ 
-            chatId: chatId, 
-            text: `🗑️ Урок MAX удалён.`, 
-            parseMode: 'markdown' 
-        });
-        
-        await handleAdminEditLessonsMax(chatId, api);
-    } catch (error) {
-        console.error('[ADMIN MAX] Delete error:', error);
-        await api.sendMessage({
-            chatId: chatId,
-            text: `❌ Ошибка удаления: ${error.message}`,
-            parseMode: 'markdown',
-        });
-    }
-    return;
-}
+        if (payload.startsWith('admin_lesson_delete_confirm_')) {
+            const lessonId = payload.replace('admin_lesson_delete_confirm_', '');
+            console.log(`[ADMIN MAX] ✅ Deleting lesson: ${lessonId}`);
+            
+            try {
+                const lesson = await lessonService.getLessonById(lessonId);
+                console.log(`[ADMIN MAX] Lesson found:`, lesson ? lesson.title : 'NOT FOUND');
+                
+                await lessonService.deleteLesson(lessonId);
+                console.log(`[ADMIN MAX] ✅ Lesson deleted: ${lessonId}`);
+                
+                await api.sendMessage({ 
+                    chatId: chatId, 
+                    text: `🗑️ Урок MAX удалён.`, 
+                    parseMode: 'markdown' 
+                });
+                
+                await handleAdminEditLessonsMax(chatId, api);
+            } catch (error) {
+                console.error('[ADMIN MAX] Delete error:', error);
+                await api.sendMessage({
+                    chatId: chatId,
+                    text: `❌ Ошибка удаления: ${error.message}`,
+                    parseMode: 'markdown',
+                });
+            }
+            return;
+        }
         
         await showAdminDashboardMax(chatId, api);
     } catch (error) {
