@@ -2539,6 +2539,10 @@ app.post('/webhook/max', async (req, res) => {
 // VK WEBHOOK - ИСПРАВЛЕННАЯ ВЕРСИЯ
 // ============================================================
 
+// ============================================================
+// VK WEBHOOK - ИСПРАВЛЕННАЯ ВЕРСИЯ
+// ============================================================
+
 app.post('/webhook/vk', async (req, res) => {
     console.log('[VK WEBHOOK] ========== WEBHOOK RECEIVED ==========');
     
@@ -2547,27 +2551,26 @@ app.post('/webhook/vk', async (req, res) => {
         
         console.log('[VK WEBHOOK] Type:', type);
         console.log('[VK WEBHOOK] Group ID:', group_id);
-        console.log('[VK WEBHOOK] Secret present:', !!secret);
         console.log('[VK WEBHOOK] Secret received:', secret);
         console.log('[VK WEBHOOK] Secret expected:', config.vk.secret);
         
-        // Проверка секретного ключа (если он настроен)
+        // Проверка секретного ключа
         if (secret && config.vk.secret && secret !== config.vk.secret) {
             console.warn('[VK WEBHOOK] ❌ Invalid secret');
             return res.status(403).send('Invalid secret');
         }
         
-        // ✅ ПРАВИЛЬНЫЙ SWITCH - все case внутри!
-case 'confirmation':
-    // ✅ ПРАВИЛЬНО
-    return res.status(200).type('text/plain').send('f8803dfc');
+        // ✅ ПРАВИЛЬНЫЙ switch - все case ВНУТРИ!
+        switch (type) {
+            case 'confirmation':
+                console.log('[VK WEBHOOK] 🔑 Confirmation request');
+                // ✅ ВАЖНО: возвращаем ТОЛЬКО строку подтверждения
+                return res.status(200).type('text/plain').send('34fdf432');
             
             case 'message_new':
                 console.log('[VK WEBHOOK] 📨 New message received');
-                // Сразу отвечаем VK, чтобы не было таймаута
                 res.status(200).send('ok');
                 
-                // Обрабатываем сообщение асинхронно
                 setImmediate(async () => {
                     try {
                         await vkModule.handleMessageNew(object);
@@ -2597,7 +2600,6 @@ case 'confirmation':
     } catch (error) {
         console.error('[VK WEBHOOK] 💥 Fatal error:', error);
         console.error('[VK WEBHOOK] Stack:', error.stack);
-        // Всегда возвращаем 200 для VK
         return res.status(200).send('ok');
     }
 });
