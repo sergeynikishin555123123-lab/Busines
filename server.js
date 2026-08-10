@@ -761,6 +761,8 @@ async function handleMessageCreated(update) {
     }
 }
 
+// server.js - ИСПРАВЛЕННАЯ функция handleMessageCallback
+
 async function handleMessageCallback(update) {
     console.log('[HANDLER] handleMessageCallback called');
     try {
@@ -775,7 +777,7 @@ async function handleMessageCallback(update) {
         
         const maxApi = new MaxAPI();
         
-        // ✅ ЛОГИРОВАНИЕ СЕССИИ (ОДИН РАЗ)
+        // ✅ ТОЛЬКО ОДНО ОБЪЯВЛЕНИЕ переменной adminSession
         const adminSession = adminSessionsMax.get(chatId);
         console.log(`[HANDLER] Admin session:`, adminSession ? {
             mode: adminSession.mode,
@@ -799,7 +801,7 @@ async function handleMessageCallback(update) {
             return;
         }
         
-        // ✅ ИСПОЛЬЗУЕМ УЖЕ ПОЛУЧЕННУЮ СЕССИЮ, НЕ ПЕРЕОПРЕДЕЛЯЕМ
+        // ✅ ИСПОЛЬЗУЕМ УЖЕ ПОЛУЧЕННУЮ СЕССИЮ (adminSession)
         if (adminSession && adminSession.mode === 'admin') {
             await handleAdminCallbackMax(chatId, payload, maxApi);
             return;
@@ -1783,51 +1785,73 @@ async function handleAdminCallbackMax(chatId, payload, api) {
             return;
         }
         
-        if (payload.startsWith('admin_lesson_delete_')) {
-            const lessonId = payload.replace('admin_lesson_delete_', '');
-            const lesson = await lessonService.getLessonById(lessonId);
-            if (lesson) {
-                await api.sendKeyboard({
-                    chatId: chatId,
-                    text: `⚠️ **Удалить урок MAX "${lesson.title}"?**`,
-                    buttons: [
-                        [{ type: 'callback', text: '✅ Да', payload: `admin_lesson_delete_confirm_${lessonId}` }],
-                        [{ type: 'callback', text: '❌ Нет', payload: `admin_edit_lesson_${lessonId}` }]
-                    ],
-                    parseMode: 'markdown',
-                });
-            }
+    // server.js - ИСПРАВЛЕННАЯ часть функции handleAdminCallbackMax (удаление урока)
+
+if (payload.startsWith('admin_lesson_delete_')) {
+    const lessonId = payload.replace('admin_lesson_delete_', '');
+    const lesson = await lessonService.getLessonById(lessonId);
+    if (lesson) {
+        console.log(`[ADMIN MAX] Showing delete confirmation for: ${lesson.title} (${lessonId})`);
+        await api.sendKeyboard({
+            chatId: chatId,
+            text: `⚠️ **Удалить урок MAX "${lesson.title}"?**\n\nЭто действие нельзя отменить.`,
+            buttons: [
+                [{ type: 'callback', text: '✅ Да, удалить', payload: `admin_lesson_delete_confirm_${lessonId}` }],
+                [{ type: 'callback', text: '❌ Отмена', payload: `admin_edit_lesson_${lessonId}` }]
+            ],
+            parseMode: 'markdown',
+        });
+    } else {
+        await api.sendMessage({
+            chatId: chatId,
+            text: `❌ Урок не найден.`,
+            parseMode: 'markdown',
+        });
+    }
+    return;
+}
+
+if (payload.startsWith('admin_lesson_delete_confirm_')) {
+    const lessonId = payload.replace('admin_lesson_delete_confirm_', '');
+    console.log(`[ADMIN MAX] ✅ CONFIRMED: Deleting lesson: ${lessonId}`);
+    
+    try {
+        // Проверяем существование урока
+        const lesson = await lessonService.getLessonById(lessonId);
+        if (!lesson) {
+            await api.sendMessage({ 
+                chatId: chatId, 
+                text: `❌ Урок не найден.`, 
+                parseMode: 'markdown' 
+            });
             return;
         }
         
-        if (payload.startsWith('admin_lesson_delete_confirm_')) {
-            const lessonId = payload.replace('admin_lesson_delete_confirm_', '');
-            console.log(`[ADMIN MAX] ✅ Deleting lesson: ${lessonId}`);
-            
-            try {
-                const lesson = await lessonService.getLessonById(lessonId);
-                console.log(`[ADMIN MAX] Lesson found:`, lesson ? lesson.title : 'NOT FOUND');
-                
-                await lessonService.deleteLesson(lessonId);
-                console.log(`[ADMIN MAX] ✅ Lesson deleted: ${lessonId}`);
-                
-                await api.sendMessage({ 
-                    chatId: chatId, 
-                    text: `🗑️ Урок MAX удалён.`, 
-                    parseMode: 'markdown' 
-                });
-                
-                await handleAdminEditLessonsMax(chatId, api);
-            } catch (error) {
-                console.error('[ADMIN MAX] Delete error:', error);
-                await api.sendMessage({
-                    chatId: chatId,
-                    text: `❌ Ошибка удаления: ${error.message}`,
-                    parseMode: 'markdown',
-                });
-            }
-            return;
-        }
+        console.log(`[ADMIN MAX] Deleting lesson: ${lesson.title}`);
+        
+        // Удаляем урок
+        await lessonService.deleteLesson(lessonId);
+        console.log(`[ADMIN MAX] ✅ Lesson deleted successfully: ${lessonId}`);
+        
+        await api.sendMessage({ 
+            chatId: chatId, 
+            text: `🗑️ Урок **"${lesson.title}"** удалён.`, 
+            parseMode: 'markdown' 
+        });
+        
+        // Возвращаемся к списку уроков
+        await handleAdminEditLessonsMax(chatId, api);
+        
+    } catch (error) {
+        console.error('[ADMIN MAX] Delete error:', error);
+        await api.sendMessage({
+            chatId: chatId,
+            text: `❌ Ошибка удаления: ${error.message}`,
+            parseMode: 'markdown',
+        });
+    }
+    return;
+}
         
         await showAdminDashboardMax(chatId, api);
     } catch (error) {
