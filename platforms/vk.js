@@ -1588,13 +1588,11 @@ async function sendLessonToUserVk(chatId, lessonId, vkApi) {
     }
 }
 
-// ============================================================
-// ОБРАБОТКА СОЗДАНИЯ ТЕСТА (ПОШАГОВО ДЛЯ VK)
-// ============================================================
+// platforms/vk.js - ОБНОВЛЕННАЯ ФУНКЦИЯ ДЛЯ VK
 
 async function handleTestCreation(chatId, text, vkApi) {
     try {
-        const session = adminSessions.get(chatId);
+        const session = adminSessionsVk.get(chatId);
         if (!session || !session.lessonId) {
             await vkApi.sendMessage({ chatId, text: '❌ Сессия потеряна' });
             return;
@@ -1603,7 +1601,9 @@ async function handleTestCreation(chatId, text, vkApi) {
         const lessonId = session.lessonId;
         const context = session.context || '';
         
-        // ШАГ 1: Ввод вопроса
+        // ============================================
+        // ⭐ ШАГ 1: ВВОД ВОПРОСА
+        // ============================================
         if (context === 'editing_test_question') {
             session.testQuestion = text;
             session.testAnswers = [];
@@ -1617,10 +1617,13 @@ async function handleTestCreation(chatId, text, vkApi) {
             return;
         }
         
-        // ШАГ 2: Ввод ответов
+        // ============================================
+        // ⭐ ШАГ 2: ВВОД ОТВЕТОВ (ПО ОДНОМУ)
+        // ============================================
         if (context === 'editing_test_answers') {
-            // Проверяем, не хочет ли пользователь завершить
             const lowerText = text.toLowerCase().trim();
+            
+            // Проверяем, не хочет ли пользователь завершить
             if (lowerText === 'готово' || lowerText === 'done' || lowerText === 'конец') {
                 if (session.testAnswers.length < 2) {
                     await vkApi.sendMessage({
@@ -1633,8 +1636,11 @@ async function handleTestCreation(chatId, text, vkApi) {
                 // Проверяем, есть ли правильный ответ
                 const hasCorrect = session.testAnswers.some(a => a.isCorrect);
                 if (!hasCorrect) {
-                    // Если нет правильного, делаем первый правильным
                     session.testAnswers[0].isCorrect = true;
+                    await vkApi.sendMessage({
+                        chatId,
+                        text: `ℹ️ Первый ответ автоматически отмечен как правильный.`,
+                    });
                 }
                 
                 // Сохраняем тест
@@ -1692,12 +1698,15 @@ async function handleTestCreation(chatId, text, vkApi) {
         });
     } catch (error) {
         console.error('[VK TEST] Error:', error);
-        session.context = 'editing_lesson';
+        const session = adminSessionsVk.get(chatId);
+        if (session) session.context = 'editing_lesson';
         await vkApi.sendMessage({
             chatId,
             text: `❌ Ошибка: ${error.message}`,
         });
-        await handleAdminEditLessonVk(chatId, lessonId, vkApi);
+        if (session && session.lessonId) {
+            await handleAdminEditLessonVk(chatId, session.lessonId, vkApi);
+        }
     }
 }
 // ============================================================
