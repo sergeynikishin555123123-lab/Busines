@@ -151,6 +151,8 @@ class MaxAPI {
 
    // platforms/max.js - исправленный метод uploadFile
 
+// platforms/max.js - ИСПРАВЛЕННЫЙ метод uploadFile
+
 async uploadFile(filePath, fileType = 'file') {
     try {
         console.log(`[MAX] Uploading file: ${filePath}, type: ${fileType}`);
@@ -164,11 +166,37 @@ async uploadFile(filePath, fileType = 'file') {
 
         // ШАГ 1: Получаем URL для загрузки
         console.log(`[MAX] Step 1: Getting upload URL for type: ${fileType}`);
-        const uploadResponse = await this.client.post(`/uploads?type=${fileType}`);
         
-        const uploadUrl = uploadResponse.data.url;
-        // Для video/audio токен приходит сразу
-        const initialToken = uploadResponse.data.token || null;
+        // ✅ ИСПРАВЛЕНО: правильный endpoint для получения URL загрузки
+        const uploadResponse = await this.client.post(`/uploads`, {
+            type: fileType
+        });
+        
+        // ✅ ПРОВЕРКА: разные структуры ответа
+        let uploadUrl = null;
+        let initialToken = null;
+        
+        if (uploadResponse.data) {
+            // Проверяем разные возможные структуры ответа
+            if (uploadResponse.data.url) {
+                uploadUrl = uploadResponse.data.url;
+            } else if (uploadResponse.data.upload_url) {
+                uploadUrl = uploadResponse.data.upload_url;
+            } else if (uploadResponse.data.data && uploadResponse.data.data.url) {
+                uploadUrl = uploadResponse.data.data.url;
+            }
+            
+            if (uploadResponse.data.token) {
+                initialToken = uploadResponse.data.token;
+            } else if (uploadResponse.data.data && uploadResponse.data.data.token) {
+                initialToken = uploadResponse.data.data.token;
+            }
+        }
+        
+        if (!uploadUrl) {
+            console.error('[MAX] Upload response:', JSON.stringify(uploadResponse.data, null, 2));
+            throw new Error('No upload URL received from server');
+        }
         
         console.log(`[MAX] Got upload URL: ${uploadUrl}`);
         if (initialToken) {
@@ -179,7 +207,7 @@ async uploadFile(filePath, fileType = 'file') {
         console.log(`[MAX] Step 2: Uploading file to: ${uploadUrl}`);
         
         const formData = new FormData();
-        formData.append('data', fs.createReadStream(filePath));
+        formData.append('file', fs.createReadStream(filePath));
 
         const uploadResult = await axios.post(uploadUrl, formData, {
             headers: {
@@ -196,6 +224,15 @@ async uploadFile(filePath, fileType = 'file') {
         // ШАГ 3: Получаем токен из ответа
         let token = uploadResult.data.token || initialToken;
         
+        // Проверяем другие возможные места токена
+        if (!token && uploadResult.data) {
+            if (uploadResult.data.data && uploadResult.data.data.token) {
+                token = uploadResult.data.data.token;
+            } else if (uploadResult.data.result && uploadResult.data.result.token) {
+                token = uploadResult.data.result.token;
+            }
+        }
+        
         if (!token) {
             console.error('[MAX] Upload response:', JSON.stringify(uploadResult.data, null, 2));
             throw new Error('No token received from upload');
@@ -210,7 +247,7 @@ async uploadFile(filePath, fileType = 'file') {
         console.error(`[MAX] ❌ Failed to upload file: ${filePath}`, error.message);
         if (error.response) {
             console.error('[MAX] Response status:', error.response.status);
-            console.error('[MAX] Response data:', error.response.data);
+            console.error('[MAX] Response data:', JSON.stringify(error.response.data, null, 2));
         }
         logger.error({ err: error, filePath }, 'Failed to upload file to MAX');
         throw error;
