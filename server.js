@@ -2558,11 +2558,9 @@ app.post('/webhook/vk', async (req, res) => {
         }
         
         // ✅ ПРАВИЛЬНЫЙ SWITCH - все case внутри!
-        switch (type) {
-            case 'confirmation':
-                console.log('[VK WEBHOOK] 🔐 Confirmation request');
-                console.log('[VK WEBHOOK] ✅ Sending confirmation: 34fdf432');
-                return res.status(200).send('34fdf432');
+case 'confirmation':
+    // ✅ ПРАВИЛЬНО
+    return res.status(200).type('text/plain').send('34fdf432');
             
             case 'message_new':
                 console.log('[VK WEBHOOK] 📨 New message received');
