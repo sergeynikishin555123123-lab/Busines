@@ -2539,6 +2539,10 @@ app.post('/webhook/max', async (req, res) => {
 // VK WEBHOOK
 // ============================================================
 
+// ============================================================
+// VK WEBHOOK
+// ============================================================
+
 app.post('/webhook/vk', async (req, res) => {
     console.log('[VK WEBHOOK] ========== WEBHOOK RECEIVED ==========');
     
@@ -2548,25 +2552,23 @@ app.post('/webhook/vk', async (req, res) => {
         console.log('[VK WEBHOOK] Type:', type);
         console.log('[VK WEBHOOK] Group ID:', group_id);
         console.log('[VK WEBHOOK] Secret present:', !!secret);
+        console.log('[VK WEBHOOK] Secret received:', secret);
+        console.log('[VK WEBHOOK] Secret expected:', config.vk.secret);
         
         // Проверка секретного ключа (если он настроен)
         if (secret && config.vk.secret && secret !== config.vk.secret) {
-            console.warn('[VK WEBHOOK] Invalid secret');
+            console.warn('[VK WEBHOOK] ❌ Invalid secret');
             return res.status(403).send('Invalid secret');
         }
         
-       // В обработчике добавьте проверку secret
-case 'confirmation':
-    console.log('[VK WEBHOOK] Confirmation request');
-    // Проверяем secret если он передан
-    if (secret && secret !== config.vk.secret) {
-        console.warn('[VK WEBHOOK] Invalid secret:', secret);
-        return res.status(403).send('Invalid secret');
-    }
-    return res.status(200).send('34fdf432');
+        switch (type) {
+            case 'confirmation':
+                console.log('[VK WEBHOOK] 🔐 Confirmation request');
+                console.log('[VK WEBHOOK] ✅ Sending confirmation: 34fdf432');
+                return res.status(200).send('34fdf432');
             
             case 'message_new':
-                console.log('[VK WEBHOOK] New message received');
+                console.log('[VK WEBHOOK] 📨 New message received');
                 // Сразу отвечаем VK, чтобы не было таймаута
                 res.status(200).send('ok');
                 
@@ -2581,7 +2583,7 @@ case 'confirmation':
                 return;
             
             case 'message_event':
-                console.log('[VK WEBHOOK] Message event received');
+                console.log('[VK WEBHOOK] 🎯 Message event received');
                 res.status(200).send('ok');
                 
                 setImmediate(async () => {
@@ -2594,16 +2596,16 @@ case 'confirmation':
                 return;
             
             default:
-                console.log(`[VK WEBHOOK] Unhandled type: ${type}`);
+                console.log(`[VK WEBHOOK] ⚠️ Unhandled type: ${type}`);
                 return res.status(200).send('ok');
         }
     } catch (error) {
-        console.error('[VK WEBHOOK] Fatal error:', error);
+        console.error('[VK WEBHOOK] 💥 Fatal error:', error);
+        console.error('[VK WEBHOOK] Stack:', error.stack);
         // Всегда возвращаем 200 для VK
         return res.status(200).send('ok');
     }
 });
-
 // ============================================================
 // АДМИН РОУТЫ ДЛЯ WEBHOOK
 // ============================================================
