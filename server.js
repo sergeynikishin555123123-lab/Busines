@@ -2536,11 +2536,7 @@ app.post('/webhook/max', async (req, res) => {
 });
 
 // ============================================================
-// VK WEBHOOK
-// ============================================================
-
-// ============================================================
-// VK WEBHOOK
+// VK WEBHOOK - ИСПРАВЛЕННАЯ ВЕРСИЯ
 // ============================================================
 
 app.post('/webhook/vk', async (req, res) => {
@@ -2561,6 +2557,7 @@ app.post('/webhook/vk', async (req, res) => {
             return res.status(403).send('Invalid secret');
         }
         
+        // ✅ ПРАВИЛЬНЫЙ SWITCH - все case внутри!
         switch (type) {
             case 'confirmation':
                 console.log('[VK WEBHOOK] 🔐 Confirmation request');
