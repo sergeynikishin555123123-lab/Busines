@@ -163,6 +163,29 @@ async function connectPostgreSQL() {
         console.log('[POSTGRES] ✅ Connected successfully');
         
         await initPostgreSQLTables();
+        
+        // ============================================================
+        // ✅ ВСТАВЬТЕ ЭТОТ КОД ЗДЕСЬ (ПЕРЕД return pgClient)
+        // ============================================================
+        // Автоматическое переподключение при обрыве
+        pgClient.on('error', async (err) => {
+            console.error('[POSTGRES] Connection error:', err.message);
+            pgConnected = false;
+            
+            // Пытаемся переподключиться через 5 секунд
+            setTimeout(async () => {
+                console.log('[POSTGRES] Attempting to reconnect...');
+                try {
+                    await pgClient.connect();
+                    pgConnected = true;
+                    console.log('[POSTGRES] ✅ Reconnected successfully');
+                } catch (e) {
+                    console.error('[POSTGRES] ❌ Reconnection failed:', e.message);
+                }
+            }, 5000);
+        });
+        // ============================================================
+        
         return pgClient;
     } catch (error) {
         console.error('[POSTGRES] ❌ Connection error:', error.message);
@@ -172,7 +195,6 @@ async function connectPostgreSQL() {
         return null;
     }
 }
-
 async function initPostgreSQLTables() {
     if (!pgConnected || !pgClient) return;
 
