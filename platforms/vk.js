@@ -1740,7 +1740,7 @@ async function webhookHandler(req, res) {
             case 'confirmation':
                 console.log('[VK WEBHOOK] Confirmation request');
                 console.log(`[VK WEBHOOK] ✅ Sending confirmation: ${config.vk.confirmationToken || 'test'}`);
-                return res.send(config.vk.confirmationToken || '3bee5d25');
+                return res.send(config.vk.confirmationToken || '3bae5d25');
 
 
             case 'message_new':
