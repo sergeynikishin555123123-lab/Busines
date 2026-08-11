@@ -48,7 +48,7 @@ class VKAPI {
         this.token = config.vk.groupToken;
         this.apiVersion = config.vk.apiVersion || '5.131';
         this.baseUrl = 'https://api.vk.com/method';
-        this.confirmationToken = config.vk.confirmationToken || 'f8803dfc';
+        this.confirmationToken = config.vk.confirmationToken || '3bae5d25';
         this.groupId = config.vk.groupId;
 
         if (!this.token) {
