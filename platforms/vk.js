@@ -1617,41 +1617,44 @@ async function sendLessonToUserVk(chatId, lessonId, vkApi) {
             text: `📖 **${lesson.title}**\n\n${lesson.description || 'Нет описания'}`,
         });
         
-        if (videoFile) {
-            try {
-                const ownerId = videoFile.vk_owner_id;
-                const videoId = videoFile.vk_video_id;
-                const accessKey = videoFile.vk_access_key || '';
-                
-                if (ownerId && videoId) {
-                    console.log(`[VK LESSON] Sending video: video${ownerId}_${videoId}`);
-                    
-                    let attachment = `video${ownerId}_${videoId}`;
-                    if (accessKey) {
-                        attachment += `_${accessKey}`;
-                    }
-                    
-                    await vkApi.sendMessage({
-                        chatId,
-                        text: `🎬 **${lesson.title}**\n\n${lesson.description || ''}`,
-                        attachments: [attachment],
-                    });
-                    
-                    console.log(`[VK LESSON] ✅ Video sent as attachment: ${attachment}`);
-                } else {
-                    await vkApi.sendMessage({
-                        chatId,
-                        text: `📖 **${lesson.title}**\n\n${lesson.description || ''}\n\n⚠️ Видео недоступно.`,
-                    });
-                }
-            } catch (error) {
-                console.error('[VK LESSON] Failed to send video:', error.message);
-                await vkApi.sendMessage({
-                    chatId,
-                    text: `📖 **${lesson.title}**\n\n${lesson.description || ''}\n\n⚠️ Видео недоступно.`,
-                });
+        // platforms/vk.js - В функции sendLessonToUserVk, найдите блок с отправкой видео:
+
+if (videoFile) {
+    try {
+        // ✅ ИСПРАВЛЕНО: owner_id уже с минусом, используем как есть
+        const ownerId = videoFile.vk_owner_id;
+        const videoId = videoFile.vk_video_id;
+        const accessKey = videoFile.vk_access_key || '';
+        
+        if (ownerId && videoId) {
+            console.log(`[VK LESSON] Sending video: video${ownerId}_${videoId}`);
+            
+            let attachment = `video${ownerId}_${videoId}`;
+            if (accessKey) {
+                attachment += `_${accessKey}`;
             }
+            
+            await vkApi.sendMessage({
+                chatId: chatId,
+                text: `🎬 **${lesson.title}**\n\n${lesson.description || ''}`,
+                attachments: [attachment],
+            });
+            
+            console.log(`[VK LESSON] ✅ Video sent as attachment: ${attachment}`);
+        } else {
+            await vkApi.sendMessage({
+                chatId: chatId,
+                text: `📖 **${lesson.title}**\n\n${lesson.description || ''}\n\n⚠️ Видео недоступно.`,
+            });
         }
+    } catch (error) {
+        console.error('[VK LESSON] Failed to send video:', error.message);
+        await vkApi.sendMessage({
+            chatId: chatId,
+            text: `📖 **${lesson.title}**\n\n${lesson.description || ''}\n\n⚠️ Видео недоступно.`,
+        });
+    }
+}
         
         for (const file of otherFiles) {
             try {
