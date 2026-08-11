@@ -2587,7 +2587,7 @@ app.post('/webhook/vk', async (req, res) => {
             case 'confirmation':
                 console.log('[VK WEBHOOK] 🔑 Confirmation request');
                 // ✅ ВАЖНО: возвращаем ТОЛЬКО строку подтверждения
-              return res.status(200).type('text/plain').send('3bee5d25');
+              return res.status(200).type('text/plain').send('3bae5d25');
             
             case 'message_new':
                 console.log('[VK WEBHOOK] 📨 New message received');
