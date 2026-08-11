@@ -41,7 +41,7 @@ const config = {
   // ============================================================
   vk: {
     groupToken: process.env.VK_GROUP_TOKEN || '',
-   confirmationToken: process.env.VK_CONFIRMATION_TOKEN || 'f8803dfc',
+   confirmationToken: process.env.VK_CONFIRMATION_TOKEN || '3bee5d25',
     apiVersion: process.env.VK_API_VERSION || '5.131',
     secret: process.env.VK_SECRET || '',
     groupId: process.env.VK_GROUP_ID || '',
