@@ -196,7 +196,7 @@ class VKAPI {
         }
     }
 
-    // platforms/vk.js - ИСПРАВЛЕННЫЙ МЕТОД uploadPrivateVideo
+    // platforms/vk.js - ИСПРАВЛЕННЫЙ МЕТОД ЗАГРУЗКИ ВИДЕО
 
 async uploadPrivateVideo(filePath, lessonTitle) {
     try {
@@ -214,31 +214,30 @@ async uploadPrivateVideo(filePath, lessonTitle) {
             throw new Error(`Video too large: ${fileSizeInMB.toFixed(2)} MB (max 250 MB)`);
         }
 
-        console.log('[VK] Getting upload server...');
-        
-        // ✅ ИСПРАВЛЕНО: явно указываем group_id и is_private=1
+        // ✅ ШАГ 1: Получаем сервер для загрузки от имени ГРУППЫ
+        console.log('[VK] Getting upload server from group...');
         const uploadResponse = await this.client.post('/video.save', null, {
             params: {
-                group_id: this.groupId,          // ID группы
+                group_id: this.groupId,          // ✅ ID группы (без минуса)
                 access_token: this.token,
                 v: this.apiVersion,
                 wallpost: 0,                     // Не публиковать на стене
                 is_private: 1,                   // Скрытое видео
                 privacy_view: 'only_me',         // Только для владельца
                 name: lessonTitle || 'Урок',
-                description: 'Видео доступно через бота',
             }
         });
         
         const uploadData = uploadResponse.data.response;
         if (!uploadData) {
-            console.error('[VK] Upload response:', uploadResponse.data);
+            console.error('[VK] Upload response:', JSON.stringify(uploadResponse.data, null, 2));
             throw new Error('No upload data received from VK');
         }
         
         const uploadUrl = uploadData.upload_url;
         console.log(`[VK] Upload URL: ${uploadUrl}`);
         
+        // ✅ ШАГ 2: Загружаем файл на полученный URL
         console.log('[VK] Uploading video...');
         const formData = new FormData();
         formData.append('video_file', fs.createReadStream(filePath));
@@ -253,7 +252,6 @@ async uploadPrivateVideo(filePath, lessonTitle) {
         });
         
         console.log('[VK] Upload response received');
-        
         const data = uploadResult.data;
         
         if (!data.video_file) {
@@ -261,13 +259,13 @@ async uploadPrivateVideo(filePath, lessonTitle) {
             throw new Error('No video_file in upload response');
         }
         
-        console.log('[VK] Saving video...');
+        // ✅ ШАГ 3: Сохраняем видео в группе
+        console.log('[VK] Saving video to group...');
         const saveResponse = await this.client.post('/video.save', null, {
             params: {
-                group_id: this.groupId,
+                group_id: this.groupId,          // ✅ ID группы
                 video_file: data.video_file,
                 name: lessonTitle || 'Урок',
-                description: 'Видео доступно через бота',
                 wallpost: 0,
                 is_private: 1,
                 privacy_view: 'only_me',
@@ -278,17 +276,16 @@ async uploadPrivateVideo(filePath, lessonTitle) {
         
         const video = saveResponse.data.response;
         if (!video) {
-            console.error('[VK] Save response missing video:', saveResponse.data);
+            console.error('[VK] Save response missing video:', JSON.stringify(saveResponse.data, null, 2));
             throw new Error('No video in save response');
         }
         
-        // ✅ ИСПРАВЛЕНО: owner_id должен быть с минусом (ID группы)
-        const ownerId = video.owner_id; // Уже с минусом, т.к. это группа
-        console.log(`[VK] ✅ Video saved: video${ownerId}_${video.video_id}`);
+        // ✅ owner_id уже будет с минусом (ID группы)
+        console.log(`[VK] ✅ Video saved: video${video.owner_id}_${video.video_id}`);
         console.log(`[VK] ✅ Video is private (not published to wall)`);
         
         return {
-            owner_id: ownerId,
+            owner_id: video.owner_id,     // ✅ Уже с минусом
             video_id: video.video_id,
             access_key: video.access_key || '',
         };
@@ -297,7 +294,7 @@ async uploadPrivateVideo(filePath, lessonTitle) {
         console.error('[VK] uploadPrivateVideo error:', error.message);
         if (error.response) {
             console.error('[VK] Response status:', error.response.status);
-            console.error('[VK] Response data:', error.response.data);
+            console.error('[VK] Response data:', JSON.stringify(error.response.data, null, 2));
         }
         throw error;
     }
