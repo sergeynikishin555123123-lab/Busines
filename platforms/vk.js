@@ -1318,147 +1318,115 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
                 }
             }
             
-            if (type === 'doc' && attachment.doc) {
-                const doc = attachment.doc;
-                const docUrl = doc.url || '';
-                const fileName = doc.title || 'file';
-                const fileExt = doc.ext || '';
-                const isVideo = ['mp4', 'mov', 'avi', 'webm', 'mkv', 'm4v', '3gp'].includes(fileExt.toLowerCase());
-                
-                console.log(`[VK ADMIN] Doc: ${fileName}, ext: ${fileExt}, isVideo: ${isVideo}`);
-                console.log(`[VK ADMIN] Doc URL: ${docUrl}`);
-                
-                if (isVideo && docUrl) {
-                    await vkApi.sendMessage({
-                        chatId,
-                        text: `⏳ **Загрузка видео в сообщество VK...**\n\nЭто может занять несколько минут.\n\n📌 Видео НЕ будет опубликовано на стене.`,
-                    });
-                    
-                    try {
-                        const response = await axios.get(docUrl, {
-                            responseType: 'arraybuffer',
-                            timeout: 600000,
-                        });
-                        
-                        const tempDir = path.join('/tmp', 'vk_uploads');
-                        if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
-                        
-                        const tempPath = path.join(tempDir, `${Date.now()}-${fileName}`);
-                        fs.writeFileSync(tempPath, Buffer.from(response.data));
-                        
-                        const vkApiClient = new VKAPI();
-                        const vkResult = await vkApiClient.uploadPrivateVideo(tempPath, 'Урок VK');
-                        
-                        fs.unlinkSync(tempPath);
-                        
-                        const fileDataToSave = {
-                            filename: fileName,
-                            originalname: fileName,
-                            size: response.data.length,
-                            mimetype: 'video/mp4',
-                            path: `video${vkResult.owner_id}_${vkResult.video_id}`,
-                            token: null,
-                            vk_owner_id: vkResult.owner_id,
-                            vk_video_id: vkResult.video_id,
-                            vk_access_key: vkResult.access_key || null,
-                            is_max_uploaded: true,
-                            type: 'video',
-                            platform: 'vk'
-                        };
-                        
-                        const existingFiles = await lessonService.getLessonFiles(lessonId);
-                        const oldVideo = existingFiles.find(f => f.type === 'video' && (f.platform === 'vk' || !f.platform));
-                        if (oldVideo) {
-                            await lessonService.deleteLessonFile(oldVideo.id);
-                        }
-                        
-                        await lessonService.addLessonFile(lessonId, fileDataToSave);
-                        
-                        await vkApi.sendMessage({
-                            chatId,
-                            text: `✅ **Видео VK загружено в сообщество!**\n\n📹 ${fileName}\n\n📌 Видео НЕ опубликовано на стене.\n\nТеперь видео доступно всем пользователям бота.`,
-                        });
-                        
-                        await handleAdminEditLessonVk(chatId, lessonId, vkApi);
-                        return;
-                    } catch (error) {
-                        console.error('[VK ADMIN] Video upload error:', error);
-                        await vkApi.sendMessage({
-                            chatId,
-                            text: `❌ Ошибка загрузки видео: ${error.message}\n\nПопробуйте загрузить видео через кнопку "Видео" в интерфейсе VK.`,
-                        });
-                        return;
-                    }
-                }
-                
-                if (docUrl) {
-                    await vkApi.sendMessage({
-                        chatId,
-                        text: `📎 **Файл VK**\n\n${fileName}\n${docUrl}`,
-                    });
-                    
-                    const fileDataToSave = {
-                        filename: fileName,
-                        originalname: fileName,
-                        size: doc.size || 0,
-                        mimetype: doc.type || 'application/octet-stream',
-                        path: docUrl,
-                        url: docUrl,
-                        type: 'file',
-                        platform: 'vk'
-                    };
-                    
-                    const existingFiles = await lessonService.getLessonFiles(lessonId);
-                    const oldFile = existingFiles.find(f => f.type === 'file' && (f.platform === 'vk' || !f.platform));
-                    if (oldFile) {
-                        await lessonService.deleteLessonFile(oldFile.id);
-                    }
-                    
-                    await lessonService.addLessonFile(lessonId, fileDataToSave);
-                    
-                    await handleAdminEditLessonVk(chatId, lessonId, vkApi);
-                    return;
-                }
+           // platforms/vk.js - ИСПРАВЛЕННАЯ ОБРАБОТКА ДОКУМЕНТОВ
+
+if (type === 'doc' && attachment.doc) {
+    const doc = attachment.doc;
+    const docUrl = doc.url || '';
+    const fileName = doc.title || 'file';
+    const fileExt = doc.ext || '';
+    const isVideo = ['mp4', 'mov', 'avi', 'webm', 'mkv', 'm4v', '3gp'].includes(fileExt.toLowerCase());
+    
+    console.log(`[VK ADMIN] Doc: ${fileName}, ext: ${fileExt}, isVideo: ${isVideo}`);
+    console.log(`[VK ADMIN] Doc URL: ${docUrl}`);
+    
+    // ✅ ИСПРАВЛЕНО: обрабатываем видео
+    if (isVideo && docUrl) {
+        await vkApi.sendMessage({
+            chatId,
+            text: `⏳ **Загрузка видео в сообщество VK...**\n\nЭто может занять несколько минут.\n\n📌 Видео НЕ будет опубликовано на стене.`,
+        });
+        
+        try {
+            const response = await axios.get(docUrl, {
+                responseType: 'arraybuffer',
+                timeout: 600000,
+            });
+            
+            const tempDir = path.join('/tmp', 'vk_uploads');
+            if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+            
+            const tempPath = path.join(tempDir, `${Date.now()}-${fileName}`);
+            fs.writeFileSync(tempPath, Buffer.from(response.data));
+            
+            const vkApiClient = new VKAPI();
+            const vkResult = await vkApiClient.uploadPrivateVideo(tempPath, 'Урок VK');
+            
+            fs.unlinkSync(tempPath);
+            
+            // ✅ ИСПРАВЛЕНО: правильно формируем fileData
+            const fileDataToSave = {
+                filename: fileName,
+                originalname: fileName,
+                size: response.data.length,
+                mimetype: 'video/mp4', // ✅ строка
+                path: `video${vkResult.owner_id}_${vkResult.video_id}`,
+                url: null,
+                token: null,
+                vk_owner_id: vkResult.owner_id,
+                vk_video_id: vkResult.video_id,
+                vk_access_key: vkResult.access_key || null,
+                is_max_uploaded: true,
+                type: 'video',
+                platform: 'vk'
+            };
+            
+            const existingFiles = await lessonService.getLessonFiles(lessonId);
+            const oldVideo = existingFiles.find(f => f.type === 'video' && (f.platform === 'vk' || !f.platform));
+            if (oldVideo) {
+                await lessonService.deleteLessonFile(oldVideo.id);
             }
             
-            if (type === 'photo' && attachment.photo) {
-                const photo = attachment.photo;
-                const sizes = photo.sizes || [];
-                const largest = sizes.reduce((a, b) => (a.width || 0) > (b.width || 0) ? a : b, {});
-                const photoUrl = largest.url || photo.src || '';
-                const photoId = `${photo.owner_id}_${photo.id}`;
-                
-                console.log(`[VK ADMIN] Photo: ${photoId}, url: ${photoUrl}`);
-                
-                if (photoUrl) {
-                    await vkApi.sendMessage({
-                        chatId,
-                        text: `🖼️ **Изображение VK**\n\n${photoUrl}`,
-                    });
-                    
-                    const fileDataToSave = {
-                        filename: `photo_${photoId}.jpg`,
-                        originalname: `photo_${photoId}.jpg`,
-                        size: 0,
-                        mimetype: 'image/jpeg',
-                        path: photoUrl,
-                        url: photoUrl,
-                        type: 'image',
-                        platform: 'vk'
-                    };
-                    
-                    const existingFiles = await lessonService.getLessonFiles(lessonId);
-                    const oldFile = existingFiles.find(f => f.type === 'image' && (f.platform === 'vk' || !f.platform));
-                    if (oldFile) {
-                        await lessonService.deleteLessonFile(oldFile.id);
-                    }
-                    
-                    await lessonService.addLessonFile(lessonId, fileDataToSave);
-                    
-                    await handleAdminEditLessonVk(chatId, lessonId, vkApi);
-                    return;
-                }
-            }
+            await lessonService.addLessonFile(lessonId, fileDataToSave);
+            
+            await vkApi.sendMessage({
+                chatId,
+                text: `✅ **Видео VK загружено в сообщество!**\n\n📹 ${fileName}\n\n📌 Видео НЕ опубликовано на стене.\n\nТеперь видео доступно всем пользователям бота.`,
+            });
+            
+            await handleAdminEditLessonVk(chatId, lessonId, vkApi);
+            return;
+        } catch (error) {
+            console.error('[VK ADMIN] Video upload error:', error);
+            await vkApi.sendMessage({
+                chatId,
+                text: `❌ Ошибка загрузки видео: ${error.message}\n\nПопробуйте загрузить видео через кнопку "Видео" в интерфейсе VK.`,
+            });
+            return;
+        }
+    }
+    
+    // ✅ ИСПРАВЛЕНО: обработка обычного файла
+    if (docUrl) {
+        await vkApi.sendMessage({
+            chatId,
+            text: `📎 **Файл VK**\n\n${fileName}\n${docUrl}`,
+        });
+        
+        // ✅ ИСПРАВЛЕНО: правильно формируем fileData с mimetype как строкой
+        const fileDataToSave = {
+            filename: fileName,
+            originalname: fileName,
+            size: doc.size || 0,
+            mimetype: doc.type || 'application/octet-stream', // ✅ строка
+            path: docUrl,
+            url: docUrl,
+            type: 'file',
+            platform: 'vk'
+        };
+        
+        const existingFiles = await lessonService.getLessonFiles(lessonId);
+        const oldFile = existingFiles.find(f => f.type === 'file' && (f.platform === 'vk' || !f.platform));
+        if (oldFile) {
+            await lessonService.deleteLessonFile(oldFile.id);
+        }
+        
+        await lessonService.addLessonFile(lessonId, fileDataToSave);
+        
+        await handleAdminEditLessonVk(chatId, lessonId, vkApi);
+        return;
+    }
+}
         }
         
         await vkApi.sendMessage({
