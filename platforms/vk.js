@@ -172,134 +172,135 @@ class VKAPI {
         return 'primary';
     }
 
-    // ============================================================
-    // ЗАГРУЗКА ВИДЕО В ГРУППУ (РАБОТАЕТ С ГРУППОВЫМ ТОКЕНОМ!)
-    // ============================================================
+  // platforms/vk.js - ИСПРАВЛЕННАЯ ЗАГРУЗКА ВИДЕО
 
-    async uploadVideoToGroup(filePath, lessonTitle) {
-        try {
-            console.log(`[VK] Uploading video to group: ${filePath}`);
-            
-            if (!fs.existsSync(filePath)) {
-                throw new Error(`File not found: ${filePath}`);
-            }
+// ============================================================
+// ЗАГРУЗКА ВИДЕО В ГРУППУ - ИСПРАВЛЕННАЯ ВЕРСИЯ
+// ============================================================
 
-            const stats = fs.statSync(filePath);
-            const fileSizeInMB = stats.size / (1024 * 1024);
-            console.log(`[VK] File size: ${fileSizeInMB.toFixed(2)} MB`);
-
-            if (fileSizeInMB > 250) {
-                throw new Error(`Video too large: ${fileSizeInMB.toFixed(2)} MB (max 250 MB)`);
-            }
-
-            // ============================================================
-            // ШАГ 1: Получаем сервер для загрузки видео в ГРУППУ
-            // group_id - указываем группу, wallpost: 0 - НЕ публикуем на стене
-            // ============================================================
-            console.log('[VK] Getting upload server for group video...');
-            const uploadResponse = await this.client.post('/video.save', null, {
-                params: {
-                    group_id: this.groupId,
-                    access_token: this.token,
-                    v: this.apiVersion,
-                    wallpost: 0,
-                    is_private: 1,
-                    privacy_view: 'only_me',
-                    name: lessonTitle || 'Урок',
-                    description: 'Видео к уроку в обучающем боте',
-                }
-            });
-            
-            if (uploadResponse.data && uploadResponse.data.error) {
-                console.error('[VK] Upload error:', uploadResponse.data.error);
-                throw new Error(`VK API Error: ${uploadResponse.data.error.error_msg}`);
-            }
-            
-            const uploadData = uploadResponse.data.response;
-            if (!uploadData) {
-                console.error('[VK] Upload response:', JSON.stringify(uploadResponse.data, null, 2));
-                throw new Error('No upload data received from VK');
-            }
-            
-            const uploadUrl = uploadData.upload_url;
-            console.log('[VK] Upload URL received');
-            
-            // ============================================================
-            // ШАГ 2: Загружаем файл на полученный URL
-            // ============================================================
-            console.log('[VK] Uploading video file...');
-            const formData = new FormData();
-            formData.append('video_file', fs.createReadStream(filePath));
-            
-            const uploadResult = await axios.post(uploadUrl, formData, {
-                headers: {
-                    ...formData.getHeaders(),
-                },
-                maxBodyLength: Infinity,
-                maxContentLength: Infinity,
-                timeout: 600000,
-            });
-            
-            console.log('[VK] Upload response received');
-            const data = uploadResult.data;
-            
-            if (!data.video_file) {
-                console.error('[VK] Upload response missing video_file:', data);
-                throw new Error('No video_file in upload response');
-            }
-            
-            // ============================================================
-            // ШАГ 3: Сохраняем видео в группе
-            // ============================================================
-            console.log('[VK] Saving video to group...');
-            const saveResponse = await this.client.post('/video.save', null, {
-                params: {
-                    group_id: this.groupId,
-                    video_file: data.video_file,
-                    name: lessonTitle || 'Урок',
-                    wallpost: 0,
-                    is_private: 1,
-                    privacy_view: 'only_me',
-                    access_token: this.token,
-                    v: this.apiVersion,
-                }
-            });
-            
-            if (saveResponse.data && saveResponse.data.error) {
-                console.error('[VK] Save error:', saveResponse.data.error);
-                throw new Error(`VK API Error: ${saveResponse.data.error.error_msg}`);
-            }
-            
-            const video = saveResponse.data.response;
-            if (!video) {
-                console.error('[VK] Save response missing video:', JSON.stringify(saveResponse.data, null, 2));
-                throw new Error('No video in save response');
-            }
-            
-            // Формируем строку для вложения
-            const attachmentString = `video${video.owner_id}_${video.video_id}`;
-            
-            console.log(`[VK] ✅ Video saved: ${attachmentString}`);
-            console.log(`[VK] ✅ Video is private (not published to wall)`);
-            
-            return {
-                owner_id: video.owner_id,
-                video_id: video.video_id,
-                access_key: video.access_key || '',
-                attachment: attachmentString,
-                title: video.title || lessonTitle,
-                duration: video.duration || 0,
-            };
-            
-        } catch (error) {
-            console.error('[VK] uploadVideoToGroup error:', error.message);
-            if (error.response) {
-                console.error('[VK] Response status:', error.response.status);
-                console.error('[VK] Response data:', JSON.stringify(error.response.data, null, 2));
-            }
-            throw error;
+async uploadVideoToGroup(filePath, lessonTitle) {
+    try {
+        console.log(`[VK] Uploading video to group: ${filePath}`);
+        
+        if (!fs.existsSync(filePath)) {
+            throw new Error(`File not found: ${filePath}`);
         }
+
+        const stats = fs.statSync(filePath);
+        const fileSizeInMB = stats.size / (1024 * 1024);
+        console.log(`[VK] File size: ${fileSizeInMB.toFixed(2)} MB`);
+
+        if (fileSizeInMB > 250) {
+            throw new Error(`Video too large: ${fileSizeInMB.toFixed(2)} MB (max 250 MB)`);
+        }
+
+        // ============================================================
+        // ШАГ 1: Получаем сервер для загрузки видео в ГРУППУ
+        // ============================================================
+        console.log('[VK] Getting upload server for group video...');
+        const uploadResponse = await this.client.post('/video.save', null, {
+            params: {
+                group_id: this.groupId,
+                access_token: this.token,
+                v: this.apiVersion,
+                wallpost: 0,
+                is_private: 1,
+                privacy_view: 'only_me',
+                name: lessonTitle || 'Урок',
+                description: 'Видео к уроку в обучающем боте',
+            }
+        });
+        
+        if (uploadResponse.data && uploadResponse.data.error) {
+            console.error('[VK] Upload error:', uploadResponse.data.error);
+            throw new Error(`VK API Error: ${uploadResponse.data.error.error_msg}`);
+        }
+        
+        const uploadData = uploadResponse.data.response;
+        if (!uploadData) {
+            console.error('[VK] Upload response:', JSON.stringify(uploadResponse.data, null, 2));
+            throw new Error('No upload data received from VK');
+        }
+        
+        const uploadUrl = uploadData.upload_url;
+        console.log('[VK] Upload URL received');
+        
+        // ============================================================
+        // ШАГ 2: Загружаем файл на полученный URL
+        // ============================================================
+        console.log('[VK] Uploading video file...');
+        const formData = new FormData();
+        formData.append('video_file', fs.createReadStream(filePath));
+        
+        const uploadResult = await axios.post(uploadUrl, formData, {
+            headers: {
+                ...formData.getHeaders(),
+            },
+            maxBodyLength: Infinity,
+            maxContentLength: Infinity,
+            timeout: 600000,
+        });
+        
+        console.log('[VK] Upload response received');
+        const data = uploadResult.data;
+        
+        if (!data.video_file) {
+            console.error('[VK] Upload response missing video_file:', data);
+            throw new Error('No video_file in upload response');
+        }
+        
+        // ============================================================
+        // ШАГ 3: Сохраняем видео в группе
+        // ============================================================
+        console.log('[VK] Saving video to group...');
+        const saveResponse = await this.client.post('/video.save', null, {
+            params: {
+                group_id: this.groupId,
+                video_file: data.video_file,
+                name: lessonTitle || 'Урок',
+                wallpost: 0,
+                is_private: 1,
+                privacy_view: 'only_me',
+                access_token: this.token,
+                v: this.apiVersion,
+            }
+        });
+        
+        if (saveResponse.data && saveResponse.data.error) {
+            console.error('[VK] Save error:', saveResponse.data.error);
+            throw new Error(`VK API Error: ${saveResponse.data.error.error_msg}`);
+        }
+        
+        const video = saveResponse.data.response;
+        if (!video) {
+            console.error('[VK] Save response missing video:', JSON.stringify(saveResponse.data, null, 2));
+            throw new Error('No video in save response');
+        }
+        
+        // Формируем строку для вложения
+        const attachmentString = `video${video.owner_id}_${video.video_id}`;
+        
+        console.log(`[VK] ✅ Video saved: ${attachmentString}`);
+        console.log(`[VK] ✅ Video is private (not published to wall)`);
+        
+        return {
+            owner_id: video.owner_id,
+            video_id: video.video_id,
+            access_key: video.access_key || '',
+            attachment: attachmentString,
+            title: video.title || lessonTitle,
+            duration: video.duration || 0,
+        };
+        
+    } catch (error) {
+        console.error('[VK] uploadVideoToGroup error:', error.message);
+        if (error.response) {
+            console.error('[VK] Response status:', error.response.status);
+            console.error('[VK] Response data:', JSON.stringify(error.response.data, null, 2));
+        }
+        throw error;
     }
+}
 
     // ============================================================
     // ЗАГРУЗКА ФАЙЛА (заглушка)
@@ -1274,126 +1275,133 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
             // ============================================================
             // ОБРАБОТКА ВИДЕО - ЗАГРУЗКА В ГРУППУ (РАБОТАЕТ!)
             // ============================================================
-            if (type === 'video' && attachment.video) {
-                const video = attachment.video;
-                const ownerId = video.owner_id;
-                const videoId = video.id;
-                const title = video.title || 'Видео';
-                
-                console.log(`[VK ADMIN] Video from user: owner_id=${ownerId}, id=${videoId}, title=${title}`);
-                
-                try {
-                    await vkApi.sendMessage({
-                        chatId,
-                        text: `⏳ **Загрузка видео в группу...**\n\nЭто может занять несколько минут.\n📌 Видео НЕ будет опубликовано на стене.\n📌 Будет доступно только в боте.`,
-                    });
-                    
-                    // Получаем ссылку на видео
-                    let videoUrl = null;
-                    try {
-                        const videoInfoResponse = await vkApi.client.post('/video.get', null, {
-                            params: {
-                                videos: `${ownerId}_${videoId}`,
-                                access_token: vkApi.token,
-                                v: vkApi.apiVersion,
-                            }
-                        });
-                        
-                        if (videoInfoResponse.data && videoInfoResponse.data.response) {
-                            const items = videoInfoResponse.data.response.items || [];
-                            if (items.length > 0) {
-                                const videoInfo = items[0];
-                                if (videoInfo.files) {
-                                    videoUrl = videoInfo.files.mp4_240 || 
-                                             videoInfo.files.mp4_360 || 
-                                             videoInfo.files.mp4_480 || 
-                                             videoInfo.files.mp4_720 ||
-                                             videoInfo.files.external;
-                                }
-                            }
-                        }
-                    } catch (videoInfoError) {
-                        console.warn('[VK ADMIN] Could not get video info:', videoInfoError.message);
+          // В handleAdminAttachmentVk - ИСПРАВЛЕННАЯ ВЕРСИЯ
+
+if (type === 'video' && attachment.video) {
+    const video = attachment.video;
+    const ownerId = video.owner_id;
+    const videoId = video.id;
+    const title = video.title || 'Видео';
+    
+    console.log(`[VK ADMIN] Video from user: owner_id=${ownerId}, id=${videoId}, title=${title}`);
+    
+    try {
+        await vkApi.sendMessage({
+            chatId,
+            text: `⏳ **Загрузка видео в группу...**\n\nЭто может занять несколько минут.\n📌 Видео НЕ будет опубликовано на стене.\n📌 Будет доступно только в боте.`,
+        });
+        
+        // ПОЛУЧАЕМ ССЫЛКУ НА ВИДЕО
+        let videoUrl = null;
+        try {
+            const videoInfoResponse = await vkApi.client.post('/video.get', null, {
+                params: {
+                    videos: `${ownerId}_${videoId}`,
+                    access_token: vkApi.token,
+                    v: vkApi.apiVersion,
+                }
+            });
+            
+            if (videoInfoResponse.data && videoInfoResponse.data.response) {
+                const items = videoInfoResponse.data.response.items || [];
+                if (items.length > 0) {
+                    const videoInfo = items[0];
+                    // Пробуем получить ссылку на видео
+                    if (videoInfo.files) {
+                        videoUrl = videoInfo.files.mp4_240 || 
+                                 videoInfo.files.mp4_360 || 
+                                 videoInfo.files.mp4_480 || 
+                                 videoInfo.files.mp4_720 ||
+                                 videoInfo.files.external;
                     }
-                    
-                    if (!videoUrl) {
-                        videoUrl = `https://vk.com/video${ownerId}_${videoId}`;
-                    }
-                    
-                    console.log(`[VK ADMIN] Downloading video from: ${videoUrl}`);
-                    
-                    // Скачиваем видео
-                    const response = await axios.get(videoUrl, {
-                        responseType: 'arraybuffer',
-                        timeout: 600000,
-                        headers: {
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                        }
-                    });
-                    
-                    // Сохраняем во временный файл
-                    const tempDir = '/tmp/vk_uploads';
-                    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
-                    const tempPath = path.join(tempDir, `${Date.now()}-video.mp4`);
-                    fs.writeFileSync(tempPath, Buffer.from(response.data));
-                    
-                    // Загружаем в группу
-                    const vkApiClient = new VKAPI();
-                    const videoResult = await vkApiClient.uploadVideoToGroup(tempPath, title);
-                    
-                    // Удаляем временный файл
-                    fs.unlinkSync(tempPath);
-                    
-                    console.log(`[VK ADMIN] ✅ Video uploaded to group: ${videoResult.attachment}`);
-                    
-                    // Сохраняем в базу
-                    const fileDataToSave = {
-                        filename: title,
-                        originalname: title,
-                        size: response.data.length || 0,
-                        mimetype: 'video/mp4',
-                        path: videoResult.attachment,
-                        url: null,
-                        token: null,
-                        vk_owner_id: videoResult.owner_id,
-                        vk_video_id: videoResult.video_id,
-                        vk_access_key: videoResult.access_key || '',
-                        vk_attachment: videoResult.attachment,
-                        is_max_uploaded: true,
-                        type: 'video_doc',
-                        platform: 'vk'
-                    };
-                    
-                    // Удаляем старое видео
-                    const existingFiles = await lessonService.getLessonFiles(lessonId);
-                    const oldVideo = existingFiles.find(f => 
-                        (f.type === 'video' || f.type === 'video_doc' || f.type === 'video_link') && 
-                        (f.platform === 'vk' || !f.platform)
-                    );
-                    if (oldVideo) {
-                        await lessonService.deleteLessonFile(oldVideo.id);
-                        console.log(`[VK ADMIN] Old video deleted: ${oldVideo.id}`);
-                    }
-                    
-                    await lessonService.addLessonFile(lessonId, fileDataToSave);
-                    
-                    await vkApi.sendMessage({
-                        chatId,
-                        text: `✅ **Видео загружено в группу!**\n\n📹 ${title}\n📌 Видео НЕ опубликовано на стене\n📌 Теперь доступно всем пользователям в боте`,
-                    });
-                    
-                    await handleAdminEditLessonVk(chatId, lessonId, vkApi);
-                    return;
-                    
-                } catch (error) {
-                    console.error('[VK ADMIN] Video upload error:', error);
-                    await vkApi.sendMessage({
-                        chatId,
-                        text: `❌ Ошибка загрузки видео: ${error.message}\n\nПопробуйте отправить видео как файл (.mp4).`,
-                    });
-                    return;
                 }
             }
+        } catch (videoInfoError) {
+            console.warn('[VK ADMIN] Could not get video info:', videoInfoError.message);
+        }
+        
+        if (!videoUrl) {
+            // Если не удалось получить прямую ссылку, используем ссылку на страницу видео
+            videoUrl = `https://vk.com/video${ownerId}_${videoId}`;
+            console.log(`[VK ADMIN] Using page URL: ${videoUrl}`);
+        } else {
+            console.log(`[VK ADMIN] Found direct video URL: ${videoUrl.substring(0, 100)}...`);
+        }
+        
+        // СКАЧИВАЕМ ВИДЕО
+        console.log(`[VK ADMIN] Downloading video...`);
+        const response = await axios.get(videoUrl, {
+            responseType: 'arraybuffer',
+            timeout: 600000,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            }
+        });
+        
+        // СОХРАНЯЕМ ВО ВРЕМЕННЫЙ ФАЙЛ
+        const tempDir = '/tmp/vk_uploads';
+        if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+        const tempPath = path.join(tempDir, `${Date.now()}-video.mp4`);
+        fs.writeFileSync(tempPath, Buffer.from(response.data));
+        console.log(`[VK ADMIN] Video saved to temp: ${tempPath}`);
+        
+        // ЗАГРУЖАЕМ В ГРУППУ
+        const vkApiClient = new VKAPI();
+        const videoResult = await vkApiClient.uploadVideoToGroup(tempPath, title);
+        
+        // УДАЛЯЕМ ВРЕМЕННЫЙ ФАЙЛ
+        try { fs.unlinkSync(tempPath); } catch (e) {}
+        
+        console.log(`[VK ADMIN] ✅ Video uploaded to group: ${videoResult.attachment}`);
+        
+        // СОХРАНЯЕМ В БАЗУ
+        const fileDataToSave = {
+            filename: title,
+            originalname: title,
+            size: response.data.length || 0,
+            mimetype: 'video/mp4',
+            path: videoResult.attachment,
+            url: null,
+            token: null,
+            vk_owner_id: videoResult.owner_id,
+            vk_video_id: videoResult.video_id,
+            vk_access_key: videoResult.access_key || '',
+            vk_attachment: videoResult.attachment,
+            is_max_uploaded: true,
+            type: 'video_doc',
+            platform: 'vk'
+        };
+        
+        // Удаляем старое видео
+        const existingFiles = await lessonService.getLessonFiles(lessonId);
+        const oldVideo = existingFiles.find(f => 
+            (f.type === 'video' || f.type === 'video_doc' || f.type === 'video_link') && 
+            (f.platform === 'vk' || !f.platform)
+        );
+        if (oldVideo) {
+            await lessonService.deleteLessonFile(oldVideo.id);
+            console.log(`[VK ADMIN] Old video deleted: ${oldVideo.id}`);
+        }
+        
+        await lessonService.addLessonFile(lessonId, fileDataToSave);
+        
+        await vkApi.sendMessage({
+            chatId,
+            text: `✅ **Видео загружено в группу!**\n\n📹 ${title}\n📌 Видео НЕ опубликовано на стене\n📌 Теперь доступно всем пользователям в боте`,
+        });
+        
+        await handleAdminEditLessonVk(chatId, lessonId, vkApi);
+        return;
+        
+    } catch (error) {
+        console.error('[VK ADMIN] Video upload error:', error);
+        await vkApi.sendMessage({
+            chatId,
+            text: `❌ Ошибка загрузки видео: ${error.message}\n\nПопробуйте:\n1. Отправить видео как файл (.mp4)\n2. Использовать меньшее видео\n3. Проверить права бота на загрузку видео`,
+        });
+        return;
+    }
+}
             
             // ============================================================
             // ОБРАБОТКА ДОКУМЕНТОВ (ФАЙЛОВ)
