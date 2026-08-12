@@ -1,3 +1,4 @@
+// server.js - ПОЛНАЯ ИСПРАВЛЕННАЯ ВЕРСИЯ
 require('dotenv').config();
 
 const express = require('express');
@@ -166,9 +167,18 @@ async function connectPostgreSQL() {
         
         await initPostgreSQLTables();
         
-        // ============================================================
-        // ПЕРЕПОДКЛЮЧЕНИЕ ПРИ ОБРЫВЕ
-        // ============================================================
+        // Keep-alive ping каждые 2 минуты
+        setInterval(async () => {
+            if (pgConnected && pgClient) {
+                try {
+                    await pgClient.query('SELECT 1');
+                } catch (error) {
+                    console.warn('[POSTGRES] Keep-alive failed:', error.message);
+                }
+            }
+        }, 120000);
+        
+        // Переподключение при обрыве
         pgClient.on('error', async (err) => {
             console.error('[POSTGRES] Connection error:', err.message);
             pgConnected = false;
@@ -176,34 +186,9 @@ async function connectPostgreSQL() {
             setTimeout(async () => {
                 console.log('[POSTGRES] Attempting to reconnect...');
                 try {
-                    const newClient = new Client({
-                        user: process.env.PG_USER || 'gen_user',
-                        host: process.env.PG_HOST || 'f588fb3b4ee16a08f7a0a9b2.twc1.net',
-                        database: process.env.PG_DATABASE || 'default_db',
-                        password: process.env.PG_PASSWORD,
-                        port: parseInt(process.env.PG_PORT) || 5432,
-                        ssl: { rejectUnauthorized: false },
-                        connectionTimeoutMillis: 30000,
-                        keepAlive: true,
-                    });
-                    
-                    await newClient.connect();
-                    pgClient = newClient;
-                    pgConnected = true;
-                    
-                    if (database && database.setPGClient) {
-                        database.setPGClient(pgClient, pgConnected);
-                    }
-                    if (vkModule && vkModule.setPGClient) {
-                        vkModule.setPGClient(pgClient, pgConnected);
-                    }
-                    
-                    console.log('[POSTGRES] ✅ Reconnected successfully');
+                    await reconnectPostgreSQL();
                 } catch (e) {
                     console.error('[POSTGRES] ❌ Reconnection failed:', e.message);
-                    setTimeout(() => {
-                        pgClient.emit('error', new Error('retry'));
-                    }, 10000);
                 }
             }, 5000);
         });
@@ -215,6 +200,39 @@ async function connectPostgreSQL() {
         pgClient = null;
         console.warn('[POSTGRES] ⚠️ Falling back to JSON storage');
         return null;
+    }
+}
+
+async function reconnectPostgreSQL() {
+    try {
+        const newClient = new Client({
+            user: process.env.PG_USER || 'gen_user',
+            host: process.env.PG_HOST || 'f588fb3b4ee16a08f7a0a9b2.twc1.net',
+            database: process.env.PG_DATABASE || 'default_db',
+            password: process.env.PG_PASSWORD,
+            port: parseInt(process.env.PG_PORT) || 5432,
+            ssl: { rejectUnauthorized: false },
+            connectionTimeoutMillis: 30000,
+            keepAlive: true,
+        });
+        
+        await newClient.connect();
+        pgClient = newClient;
+        pgConnected = true;
+        
+        if (database && database.setPGClient) {
+            database.setPGClient(pgClient, pgConnected);
+        }
+        if (vkModule && vkModule.setPGClient) {
+            vkModule.setPGClient(pgClient, pgConnected);
+        }
+        
+        console.log('[POSTGRES] ✅ Reconnected successfully');
+        return pgClient;
+    } catch (error) {
+        console.error('[POSTGRES] ❌ Reconnection error:', error.message);
+        pgConnected = false;
+        throw error;
     }
 }
 
@@ -447,202 +465,6 @@ try {
 }
 
 // ============================================================
-// АВТОМАТИЧЕСКОЕ СОЗДАНИЕ АДМИНА
-// ============================================================
-
-async function ensureAdmin() {
-    try {
-        let admins = [];
-        
-        if (pgConnected && pgClient) {
-            const result = await pgClient.query('SELECT * FROM admins');
-            admins = result.rows || [];
-        } else {
-            admins = database.readTable('admins') || [];
-        }
-        
-        if (admins.length === 0) {
-            console.log('[STARTUP] No admin found, creating default admin...');
-            const login = config.admin.defaultLogin || 'admin';
-            const password = config.admin.defaultPassword || 'admin123';
-            const passwordHash = await bcrypt.hash(password, 12);
-            
-            if (pgConnected && pgClient) {
-                await pgClient.query(
-                    'INSERT INTO admins (id, login, password_hash, role) VALUES ($1, $2, $3, $4)',
-                    [database.generateId(), login, passwordHash, 'superadmin']
-                );
-            } else {
-                const adminsList = database.readTable('admins') || [];
-                adminsList.push({
-                    id: database.generateId(),
-                    login: login,
-                    password_hash: passwordHash,
-                    role: 'superadmin',
-                    platform_user_id: null,
-                    created_at: database.now(),
-                });
-                database.writeTable('admins', adminsList);
-            }
-            
-            console.log(`[STARTUP] ✅ Admin created: ${login} / ${password}`);
-        } else {
-            console.log(`[STARTUP] Admin(s) already exist (${admins.length})`);
-        }
-    } catch (error) {
-        console.error('[STARTUP] Error creating admin:', error.message);
-    }
-}
-
-// ============================================================
-// НАСТРОЙКА MULTER
-// ============================================================
-
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        let subDir = 'files';
-        if (file.mimetype && file.mimetype.startsWith('video/')) {
-            subDir = 'videos';
-        } else if (file.mimetype && file.mimetype.startsWith('image/')) {
-            subDir = 'images';
-        }
-        const dir = path.join(UPLOADS_DIR, subDir);
-        cb(null, dir);
-    },
-    filename: (req, file, cb) => {
-        const timestamp = Date.now();
-        const random = Math.round(Math.random() * 1E9);
-        const ext = path.extname(file.originalname);
-        const name = path.basename(file.originalname, ext);
-        const cleanName = name.replace(/[^a-zA-Zа-яА-Я0-9]/g, '_');
-        cb(null, `${cleanName}-${timestamp}-${random}${ext}`);
-    }
-});
-
-const upload = multer({
-    storage: storage,
-    limits: { fileSize: 250 * 1024 * 1024 },
-    fileFilter: (req, file, cb) => {
-        const allowedTypes = [
-            'video/mp4', 'video/webm', 'video/quicktime', 'video/x-msvideo',
-            'application/pdf', 'application/msword',
-            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            'application/vnd.ms-excel',
-            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'application/zip', 'application/x-zip-compressed',
-            'image/jpeg', 'image/png', 'image/gif', 'image/webp',
-            'text/plain', 'text/markdown',
-        ];
-        if (allowedTypes.includes(file.mimetype)) {
-            cb(null, true);
-        } else {
-            cb(new Error(`Неподдерживаемый тип файла: ${file.mimetype}`));
-        }
-    }
-});
-
-// ============================================================
-// СОЗДАНИЕ EXPRESS APP
-// ============================================================
-
-const app = express();
-
-try {
-    app.set('view engine', 'ejs');
-    const viewsPath = path.join(__dirname, 'admin', 'views');
-    if (fs.existsSync(viewsPath)) {
-        app.set('views', viewsPath);
-        console.log('[STARTUP] Views configured');
-    }
-} catch (error) {
-    console.error('[STARTUP] Views error:', error.message);
-}
-
-try {
-    app.use(helmet({
-        contentSecurityPolicy: false,
-        crossOriginEmbedderPolicy: false
-    }));
-    app.use(cors());
-    app.use(express.json({ limit: '50mb' }));
-    app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-    console.log('[STARTUP] Middleware configured');
-} catch (error) {
-    console.error('[STARTUP] Middleware error:', error.message);
-    process.exit(1);
-}
-
-// ============================================================
-// НАСТРОЙКА СЕССИЙ
-// ============================================================
-
-try {
-    let sessionStore;
-    
-    if (pgConnected && pgClient) {
-        console.log('[STARTUP] Setting up PostgreSQL session store...');
-        const PgSession = require('connect-pg-simple')(session);
-        sessionStore = new PgSession({
-            pool: pgClient,
-            tableName: 'session',
-            createTableIfMissing: false,
-        });
-        console.log('[STARTUP] PostgreSQL session store configured');
-    } else {
-        console.warn('[STARTUP] ⚠️ Using MemoryStore for sessions (not for production)');
-        sessionStore = new session.MemoryStore();
-    }
-
-    const sessionConfig = {
-        secret: config.session.secret || 'default-secret-change-me',
-        resave: false,
-        saveUninitialized: false,
-        store: sessionStore,
-        cookie: {
-            maxAge: config.session.maxAge || 86400000,
-            secure: process.env.NODE_ENV === 'production',
-            httpOnly: true,
-            sameSite: 'lax',
-        },
-    };
-    
-    app.use(session(sessionConfig));
-    console.log('[STARTUP] Sessions configured successfully');
-} catch (error) {
-    console.error('[STARTUP] Sessions error:', error.message);
-    try {
-        const sessionConfig = {
-            secret: config.session.secret || 'default-secret-change-me',
-            resave: false,
-            saveUninitialized: false,
-            cookie: {
-                maxAge: config.session.maxAge || 86400000,
-                secure: process.env.NODE_ENV === 'production',
-                httpOnly: true,
-                sameSite: 'lax',
-            },
-        };
-        app.use(session(sessionConfig));
-        console.warn('[STARTUP] Using MemoryStore for sessions (fallback)');
-    } catch (fallbackError) {
-        console.error('[STARTUP] Sessions fallback error:', fallbackError.message);
-        process.exit(1);
-    }
-}
-
-try {
-    const publicPath = path.join(__dirname, 'public');
-    if (!fs.existsSync(publicPath)) {
-        fs.mkdirSync(publicPath, { recursive: true });
-    }
-    app.use('/static', express.static(publicPath));
-    app.use('/uploads', express.static(UPLOADS_DIR));
-    console.log(`[STARTUP] Static: /uploads -> ${UPLOADS_DIR}`);
-} catch (error) {
-    console.warn('[STARTUP] Static files warning:', error.message);
-}
-
-// ============================================================
 // ПОДКЛЮЧЕНИЕ СЕРВИСОВ
 // ============================================================
 
@@ -708,7 +530,7 @@ async function checkUserHasPaidAccess(userId) {
 }
 
 // ============================================================
-// ОБРАБОТЧИКИ СОБЫТИЙ MAX - ВОССТАНОВЛЕНЫ
+// ОБРАБОТЧИКИ СОБЫТИЙ MAX
 // ============================================================
 
 async function handleBotStarted(update) {
@@ -886,7 +708,7 @@ async function handleMessageCallback(update) {
 }
 
 // ============================================================
-// ОБЩИЕ КОМАНДЫ ДЛЯ MAX - ВОССТАНОВЛЕНЫ
+// ОБЩИЕ КОМАНДЫ ДЛЯ MAX
 // ============================================================
 
 async function handleStartCommandMax(chatId, userId, text, api) {
@@ -940,6 +762,19 @@ async function handleTextMessageMax(chatId, userId, text, api) {
         chatId: chatId,
         text: `📝 Я получил ваше сообщение.\n\nЧто хотите сделать дальше?`,
         buttons: buttons,
+        parseMode: 'markdown',
+    });
+}
+
+async function showHelpMax(chatId, api) {
+    await api.sendMessage({
+        chatId: chatId,
+        text: `📚 **Помощь**\n\n` +
+            `/start - Главное меню\n` +
+            `/help - Помощь\n` +
+            `/courses - Уроки\n` +
+            `/admin - Админ-панель\n\n` +
+            `Просто напиши сообщение, и я помогу!`,
         parseMode: 'markdown',
     });
 }
@@ -1336,21 +1171,8 @@ async function handlePaymentCheckMax(chatId, paymentId, api) {
     }
 }
 
-async function showHelpMax(chatId, api) {
-    await api.sendMessage({
-        chatId: chatId,
-        text: `📚 **Помощь**\n\n` +
-            `/start - Главное меню\n` +
-            `/help - Помощь\n` +
-            `/courses - Уроки\n` +
-            `/admin - Админ-панель\n\n` +
-            `Просто напиши сообщение, и я помогу!`,
-        parseMode: 'markdown',
-    });
-}
-
 // ============================================================
-// MAX - АДМИН-ФУНКЦИИ (СОКРАЩЕННЫЕ, ОСТАВЛЕНЫ ОСНОВНЫЕ)
+// MAX - АДМИН-ФУНКЦИИ
 // ============================================================
 
 async function showAdminLoginMax(chatId, api) {
@@ -1509,47 +1331,198 @@ async function showAdminDashboardMax(chatId, api) {
 
 async function handleAdminCallbackMax(chatId, payload, api) {
     console.log(`[ADMIN MAX] Callback: ${payload}`);
-    // Базовая обработка - для полной версии смотрите предыдущий код
-    if (payload === 'admin_logout') {
-        adminSessionsMax.delete(chatId);
-        await api.sendMessage({ chatId: chatId, text: `🚪 Вы вышли из админ-панели MAX.`, parseMode: 'markdown' });
-        return;
-    }
-    if (payload === 'admin_back') {
-        await showAdminDashboardMax(chatId, api);
-        return;
-    }
-    if (payload === 'admin_create_lesson') {
-        const session = adminSessionsMax.get(chatId);
-        session.context = 'creating_lesson';
+    
+    // Проверка сессии
+    const session = adminSessionsMax.get(chatId);
+    if (!session || session.mode !== 'admin') {
+        console.log(`[ADMIN MAX] ❌ No valid session for ${chatId}`);
         await api.sendMessage({
             chatId: chatId,
-            text: `📝 **Создание урока MAX**\n\nВведите название урока:`,
+            text: '⏳ Сессия истекла. Войдите заново через /admin',
             parseMode: 'markdown',
         });
         return;
     }
+    
+    // Выход
+    if (payload === 'admin_logout') {
+        adminSessionsMax.delete(chatId);
+        await api.sendMessage({ chatId: chatId, text: '🚪 Вы вышли из админ-панели MAX.', parseMode: 'markdown' });
+        return;
+    }
+    
+    // Назад
+    if (payload === 'admin_back') {
+        await showAdminDashboardMax(chatId, api);
+        return;
+    }
+    
+    // Создание урока
+    if (payload === 'admin_create_lesson') {
+        session.context = 'creating_lesson';
+        await api.sendMessage({
+            chatId: chatId,
+            text: '📝 **Создание урока MAX**\n\nВведите название урока:',
+            parseMode: 'markdown',
+        });
+        return;
+    }
+    
+    // Список уроков
     if (payload === 'admin_edit_lessons') {
         await handleAdminEditLessonsMax(chatId, api);
         return;
     }
+    
+    // Редактирование конкретного урока
     if (payload.startsWith('admin_edit_lesson_')) {
         const lessonId = payload.replace('admin_edit_lesson_', '');
+        session.lessonId = lessonId;
+        session.context = 'editing_lesson';
         await showAdminLessonDetailMax(chatId, lessonId, api);
         return;
     }
+    
+    // Статистика
     if (payload === 'admin_stats') {
         await showAdminStatsMax(chatId, api);
         return;
     }
+    
+    // ============================================================
+    // ДЕЙСТВИЯ С УРОКОМ
+    // ============================================================
+    
+    // Изменить название
+    if (payload.startsWith('admin_lesson_edit_title_')) {
+        const lessonId = payload.replace('admin_lesson_edit_title_', '');
+        session.lessonId = lessonId;
+        session.context = 'editing_title';
+        await api.sendMessage({
+            chatId: chatId,
+            text: '✏️ **Введите новое название урока:**',
+            parseMode: 'markdown',
+        });
+        return;
+    }
+    
+    // Изменить описание
+    if (payload.startsWith('admin_lesson_edit_desc_')) {
+        const lessonId = payload.replace('admin_lesson_edit_desc_', '');
+        session.lessonId = lessonId;
+        session.context = 'editing_desc';
+        await api.sendMessage({
+            chatId: chatId,
+            text: '✏️ **Введите новое описание урока:**',
+            parseMode: 'markdown',
+        });
+        return;
+    }
+    
+    // Загрузить видео
+    if (payload.startsWith('admin_lesson_video_')) {
+        const lessonId = payload.replace('admin_lesson_video_', '');
+        session.lessonId = lessonId;
+        session.context = 'uploading_video';
+        await api.sendMessage({
+            chatId: chatId,
+            text: '🎬 **Загрузка видео**\n\nОтправьте видео файлом в этот чат.\n\nПоддерживаются: MP4, WebM, MOV\nМаксимальный размер: 250MB',
+            parseMode: 'markdown',
+        });
+        return;
+    }
+    
+    // Загрузить файл
+    if (payload.startsWith('admin_lesson_file_')) {
+        const lessonId = payload.replace('admin_lesson_file_', '');
+        session.lessonId = lessonId;
+        session.context = 'uploading_file';
+        await api.sendMessage({
+            chatId: chatId,
+            text: '📎 **Загрузка файла**\n\nОтправьте файл в этот чат.\n\nПоддерживаются: PDF, DOCX, ZIP, изображения\nМаксимальный размер: 250MB',
+            parseMode: 'markdown',
+        });
+        return;
+    }
+    
+    // Переключить доступ
+    if (payload.startsWith('admin_lesson_toggle_free_')) {
+        const lessonId = payload.replace('admin_lesson_toggle_free_', '');
+        const lesson = await lessonService.getLessonById(lessonId);
+        if (lesson) {
+            await lessonService.updateLesson(lessonId, { isFree: !lesson.is_free });
+            await api.sendMessage({
+                chatId: chatId,
+                text: `🔄 Доступ изменен на: ${!lesson.is_free ? '🆓 Бесплатный' : '💰 Платный'}`,
+                parseMode: 'markdown',
+            });
+            await showAdminLessonDetailMax(chatId, lessonId, api);
+        }
+        return;
+    }
+    
+    // Редактировать тест
+    if (payload.startsWith('admin_lesson_edit_test_')) {
+        const lessonId = payload.replace('admin_lesson_edit_test_', '');
+        session.lessonId = lessonId;
+        session.context = 'editing_test';
+        await api.sendMessage({
+            chatId: chatId,
+            text: '📝 **Редактирование теста**\n\nОтправьте тест в формате:\n\nВопрос: Текст вопроса\n1. Ответ 1 (правильный)\n2. Ответ 2\n3. Ответ 3\n4. Ответ 4',
+            parseMode: 'markdown',
+        });
+        return;
+    }
+    
+    // Удалить урок
+    if (payload.startsWith('admin_lesson_delete_')) {
+        const lessonId = payload.replace('admin_lesson_delete_', '');
+        const lesson = await lessonService.getLessonById(lessonId);
+        if (lesson) {
+            await api.sendKeyboard({
+                chatId: chatId,
+                text: `⚠️ **Удалить урок "${lesson.title}"?**`,
+                buttons: [
+                    [{ type: 'callback', text: '✅ Да', payload: `admin_lesson_delete_confirm_${lessonId}` }],
+                    [{ type: 'callback', text: '❌ Нет', payload: `admin_edit_lesson_${lessonId}` }]
+                ],
+                parseMode: 'markdown',
+            });
+        }
+        return;
+    }
+    
+    // Подтверждение удаления
+    if (payload.startsWith('admin_lesson_delete_confirm_')) {
+        const lessonId = payload.replace('admin_lesson_delete_confirm_', '');
+        const lesson = await lessonService.getLessonById(lessonId);
+        if (lesson) {
+            await lessonService.deleteLesson(lessonId);
+            await api.sendMessage({
+                chatId: chatId,
+                text: `🗑️ Урок "${lesson.title}" удален.`,
+                parseMode: 'markdown',
+            });
+            await handleAdminCallbackMax(chatId, 'admin_edit_lessons', api);
+        }
+        return;
+    }
+    
     await showAdminDashboardMax(chatId, api);
 }
 
 async function handleAdminCommandMax(chatId, text, api) {
     const session = adminSessionsMax.get(chatId);
-    if (!session) return;
+    if (!session || session.mode !== 'admin') {
+        await showAdminLoginMax(chatId, api);
+        return;
+    }
     
-    if (session.context === 'creating_lesson') {
+    const context = session.context || '';
+    const lessonId = session.lessonId;
+    
+    // Создание урока - название
+    if (context === 'creating_lesson') {
         session.lessonTitle = text;
         session.context = 'creating_lesson_description';
         await api.sendMessage({
@@ -1560,7 +1533,8 @@ async function handleAdminCommandMax(chatId, text, api) {
         return;
     }
     
-    if (session.context === 'creating_lesson_description') {
+    // Создание урока - описание
+    if (context === 'creating_lesson_description') {
         const title = session.lessonTitle;
         const description = text;
         const platform = 'max';
@@ -1598,6 +1572,38 @@ async function handleAdminCommandMax(chatId, text, api) {
         });
         
         await showAdminLessonDetailMax(chatId, lesson.id, api);
+        return;
+    }
+    
+    // Изменить название
+    if (context === 'editing_title' && lessonId) {
+        await lessonService.updateLesson(lessonId, { title: text });
+        session.context = 'editing_lesson';
+        await api.sendMessage({
+            chatId: chatId,
+            text: `✅ Название обновлено: "${text}"`,
+            parseMode: 'markdown',
+        });
+        await showAdminLessonDetailMax(chatId, lessonId, api);
+        return;
+    }
+    
+    // Изменить описание
+    if (context === 'editing_desc' && lessonId) {
+        await lessonService.updateLesson(lessonId, { description: text });
+        session.context = 'editing_lesson';
+        await api.sendMessage({
+            chatId: chatId,
+            text: '✅ Описание обновлено.',
+            parseMode: 'markdown',
+        });
+        await showAdminLessonDetailMax(chatId, lessonId, api);
+        return;
+    }
+    
+    // Редактирование теста
+    if (context === 'editing_test' && lessonId) {
+        await handleTestCreationMax(chatId, text, api);
         return;
     }
     
@@ -1653,16 +1659,22 @@ async function showAdminLessonDetailMax(chatId, lessonId, api) {
         return;
     }
     
+    const files = await lessonService.getLessonFiles(lessonId);
+    const hasVideo = files.some(f => f.type === 'video');
+    const hasFile = files.some(f => f.type === 'file');
+    
     let text = `📝 **Редактирование урока MAX**\n\n`;
     text += `📖 **${lesson.title}**\n\n`;
-    text += `🆓 ${lesson.is_free ? 'Бесплатный' : 'Платный'}\n\n`;
+    text += `🆓 ${lesson.is_free ? 'Бесплатный' : 'Платный'}\n`;
+    text += `🎬 Видео: ${hasVideo ? '✅ Есть' : '❌ Нет'}\n`;
+    text += `📎 Файлы: ${hasFile ? '✅ Есть' : '❌ Нет'}\n\n`;
     
     const buttons = [
         [{ type: 'callback', text: '✏️ Изменить название', payload: `admin_lesson_edit_title_${lessonId}` }],
         [{ type: 'callback', text: '✏️ Изменить описание', payload: `admin_lesson_edit_desc_${lessonId}` }],
-        [{ type: 'callback', text: '🎬 Загрузить видео', payload: `admin_lesson_video_${lessonId}` }],
-        [{ type: 'callback', text: '📎 Загрузить файл', payload: `admin_lesson_file_${lessonId}` }],
-        [{ type: 'callback', text: '🔄 Переключить доступ', payload: `admin_lesson_toggle_free_${lessonId}` }],
+        [{ type: 'callback', text: hasVideo ? '🎬 Заменить видео' : '🎬 Загрузить видео', payload: `admin_lesson_video_${lessonId}` }],
+        [{ type: 'callback', text: hasFile ? '📎 Заменить файл' : '📎 Загрузить файл', payload: `admin_lesson_file_${lessonId}` }],
+        [{ type: 'callback', text: lesson.is_free ? '🔒 Сделать платным' : '🆓 Сделать бесплатным', payload: `admin_lesson_toggle_free_${lessonId}` }],
         [{ type: 'callback', text: '📝 Редактировать тест', payload: `admin_lesson_edit_test_${lessonId}` }],
         [{ type: 'callback', text: '🗑️ Удалить урок', payload: `admin_lesson_delete_${lessonId}` }],
         [{ type: 'callback', text: '⬅️ Назад', payload: 'admin_edit_lessons' }]
@@ -1687,7 +1699,7 @@ async function handleAdminAttachmentMax(chatId, attachments, api) {
     if (!lessonId) {
         await api.sendMessage({
             chatId: chatId,
-            text: '❌ Не найден урок MAX.',
+            text: '❌ Не найден урок MAX. Откройте урок заново.',
             parseMode: 'markdown',
         });
         return;
@@ -1722,6 +1734,83 @@ async function handleAdminAttachmentMax(chatId, attachments, api) {
             await showAdminLessonDetailMax(chatId, lessonId, api);
             return;
         }
+    }
+    
+    await api.sendMessage({
+        chatId: chatId,
+        text: '❌ Не удалось обработать вложение. Отправьте файл как вложение.',
+        parseMode: 'markdown',
+    });
+}
+
+async function handleTestCreationMax(chatId, text, api) {
+    try {
+        const session = adminSessionsMax.get(chatId);
+        if (!session || !session.lessonId) {
+            await api.sendMessage({ chatId: chatId, text: '❌ Сессия потеряна', parseMode: 'markdown' });
+            return;
+        }
+
+        const lessonId = session.lessonId;
+        const lines = text.split('\n').filter(l => l.trim());
+
+        let question = '';
+        const answers = [];
+
+        for (const line of lines) {
+            if (line.toLowerCase().startsWith('вопрос:')) {
+                question = line.replace(/^вопрос:\s*/i, '').trim();
+            } else if (/^\d+[\.\)]\s*/.test(line)) {
+                const answerText = line.replace(/^\d+[\.\)]\s*/, '').trim();
+                const isCorrect = answerText.toLowerCase().includes('(правильный)') || 
+                                answerText.toLowerCase().includes('(верный)') ||
+                                answerText.endsWith('✅') ||
+                                answerText.endsWith('*');
+                const cleanAnswer = answerText
+                    .replace(/\s*\(правильный\)\s*/i, '')
+                    .replace(/\s*\(верный\)\s*/i, '')
+                    .replace(/\s*✅\s*$/i, '')
+                    .replace(/\s*\*\s*$/i, '')
+                    .trim();
+                if (cleanAnswer) {
+                    answers.push({ text: cleanAnswer, isCorrect });
+                }
+            }
+        }
+
+        if (!question || answers.length < 2) {
+            await api.sendMessage({
+                chatId: chatId,
+                text: '❌ Неверный формат. Нужно: вопрос и минимум 2 варианта ответа.\n\nПример:\nВопрос: Что такое 2+2?\n1. 3\n2. 4 (правильный)\n3. 5\n4. 6',
+                parseMode: 'markdown',
+            });
+            return;
+        }
+
+        const result = await lessonService.createTest(lessonId, {
+            question: question,
+            answers: answers
+        });
+
+        let answerText = result.answers.map((a, i) => {
+            return `${i + 1}. ${a.answer} ${a.is_correct ? '✅' : ''}`;
+        }).join('\n');
+
+        await api.sendMessage({
+            chatId: chatId,
+            text: `✅ **Тест сохранен!**\n\n📝 ${result.question}\n\n📋 Варианты ответов:\n${answerText}`,
+            parseMode: 'markdown',
+        });
+
+        session.context = 'editing_lesson';
+        await showAdminLessonDetailMax(chatId, lessonId, api);
+    } catch (error) {
+        console.error('[TEST] Error:', error);
+        await api.sendMessage({
+            chatId: chatId,
+            text: `❌ Ошибка: ${error.message}`,
+            parseMode: 'markdown',
+        });
     }
 }
 
@@ -2014,6 +2103,155 @@ async function handlePaymentCheckVk(chatId, paymentId, api) {
 }
 
 // ============================================================
+// СОЗДАНИЕ EXPRESS APP
+// ============================================================
+
+const app = express();
+
+try {
+    app.set('view engine', 'ejs');
+    const viewsPath = path.join(__dirname, 'admin', 'views');
+    if (fs.existsSync(viewsPath)) {
+        app.set('views', viewsPath);
+        console.log('[STARTUP] Views configured');
+    }
+} catch (error) {
+    console.error('[STARTUP] Views error:', error.message);
+}
+
+try {
+    app.use(helmet({
+        contentSecurityPolicy: false,
+        crossOriginEmbedderPolicy: false
+    }));
+    app.use(cors());
+    app.use(express.json({ limit: '50mb' }));
+    app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+    console.log('[STARTUP] Middleware configured');
+} catch (error) {
+    console.error('[STARTUP] Middleware error:', error.message);
+    process.exit(1);
+}
+
+// ============================================================
+// НАСТРОЙКА СЕССИЙ - POSTGRESQL
+// ============================================================
+
+let sessionStore;
+
+try {
+    if (pgConnected && pgClient) {
+        console.log('[STARTUP] Setting up PostgreSQL session store...');
+        const PgSession = require('connect-pg-simple')(session);
+        sessionStore = new PgSession({
+            pool: pgClient,
+            tableName: 'session',
+            createTableIfMissing: false,
+        });
+        console.log('[STARTUP] PostgreSQL session store configured');
+    } else {
+        console.warn('[STARTUP] ⚠️ Using MemoryStore for sessions (not for production)');
+        sessionStore = new session.MemoryStore();
+    }
+
+    const sessionConfig = {
+        secret: config.session.secret || 'default-secret-change-me',
+        resave: false,
+        saveUninitialized: false,
+        store: sessionStore,
+        cookie: {
+            maxAge: config.session.maxAge || 86400000,
+            secure: process.env.NODE_ENV === 'production',
+            httpOnly: true,
+            sameSite: 'lax',
+        },
+    };
+    
+    app.use(session(sessionConfig));
+    console.log('[STARTUP] Sessions configured successfully');
+} catch (error) {
+    console.error('[STARTUP] Sessions error:', error.message);
+    try {
+        const sessionConfig = {
+            secret: config.session.secret || 'default-secret-change-me',
+            resave: false,
+            saveUninitialized: false,
+            cookie: {
+                maxAge: config.session.maxAge || 86400000,
+                secure: process.env.NODE_ENV === 'production',
+                httpOnly: true,
+                sameSite: 'lax',
+            },
+        };
+        app.use(session(sessionConfig));
+        console.warn('[STARTUP] Using MemoryStore for sessions (fallback)');
+    } catch (fallbackError) {
+        console.error('[STARTUP] Sessions fallback error:', fallbackError.message);
+        process.exit(1);
+    }
+}
+
+try {
+    const publicPath = path.join(__dirname, 'public');
+    if (!fs.existsSync(publicPath)) {
+        fs.mkdirSync(publicPath, { recursive: true });
+    }
+    app.use('/static', express.static(publicPath));
+    app.use('/uploads', express.static(UPLOADS_DIR));
+    console.log(`[STARTUP] Static: /uploads -> ${UPLOADS_DIR}`);
+} catch (error) {
+    console.warn('[STARTUP] Static files warning:', error.message);
+}
+
+// ============================================================
+// АВТОМАТИЧЕСКОЕ СОЗДАНИЕ АДМИНА
+// ============================================================
+
+async function ensureAdmin() {
+    try {
+        let admins = [];
+        
+        if (pgConnected && pgClient) {
+            const result = await pgClient.query('SELECT * FROM admins');
+            admins = result.rows || [];
+        } else {
+            admins = database.readTable('admins') || [];
+        }
+        
+        if (admins.length === 0) {
+            console.log('[STARTUP] No admin found, creating default admin...');
+            const login = config.admin.defaultLogin || 'admin';
+            const password = config.admin.defaultPassword || 'admin123';
+            const passwordHash = await bcrypt.hash(password, 12);
+            
+            if (pgConnected && pgClient) {
+                await pgClient.query(
+                    'INSERT INTO admins (id, login, password_hash, role) VALUES ($1, $2, $3, $4)',
+                    [database.generateId(), login, passwordHash, 'superadmin']
+                );
+            } else {
+                const adminsList = database.readTable('admins') || [];
+                adminsList.push({
+                    id: database.generateId(),
+                    login: login,
+                    password_hash: passwordHash,
+                    role: 'superadmin',
+                    platform_user_id: null,
+                    created_at: database.now(),
+                });
+                database.writeTable('admins', adminsList);
+            }
+            
+            console.log(`[STARTUP] ✅ Admin created: ${login} / ${password}`);
+        } else {
+            console.log(`[STARTUP] Admin(s) already exist (${admins.length})`);
+        }
+    } catch (error) {
+        console.error('[STARTUP] Error creating admin:', error.message);
+    }
+}
+
+// ============================================================
 // РОУТЫ
 // ============================================================
 
@@ -2044,27 +2282,6 @@ app.get('/health', (req, res) => {
 const adminRoutes = require('./admin/admin');
 app.use('/admin', adminRoutes);
 console.log('[STARTUP] Web Admin panel mounted at /admin');
-
-app.post('/admin/upload', upload.single('file'), async (req, res) => {
-    try {
-        if (!req.file) {
-            return res.status(400).json({ error: 'No file uploaded' });
-        }
-        
-        const fileData = {
-            filename: req.file.filename,
-            originalname: req.file.originalname,
-            size: req.file.size,
-            mimetype: req.file.mimetype,
-            path: req.file.path,
-            url: `/uploads/${path.basename(path.dirname(req.file.path))}/${req.file.filename}`,
-        };
-        
-        res.json({ success: true, file: fileData });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
 
 // ============================================================
 // MAX WEBHOOK
@@ -2180,141 +2397,6 @@ app.post('/webhook/vk', async (req, res) => {
         console.error('[VK WEBHOOK] 💥 Fatal error:', error);
         console.error('[VK WEBHOOK] Stack:', error.stack);
         return res.status(200).send('ok');
-    }
-});
-
-// ============================================================
-// АДМИН РОУТЫ ДЛЯ WEBHOOK
-// ============================================================
-
-app.post('/admin/register-max-webhook', async (req, res) => {
-    try {
-        const maxApi = new MaxAPI();
-        const webhookUrl = `${config.server.publicUrl}/webhook/max`;
-        const result = await maxApi.registerWebhook(webhookUrl, config.max.webhookSecret);
-        res.json({ success: true, result, webhookUrl });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.get('/admin/max-webhook-info', async (req, res) => {
-    try {
-        const maxApi = new MaxAPI();
-        const info = await maxApi.getWebhookInfo();
-        res.json(info);
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.delete('/admin/max-webhook', async (req, res) => {
-    try {
-        const maxApi = new MaxAPI();
-        const url = req.query.url;
-        if (url) {
-            await maxApi.deleteWebhook(url);
-        } else {
-            const info = await maxApi.getWebhookInfo();
-            if (info && info.subscriptions) {
-                for (const sub of info.subscriptions) {
-                    await maxApi.deleteWebhook(sub.url);
-                }
-            }
-        }
-        res.json({ success: true });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.post('/admin/register-vk-webhook', async (req, res) => {
-    try {
-        const webhookUrl = `${config.server.publicUrl}/webhook/vk`;
-        res.json({
-            success: true,
-            message: 'Настройте вебхук в настройках сообщества VK',
-            webhookUrl: webhookUrl,
-            instructions: `
-                1. Перейдите в настройки сообщества
-                2. Выберите "Работа с API"
-                3. В разделе "Callback API" укажите URL: ${webhookUrl}
-                4. Установите секретный ключ: ${config.vk.secret || 'не установлен'}
-                5. Выберите события: "Входящее сообщение", "Нажатие на кнопку"
-                6. Подтвердите сервер
-            `
-        });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.get('/admin/vk-webhook-info', async (req, res) => {
-    try {
-        const webhookUrl = `${config.server.publicUrl}/webhook/vk`;
-        res.json({
-            webhookUrl: webhookUrl,
-            groupId: config.vk.groupId,
-            apiVersion: config.vk.apiVersion,
-            hasToken: !!config.vk.groupToken,
-            hasSecret: !!config.vk.secret,
-            hasConfirmationToken: !!config.vk.confirmationToken,
-        });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.get('/admin/logs', (req, res) => {
-    try {
-        const logDir = LOG_DIR;
-        if (fs.existsSync(logDir)) {
-            const files = fs.readdirSync(logDir);
-            let logs = {};
-            for (const file of files) {
-                if (file.endsWith('.log')) {
-                    const content = fs.readFileSync(path.join(logDir, file), 'utf-8');
-                    logs[file] = content.split('\n').slice(-50).join('\n');
-                }
-            }
-            res.json(logs);
-        } else {
-            res.json({ error: 'Log directory not found' });
-        }
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.get('/admin/db-status', async (req, res) => {
-    try {
-        let pgStatus = false;
-        let tables = [];
-        
-        if (pgConnected && pgClient) {
-            const result = await pgClient.query(`
-                SELECT table_name 
-                FROM information_schema.tables 
-                WHERE table_schema = 'public'
-                ORDER BY table_name
-            `);
-            tables = result.rows.map(r => r.table_name);
-            pgStatus = true;
-        }
-        
-        res.json({
-            postgresql: {
-                connected: pgStatus,
-                tables: tables,
-            },
-            json_storage: {
-                available: true,
-                data_dir: DATA_DIR,
-            },
-            uploads_dir: UPLOADS_DIR,
-        });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
     }
 });
 
