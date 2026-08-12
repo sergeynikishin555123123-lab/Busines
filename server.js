@@ -164,26 +164,42 @@ async function connectPostgreSQL() {
         
         await initPostgreSQLTables();
         
-        // ============================================================
-        // ✅ ВСТАВЬТЕ ЭТОТ КОД ЗДЕСЬ (ПЕРЕД return pgClient)
-        // ============================================================
-        // Автоматическое переподключение при обрыве
-        pgClient.on('error', async (err) => {
-            console.error('[POSTGRES] Connection error:', err.message);
-            pgConnected = false;
+      // НАЙДИТЕ в server.js этот блок (внутри start())
+pgClient.on('error', async (err) => {
+    console.error('[POSTGRES] Connection error:', err.message);
+    pgConnected = false;
+    
+    setTimeout(async () => {
+        console.log('[POSTGRES] Attempting to reconnect...');
+        try {
+            // ✅ СОЗДАЕМ НОВОГО КЛИЕНТА, а не переиспользуем старого
+            const newClient = new Client({
+                user: process.env.PG_USER || 'gen_user',
+                host: process.env.PG_HOST || 'f588fb3b4ee16a08f7a0a9b2.twc1.net',
+                database: process.env.PG_DATABASE || 'default_db',
+                password: process.env.PG_PASSWORD,
+                port: parseInt(process.env.PG_PORT) || 5432,
+                ssl: { rejectUnauthorized: false },
+            });
             
-            // Пытаемся переподключиться через 5 секунд
-            setTimeout(async () => {
-                console.log('[POSTGRES] Attempting to reconnect...');
-                try {
-                    await pgClient.connect();
-                    pgConnected = true;
-                    console.log('[POSTGRES] ✅ Reconnected successfully');
-                } catch (e) {
-                    console.error('[POSTGRES] ❌ Reconnection failed:', e.message);
-                }
-            }, 5000);
-        });
+            await newClient.connect();
+            pgClient = newClient;
+            pgConnected = true;
+            
+            // Обновляем клиент в database и vk модулях
+            database.setPGClient(pgClient, pgConnected);
+            vkModule.setPGClient(pgClient, pgConnected);
+            
+            console.log('[POSTGRES] ✅ Reconnected successfully');
+        } catch (e) {
+            console.error('[POSTGRES] ❌ Reconnection failed:', e.message);
+            // Пробуем снова через 10 секунд
+            setTimeout(() => {
+                pgClient.emit('error', new Error('retry'));
+            }, 10000);
+        }
+    }, 5000);
+});
         // ============================================================
         
         return pgClient;
