@@ -1,6 +1,6 @@
 // ============================================================
 // platforms/vk.js - ПОЛНАЯ ИСПРАВЛЕННАЯ ВЕРСИЯ
-// С ПРАВИЛЬНОЙ ЗАГРУЗКОЙ ВИДЕО КАК СКРЫТЫХ ДОКУМЕНТОВ
+// ЗАГРУЗКА ВИДЕО В ГРУППУ ЧЕРЕЗ video.save (РАБОТАЕТ С ГРУППОВЫМ ТОКЕНОМ!)
 // ============================================================
 
 const crypto = require('crypto');
@@ -173,12 +173,12 @@ class VKAPI {
     }
 
     // ============================================================
-    // ЗАГРУЗКА ВИДЕО КАК СКРЫТОГО ДОКУМЕНТА (ИСПРАВЛЕННАЯ ВЕРСИЯ!)
+    // ЗАГРУЗКА ВИДЕО В ГРУППУ (РАБОТАЕТ С ГРУППОВЫМ ТОКЕНОМ!)
     // ============================================================
 
-    async uploadVideoAsDoc(filePath, lessonTitle) {
+    async uploadVideoToGroup(filePath, lessonTitle) {
         try {
-            console.log(`[VK] Uploading video as hidden doc: ${filePath}`);
+            console.log(`[VK] Uploading video to group: ${filePath}`);
             
             if (!fs.existsSync(filePath)) {
                 throw new Error(`File not found: ${filePath}`);
@@ -193,59 +193,35 @@ class VKAPI {
             }
 
             // ============================================================
-            // ШАГ 1: Получаем сервер для загрузки ДОКУМЕНТА
-            // ВАЖНО: type должен быть 'doc' (не 'video_file'!)
+            // ШАГ 1: Получаем сервер для загрузки видео в ГРУППУ
+            // group_id - указываем группу, wallpost: 0 - НЕ публикуем на стене
             // ============================================================
-            console.log('[VK] Getting upload server for document...');
-            
-            let uploadResponse;
-            let uploadUrl;
-            let useMessagesUpload = false;
-            
-            try {
-                // Пробуем через messages (скрытый способ)
-                uploadResponse = await this.client.post('/docs.getMessagesUploadServer', null, {
-                    params: {
-                        group_id: this.groupId,
-                        access_token: this.token,
-                        v: this.apiVersion,
-                        type: 'doc', // ВАЖНО: 'doc', а не 'video_file'!
-                    }
-                });
-                
-                if (uploadResponse.data && uploadResponse.data.response) {
-                    uploadUrl = uploadResponse.data.response.upload_url;
-                    useMessagesUpload = true;
-                    console.log('[VK] Using docs.getMessagesUploadServer');
+            console.log('[VK] Getting upload server for group video...');
+            const uploadResponse = await this.client.post('/video.save', null, {
+                params: {
+                    group_id: this.groupId,
+                    access_token: this.token,
+                    v: this.apiVersion,
+                    wallpost: 0,
+                    is_private: 1,
+                    privacy_view: 'only_me',
+                    name: lessonTitle || 'Урок',
+                    description: 'Видео к уроку в обучающем боте',
                 }
-            } catch (msgError) {
-                console.log('[VK] docs.getMessagesUploadServer failed, trying docs.getUploadServer...');
+            });
+            
+            if (uploadResponse.data && uploadResponse.data.error) {
+                console.error('[VK] Upload error:', uploadResponse.data.error);
+                throw new Error(`VK API Error: ${uploadResponse.data.error.error_msg}`);
             }
             
-            // Если первый способ не сработал, пробуем docs.getUploadServer
-            if (!uploadUrl) {
-                uploadResponse = await this.client.post('/docs.getUploadServer', null, {
-                    params: {
-                        group_id: this.groupId,
-                        access_token: this.token,
-                        v: this.apiVersion,
-                        type: 'doc', // ВАЖНО: 'doc', а не 'video_file'!
-                    }
-                });
-                
-                if (uploadResponse.data && uploadResponse.data.error) {
-                    throw new Error(`VK API Error: ${uploadResponse.data.error.error_msg}`);
-                }
-                
-                const uploadData = uploadResponse.data.response;
-                if (!uploadData || !uploadData.upload_url) {
-                    throw new Error('No upload URL received from VK');
-                }
-                
-                uploadUrl = uploadData.upload_url;
-                console.log('[VK] Using docs.getUploadServer');
+            const uploadData = uploadResponse.data.response;
+            if (!uploadData) {
+                console.error('[VK] Upload response:', JSON.stringify(uploadResponse.data, null, 2));
+                throw new Error('No upload data received from VK');
             }
             
+            const uploadUrl = uploadData.upload_url;
             console.log('[VK] Upload URL received');
             
             // ============================================================
@@ -253,7 +229,7 @@ class VKAPI {
             // ============================================================
             console.log('[VK] Uploading video file...');
             const formData = new FormData();
-            formData.append('file', fs.createReadStream(filePath));
+            formData.append('video_file', fs.createReadStream(filePath));
             
             const uploadResult = await axios.post(uploadUrl, formData, {
                 headers: {
@@ -267,22 +243,25 @@ class VKAPI {
             console.log('[VK] Upload response received');
             const data = uploadResult.data;
             
-            if (!data.file) {
-                console.error('[VK] Upload response missing file:', data);
-                throw new Error('No file in upload response');
+            if (!data.video_file) {
+                console.error('[VK] Upload response missing video_file:', data);
+                throw new Error('No video_file in upload response');
             }
             
             // ============================================================
-            // ШАГ 3: Сохраняем документ
+            // ШАГ 3: Сохраняем видео в группе
             // ============================================================
-            console.log('[VK] Saving document...');
-            const saveResponse = await this.client.post('/docs.save', null, {
+            console.log('[VK] Saving video to group...');
+            const saveResponse = await this.client.post('/video.save', null, {
                 params: {
-                    file: data.file,
+                    group_id: this.groupId,
+                    video_file: data.video_file,
+                    name: lessonTitle || 'Урок',
+                    wallpost: 0,
+                    is_private: 1,
+                    privacy_view: 'only_me',
                     access_token: this.token,
                     v: this.apiVersion,
-                    title: lessonTitle || 'Видео урок',
-                    tags: 'video,lesson',
                 }
             });
             
@@ -291,37 +270,29 @@ class VKAPI {
                 throw new Error(`VK API Error: ${saveResponse.data.error.error_msg}`);
             }
             
-            const doc = saveResponse.data.response;
-            if (!doc) {
-                console.error('[VK] Save response missing doc:', JSON.stringify(saveResponse.data, null, 2));
-                throw new Error('No document in save response');
+            const video = saveResponse.data.response;
+            if (!video) {
+                console.error('[VK] Save response missing video:', JSON.stringify(saveResponse.data, null, 2));
+                throw new Error('No video in save response');
             }
             
-            // Получаем ID документа для вложения
-            const docId = doc.id;
-            const ownerId = doc.owner_id;
-            const accessKey = doc.access_key || '';
+            // Формируем строку для вложения
+            const attachmentString = `video${video.owner_id}_${video.video_id}`;
             
-            // Формируем строку для attachment
-            const attachmentString = `doc${ownerId}_${docId}`;
-            
-            console.log(`[VK] ✅ Document saved: ${attachmentString}`);
-            console.log(`[VK] ✅ Document title: ${doc.title}`);
-            console.log(`[VK] ✅ Document URL: ${doc.url}`);
+            console.log(`[VK] ✅ Video saved: ${attachmentString}`);
+            console.log(`[VK] ✅ Video is private (not published to wall)`);
             
             return {
-                owner_id: ownerId,
-                doc_id: docId,
-                access_key: accessKey,
+                owner_id: video.owner_id,
+                video_id: video.video_id,
+                access_key: video.access_key || '',
                 attachment: attachmentString,
-                url: doc.url,
-                title: doc.title,
-                ext: doc.ext,
-                size: doc.size,
+                title: video.title || lessonTitle,
+                duration: video.duration || 0,
             };
             
         } catch (error) {
-            console.error('[VK] uploadVideoAsDoc error:', error.message);
+            console.error('[VK] uploadVideoToGroup error:', error.message);
             if (error.response) {
                 console.error('[VK] Response status:', error.response.status);
                 console.error('[VK] Response data:', JSON.stringify(error.response.data, null, 2));
@@ -929,7 +900,7 @@ async function handleAdminCommand(chatId, text, vkApi) {
     if (context === 'uploading_video') {
         await vkApi.sendMessage({
             chatId,
-            text: '📎 Отправьте видео как вложение (файл).\n\nНажмите "📎" (прикрепить), выберите "Файл" и выберите видео.\n\n📌 Видео будет загружено как скрытый документ.',
+            text: '📎 Отправьте видео как вложение (файл).\n\nНажмите "📎" (прикрепить), выберите "Файл" и выберите видео.\n\n📌 Видео будет загружено в группу.\n📌 НЕ будет опубликовано на стене.',
         });
         return;
     }
@@ -1098,9 +1069,9 @@ async function handleAdminCallback(chatId, payload, vkApi) {
                   '   • Нажмите "📎" (прикрепить)\n' +
                   '   • Выберите "Файл"\n' +
                   '   • Выберите видеофайл (.mp4, .mov)\n\n' +
-                  '📌 Видео будет загружено как **скрытый документ**\n' +
-                  '📌 Не будет доступно в общем поиске\n' +
-                  '📌 Доступно только по ссылке из бота',
+                  '📌 Видео будет загружено в **группу**\n' +
+                  '📌 НЕ будет опубликовано на стене\n' +
+                  '📌 Доступно только в боте (встроенный плеер)',
         });
         return;
     }
@@ -1233,22 +1204,24 @@ async function handleAdminEditLessonVk(chatId, lessonId, vkApi) {
         session.context = 'editing_lesson';
         
         const files = await lessonService.getLessonFiles(lessonId);
-        const hasVideoDoc = files.find(f => f.type === 'video_doc' && (f.platform === 'vk' || !f.platform));
-        const hasVideo = files.find(f => (f.type === 'video' || f.type === 'video_link') && (f.platform === 'vk' || !f.platform));
+        const hasVideo = files.find(f => 
+            (f.type === 'video' || f.type === 'video_doc' || f.type === 'video_link') && 
+            (f.platform === 'vk' || !f.platform)
+        );
         const hasFile = files.find(f => f.type === 'file' && (f.platform === 'vk' || !f.platform));
         
         let text = `📝 **Редактирование урока VK**\n\n`;
         text += `📖 **${lesson.title}**\n\n`;
         text += `📝 Описание: ${lesson.description || 'Нет'}\n`;
         text += `🆓 ${lesson.is_free ? 'Бесплатный' : 'Платный'}\n`;
-        text += `🎬 Видео: ${hasVideoDoc ? '✅ Скрытый документ' : hasVideo ? '✅ Ссылка' : '❌ Нет'}\n`;
+        text += `🎬 Видео: ${hasVideo ? '✅ Есть' : '❌ Нет'}\n`;
         text += `📎 Файл: ${hasFile ? '✅ Есть' : '❌ Нет'}\n\n`;
         text += `Выберите действие:`;
         
         const buttons = [
             [{ text: '✏️ Изменить название', payload: `admin_lesson_edit_title_${lessonId}` }],
             [{ text: '✏️ Изменить описание', payload: `admin_lesson_edit_desc_${lessonId}` }],
-            [{ text: hasVideoDoc ? '🎬 Заменить видео' : '🎬 Добавить видео', payload: `admin_lesson_video_${lessonId}` }],
+            [{ text: hasVideo ? '🎬 Заменить видео' : '🎬 Добавить видео', payload: `admin_lesson_video_${lessonId}` }],
             [{ text: hasFile ? '📎 Заменить файл' : '📎 Добавить файл', payload: `admin_lesson_file_${lessonId}` }],
             [{ text: lesson.is_free ? '🔒 Сделать платным' : '🆓 Сделать бесплатным', payload: `admin_lesson_toggle_free_${lessonId}` }],
             [{ text: '📝 Редактировать тест', payload: `admin_lesson_edit_test_${lessonId}` }],
@@ -1267,7 +1240,7 @@ async function handleAdminEditLessonVk(chatId, lessonId, vkApi) {
 }
 
 // ============================================================
-// ОБРАБОТКА ВЛОЖЕНИЙ - ЗАГРУЗКА КАК СКРЫТОГО ДОКУМЕНТА
+// ОБРАБОТКА ВЛОЖЕНИЙ - ЗАГРУЗКА ВИДЕО В ГРУППУ
 // ============================================================
 
 async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
@@ -1299,7 +1272,7 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
             const type = attachment.type;
             
             // ============================================================
-            // ОБРАБОТКА ВИДЕО - ЗАГРУЗКА КАК СКРЫТЫЙ ДОКУМЕНТ
+            // ОБРАБОТКА ВИДЕО - ЗАГРУЗКА В ГРУППУ (РАБОТАЕТ!)
             // ============================================================
             if (type === 'video' && attachment.video) {
                 const video = attachment.video;
@@ -1312,10 +1285,10 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
                 try {
                     await vkApi.sendMessage({
                         chatId,
-                        text: `⏳ **Обработка видео...**\n\nВидео загружается как скрытый документ.\nЭто может занять несколько минут.`,
+                        text: `⏳ **Загрузка видео в группу...**\n\nЭто может занять несколько минут.\n📌 Видео НЕ будет опубликовано на стене.\n📌 Будет доступно только в боте.`,
                     });
                     
-                    // Получаем ссылку на видео через VK API
+                    // Получаем ссылку на видео
                     let videoUrl = null;
                     try {
                         const videoInfoResponse = await vkApi.client.post('/video.get', null, {
@@ -1347,10 +1320,9 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
                         videoUrl = `https://vk.com/video${ownerId}_${videoId}`;
                     }
                     
-                    console.log(`[VK ADMIN] Video URL: ${videoUrl}`);
+                    console.log(`[VK ADMIN] Downloading video from: ${videoUrl}`);
                     
                     // Скачиваем видео
-                    console.log('[VK ADMIN] Downloading video...');
                     const response = await axios.get(videoUrl, {
                         responseType: 'arraybuffer',
                         timeout: 600000,
@@ -1365,32 +1337,34 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
                     const tempPath = path.join(tempDir, `${Date.now()}-video.mp4`);
                     fs.writeFileSync(tempPath, Buffer.from(response.data));
                     
-                    // Загружаем как скрытый документ
+                    // Загружаем в группу
                     const vkApiClient = new VKAPI();
-                    const docResult = await vkApiClient.uploadVideoAsDoc(tempPath, title);
+                    const videoResult = await vkApiClient.uploadVideoToGroup(tempPath, title);
                     
                     // Удаляем временный файл
                     fs.unlinkSync(tempPath);
                     
-                    console.log(`[VK ADMIN] ✅ Video uploaded as doc: ${docResult.attachment}`);
+                    console.log(`[VK ADMIN] ✅ Video uploaded to group: ${videoResult.attachment}`);
                     
+                    // Сохраняем в базу
                     const fileDataToSave = {
                         filename: title,
                         originalname: title,
-                        size: docResult.size || 0,
+                        size: response.data.length || 0,
                         mimetype: 'video/mp4',
-                        path: docResult.attachment,
-                        url: docResult.url,
+                        path: videoResult.attachment,
+                        url: null,
                         token: null,
-                        vk_doc_owner_id: docResult.owner_id,
-                        vk_doc_id: docResult.doc_id,
-                        vk_access_key: docResult.access_key,
-                        vk_attachment: docResult.attachment,
+                        vk_owner_id: videoResult.owner_id,
+                        vk_video_id: videoResult.video_id,
+                        vk_access_key: videoResult.access_key || '',
+                        vk_attachment: videoResult.attachment,
                         is_max_uploaded: true,
                         type: 'video_doc',
                         platform: 'vk'
                     };
                     
+                    // Удаляем старое видео
                     const existingFiles = await lessonService.getLessonFiles(lessonId);
                     const oldVideo = existingFiles.find(f => 
                         (f.type === 'video' || f.type === 'video_doc' || f.type === 'video_link') && 
@@ -1405,7 +1379,7 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
                     
                     await vkApi.sendMessage({
                         chatId,
-                        text: `✅ **Видео загружено как скрытый документ!**\n\n📹 ${title}\n📌 Видео защищено и не доступно в общем поиске\n📌 Доступно только по ссылке из бота`,
+                        text: `✅ **Видео загружено в группу!**\n\n📹 ${title}\n📌 Видео НЕ опубликовано на стене\n📌 Теперь доступно всем пользователям в боте`,
                     });
                     
                     await handleAdminEditLessonVk(chatId, lessonId, vkApi);
@@ -1435,13 +1409,13 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
                 console.log(`[VK ADMIN] Doc URL: ${docUrl}`);
                 
                 // ============================================================
-                // ЕСЛИ ЭТО ВИДЕОФАЙЛ - ЗАГРУЖАЕМ КАК СКРЫТЫЙ ДОКУМЕНТ
+                // ЕСЛИ ЭТО ВИДЕОФАЙЛ - ЗАГРУЖАЕМ В ГРУППУ
                 // ============================================================
                 if (isVideo && docUrl) {
                     try {
                         await vkApi.sendMessage({
                             chatId,
-                            text: `⏳ **Загрузка видео как скрытого документа...**\n\nЭто может занять несколько минут.\n📌 Видео будет скрыто от общего поиска.`,
+                            text: `⏳ **Загрузка видео в группу...**\n\nЭто может занять несколько минут.\n📌 Видео НЕ будет опубликовано на стене.`,
                         });
                         
                         // Скачиваем видео
@@ -1449,9 +1423,6 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
                         const response = await axios.get(docUrl, {
                             responseType: 'arraybuffer',
                             timeout: 600000,
-                            headers: {
-                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                            }
                         });
                         
                         const tempDir = '/tmp/vk_uploads';
@@ -1459,24 +1430,24 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
                         const tempPath = path.join(tempDir, `${Date.now()}-${fileName}`);
                         fs.writeFileSync(tempPath, Buffer.from(response.data));
                         
-                        // Загружаем как скрытый документ
+                        // Загружаем в группу
                         const vkApiClient = new VKAPI();
-                        const docResult = await vkApiClient.uploadVideoAsDoc(tempPath, fileName);
+                        const videoResult = await vkApiClient.uploadVideoToGroup(tempPath, fileName);
                         
                         fs.unlinkSync(tempPath);
                         
                         const fileDataToSave = {
                             filename: fileName,
                             originalname: fileName,
-                            size: docResult.size || 0,
+                            size: response.data.length || 0,
                             mimetype: 'video/mp4',
-                            path: docResult.attachment,
-                            url: docResult.url,
+                            path: videoResult.attachment,
+                            url: null,
                             token: null,
-                            vk_doc_owner_id: docResult.owner_id,
-                            vk_doc_id: docResult.doc_id,
-                            vk_access_key: docResult.access_key,
-                            vk_attachment: docResult.attachment,
+                            vk_owner_id: videoResult.owner_id,
+                            vk_video_id: videoResult.video_id,
+                            vk_access_key: videoResult.access_key || '',
+                            vk_attachment: videoResult.attachment,
                             is_max_uploaded: true,
                             type: 'video_doc',
                             platform: 'vk'
@@ -1496,7 +1467,7 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
                         
                         await vkApi.sendMessage({
                             chatId,
-                            text: `✅ **Видео загружено как скрытый документ!**\n\n📹 ${fileName}\n📌 Видео защищено и не доступно в общем поиске\n📌 Доступно только по ссылке из бота`,
+                            text: `✅ **Видео загружено в группу!**\n\n📹 ${fileName}\n📌 Видео НЕ опубликовано на стене\n📌 Теперь доступно всем пользователям в боте`,
                         });
                         
                         await handleAdminEditLessonVk(chatId, lessonId, vkApi);
@@ -1549,7 +1520,7 @@ async function handleAdminAttachmentVk(chatId, attachments, vkApi) {
         
         await vkApi.sendMessage({
             chatId,
-            text: '❌ Не удалось обработать вложение.\n\n📌 Для загрузки видео отправьте его как файл (.mp4, .mov).',
+            text: '❌ Не удалось обработать вложение.\n\n📌 Для загрузки видео отправьте его как файл (.mp4, .mov) или как видео из сообщения.',
         });
     } catch (error) {
         console.error('[VK ADMIN] Error handling attachment:', error);
@@ -1674,7 +1645,7 @@ async function handleTestCreation(chatId, text, vkApi) {
 }
 
 // ============================================================
-// ОТПРАВКА УРОКА ПОЛЬЗОВАТЕЛЮ - ВИДЕО КАК СКРЫТЫЙ ДОКУМЕНТ
+// ОТПРАВКА УРОКА ПОЛЬЗОВАТЕЛЮ - ВИДЕО КАК ВСТРОЕННЫЙ ПЛЕЕР
 // ============================================================
 
 async function sendLessonToUserVk(chatId, lessonId, vkApi) {
@@ -1708,19 +1679,13 @@ async function sendLessonToUserVk(chatId, lessonId, vkApi) {
         const files = await lessonService.getLessonFiles(lessonId);
         
         // Ищем видео (по типу video_doc)
-        const videoDocFile = files.find(f => 
+        const videoFile = files.find(f => 
             f.type === 'video_doc' && 
             (f.platform === 'vk' || !f.platform)
         );
         
-        // Ищем ссылку на видео (если нет video_doc)
-        const videoLinkFile = files.find(f => 
-            (f.type === 'video' || f.type === 'video_link') && 
-            (f.platform === 'vk' || !f.platform)
-        );
-        
         const otherFiles = files.filter(f => 
-            f.type !== 'video_doc' && f.type !== 'video' && f.type !== 'video_link' &&
+            f.type !== 'video_doc' && 
             (f.platform === 'vk' || !f.platform)
         );
         
@@ -1731,22 +1696,22 @@ async function sendLessonToUserVk(chatId, lessonId, vkApi) {
         });
         
         // ============================================================
-        // ОТПРАВКА ВИДЕО КАК СКРЫТОГО ДОКУМЕНТА
+        // ОТПРАВКА ВИДЕО КАК ВЛОЖЕНИЯ (ВСТРОЕННЫЙ ПЛЕЕР!)
         // ============================================================
-        if (videoDocFile) {
-            const attachment = videoDocFile.vk_attachment || videoDocFile.path;
+        if (videoFile) {
+            const attachment = videoFile.vk_attachment || videoFile.path;
             
-            if (attachment && attachment.startsWith('doc')) {
-                // Отправляем видео как вложение (скрытый документ)
+            if (attachment && attachment.startsWith('video')) {
+                // Отправляем видео как вложение - будет встроенный плеер!
                 await vkApi.sendMessage({
                     chatId: chatId,
                     text: `🎬 **${lesson.title}**\n\n${lesson.description || ''}`,
                     attachments: [attachment],
                 });
-                console.log(`[VK LESSON] ✅ Video doc sent: ${attachment}`);
+                console.log(`[VK LESSON] ✅ Video sent as attachment: ${attachment}`);
             } else {
                 // Если нет attachment, пробуем отправить ссылку
-                const videoUrl = videoDocFile.url || videoDocFile.path;
+                const videoUrl = videoFile.url || videoFile.path;
                 if (videoUrl) {
                     await vkApi.sendMessage({
                         chatId: chatId,
@@ -1758,16 +1723,6 @@ async function sendLessonToUserVk(chatId, lessonId, vkApi) {
                         text: `📖 **${lesson.title}**\n\n${lesson.description || ''}\n\n⚠️ Видео недоступно.`,
                     });
                 }
-            }
-        } else if (videoLinkFile) {
-            // Если есть ссылка на видео
-            const videoUrl = videoLinkFile.url || videoLinkFile.path;
-            if (videoUrl) {
-                await vkApi.sendMessage({
-                    chatId: chatId,
-                    text: `🎬 **${lesson.title}**\n\n${lesson.description || ''}\n\n🔗 Ссылка на видео:\n${videoUrl}`,
-                });
-                console.log(`[VK LESSON] ✅ Video link sent: ${videoUrl}`);
             }
         }
         
