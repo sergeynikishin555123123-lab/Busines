@@ -700,6 +700,8 @@ async function showAdminLogin(chatId, vkApi) {
     });
 }
 
+// platforms/vk.js - ИСПРАВЛЕННАЯ ФУНКЦИЯ
+
 async function handleAdminPassword(chatId, password, vkApi) {
     console.log(`[VK] handleAdminPassword called for ${chatId}`);
     
@@ -708,10 +710,19 @@ async function handleAdminPassword(chatId, password, vkApi) {
         let admin = null;
         let admins = [];
 
-        if (pgConnected && pgClient) {
-            const result = await pgClient.query('SELECT * FROM admins');
-            admins = result.rows || [];
-        } else {
+        // ✅ ПЫТАЕМСЯ ЧИТАТЬ ИЗ JSON ЕСЛИ PG НЕ РАБОТАЕТ
+        try {
+            if (pgConnected && pgClient) {
+                const result = await pgClient.query('SELECT * FROM admins');
+                admins = result.rows || [];
+            }
+        } catch (pgError) {
+            console.warn('[VK] PG error, falling back to JSON:', pgError.message);
+        }
+        
+        // ✅ FALLBACK на JSON
+        if (admins.length === 0) {
+            console.log('[VK] Reading admins from JSON fallback');
             admins = database.readTable('admins') || [];
         }
 
@@ -751,7 +762,7 @@ async function handleAdminPassword(chatId, password, vkApi) {
             created_at: Date.now()
         });
 
-        console.log(`[VK] ✅ Admin session saved for ${chatId}:`, adminSessions.get(chatId));
+        console.log(`[VK] ✅ Admin session saved for ${chatId}`);
 
         await vkApi.sendMessage({
             chatId: chatId,
